@@ -1,0 +1,27 @@
+[
+    {
+        "language": "English (US)",
+        "tag": "en-US",
+        "region": "United States"
+    },
+    {
+        "language": "English (UK)",
+        "tag": "en-GB",
+        "region": "United Kingdom"
+    },
+    {
+        "language": "中文（简体）",
+        "tag": "zh-Hans",
+        "region": "Generic Simplified Chinese"
+    },
+    {
+        "language": "中文（繁體）",
+        "tag": "zh-Hant",
+        "region": "Generic Traditional Chinese"
+    },
+    {
+        "language": "日本語",
+        "tag": "ja-JP",
+        "region": "Japan"
+    }
+]

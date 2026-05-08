@@ -1,0 +1,21 @@
+{
+  "name": "ShortTermSpotRsiStrategyAgent",
+  "display_name": "Short-Term Spot RSI Strategy Agent",
+  "url": "http://127.0.0.1:10009/",
+  "description": "Rule-based short-term spot strategy that applies MA/RSI/Bollinger ladder entries, staged profit-taking, and bear-market capital throttling.",
+  "capabilities": {
+    "streaming": true,
+    "push_notifications": true
+  },
+  "skills": [],
+  "enabled": true,
+  "metadata": {
+    "hidden": true,
+    "planner_passthrough": true,
+    "version": "0.1.0",
+    "author": "OpenAI Codex",
+    "tags": ["strategy", "spot", "rsi", "rule-based", "short-term"],
+    "notes": "Implements the short-term 40% capital module of the user's fixed spot RSI ladder strategy.",
+    "local_agent_class": "valuecell.agents.spot_rsi_ladder_agent.core:ShortTermSpotRsiStrategyAgent"
+  }
+}
