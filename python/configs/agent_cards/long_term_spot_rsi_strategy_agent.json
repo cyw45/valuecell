@@ -1,0 +1,21 @@
+{
+  "name": "LongTermSpotRsiStrategyAgent",
+  "display_name": "Long-Term Spot RSI Strategy Agent",
+  "url": "http://127.0.0.1:10008/",
+  "description": "Rule-based long-term spot strategy that applies MA/RSI/Bollinger ladder entries, staged profit-taking, and strict add-on limits.",
+  "capabilities": {
+    "streaming": true,
+    "push_notifications": true
+  },
+  "skills": [],
+  "enabled": true,
+  "metadata": {
+    "hidden": true,
+    "planner_passthrough": true,
+    "version": "0.1.0",
+    "author": "OpenAI Codex",
+    "tags": ["strategy", "spot", "rsi", "rule-based", "long-term"],
+    "notes": "Implements the long-term 60% capital module of the user's fixed spot RSI ladder strategy.",
+    "local_agent_class": "valuecell.agents.spot_rsi_ladder_agent.core:LongTermSpotRsiStrategyAgent"
+  }
+}

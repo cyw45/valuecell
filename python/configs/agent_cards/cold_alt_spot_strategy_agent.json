@@ -1,0 +1,21 @@
+{
+  "name": "ColdAltSpotStrategyAgent",
+  "display_name": "Cold Alt Spot Strategy Agent",
+  "url": "http://127.0.0.1:10010/",
+  "description": "Rule-based spot strategy for manually pre-screened cold altcoins using Bollinger, RSI, MTM, and ARBR resonance with strict staged exits.",
+  "capabilities": {
+    "streaming": true,
+    "push_notifications": true
+  },
+  "skills": [],
+  "enabled": true,
+  "metadata": {
+    "hidden": true,
+    "planner_passthrough": true,
+    "version": "0.1.0",
+    "author": "OpenAI Codex",
+    "tags": ["strategy", "spot", "altcoin", "rule-based", "cold-spot"],
+    "notes": "Implements the user's cold altcoin spot-only iron-rule strategy. Fundamental and backing checks are assumed to be pre-screened manually before adding symbols.",
+    "local_agent_class": "valuecell.agents.cold_alt_spot_strategy_agent.core:ColdAltSpotStrategyAgent"
+  }
+}
