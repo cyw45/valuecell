@@ -1,0 +1,27 @@
+services:
+  valuecell-backend:
+    build:
+      context: ..
+      dockerfile: docker/DockerFile
+    container_name: valuecell-backend
+    restart: unless-stopped
+    env_file:
+      - ./runtime/.env
+    volumes:
+      - ./runtime:/root/.config/valuecell
+      - ./runtime/logs:/app/python/logs
+    ports:
+      - "127.0.0.1:${VALUECELL_BACKEND_PORT:-18000}:8000"
+
+  valuecell-frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    container_name: valuecell-frontend
+    restart: unless-stopped
+    depends_on:
+      - valuecell-backend
+    ports:
+      - "127.0.0.1:${VALUECELL_FRONTEND_PORT:-18080}:80"

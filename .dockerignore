@@ -1,0 +1,17 @@
+.git
+.github
+.vscode
+frontend/node_modules
+frontend/build
+python/.venv
+python/.pytest_cache
+python/logs
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+backend-smoke*.log
+docker/runtime
+lancedb
+.knowledge

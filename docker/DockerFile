@@ -1,0 +1,23 @@
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+WORKDIR /app/python
+
+# Pre-cache Python dependencies first for faster rebuilds.
+COPY python/pyproject.toml python/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev
+
+# Copy backend source plus root env example used by ValueCell's system env bootstrap.
+WORKDIR /app
+COPY python /app/python
+COPY .env.example /app/.env.example
+COPY docker/backend-entrypoint.sh /app/docker/backend-entrypoint.sh
+
+RUN chmod +x /app/docker/backend-entrypoint.sh
+
+WORKDIR /app/python
+ENV PYTHONPATH=/app/python
+
+EXPOSE 8000
+
+CMD ["/app/docker/backend-entrypoint.sh"]
