@@ -14,6 +14,7 @@ from .config import (
     SpotRsiStrategyProfile,
 )
 from .features import SpotRsiLadderFeaturesPipeline
+from .symbol_filter import filter_supported_spot_symbols
 
 
 class BaseSpotRsiStrategyAgent(BaseStrategyAgent):
@@ -35,16 +36,21 @@ class BaseSpotRsiStrategyAgent(BaseStrategyAgent):
         request: UserRequest,
         strategy_id_override: str | None = None,
     ):
-        self._prepare_request(request)
+        await self._prepare_request(request)
         return await super()._create_runtime(
             request,
             strategy_id_override=strategy_id_override,
         )
 
-    def _prepare_request(self, request: UserRequest) -> None:
+    async def _prepare_request(self, request: UserRequest) -> None:
         if not request.trading_config.symbols:
             request.trading_config.symbols = list(DEFAULT_SPOT_SYMBOLS)
         request.exchange_config.market_type = MarketType.SPOT
+        request.trading_config.symbols = await filter_supported_spot_symbols(
+            request.exchange_config.exchange_id,
+            request.trading_config.symbols,
+            request.exchange_config.market_type,
+        )
         request.trading_config.max_leverage = 1.0
         request.trading_config.max_positions = max(
             request.trading_config.max_positions,

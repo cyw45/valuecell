@@ -53,8 +53,15 @@ class SpotRsiLadderComposer(BaseComposer):
         feature_map = self._build_feature_map(context)
         price_map = self._build_price_map(context, feature_map)
         bear_market = self._is_bear_market(feature_map)
+        if bear_market:
+            return ComposeResult(
+                instructions=[],
+                rationale="Bear market silent mode: no orders generated",
+            )
+
         items: List[TradeDecisionItem] = []
         rationales: List[str] = []
+        reserved_cash = 0.0
 
         for symbol in self._request.trading_config.symbols:
             item = self._build_symbol_decision(
@@ -62,11 +69,13 @@ class SpotRsiLadderComposer(BaseComposer):
                 feature_map=feature_map,
                 price_map=price_map,
                 symbol=symbol,
-                bear_market=bear_market,
+                available_cash=self._available_cash(context, reserved_cash),
             )
             if item is None:
                 continue
             items.append(item)
+            if item.action == TradeDecisionAction.OPEN_LONG:
+                reserved_cash += item.target_qty * price_map.get(symbol, 0.0)
             if item.rationale:
                 rationales.append(item.rationale)
 
@@ -110,18 +119,17 @@ class SpotRsiLadderComposer(BaseComposer):
             return max(0.0, float(context.portfolio.total_value))
         return max(0.0, float(context.portfolio.account_balance or 0.0))
 
-    def _effective_symbol_budget(
+    def _strategy_bucket_total(
         self,
         context: ComposeContext,
-        bear_market: bool,
     ) -> float:
-        equity = self._portfolio_equity(context)
-        if equity <= 0:
-            return 0.0
-        budget = equity / max(1, len(self._request.trading_config.symbols))
-        if bear_market and self._profile.bear_cap_ratio > 0:
-            budget *= self._profile.bear_cap_ratio
-        return budget
+        return self._portfolio_equity(context)
+
+    def _available_cash(self, context: ComposeContext, reserved_cash: float) -> float:
+        free_cash = context.portfolio.free_cash
+        if free_cash is None:
+            free_cash = context.portfolio.account_balance
+        return max(0.0, float(free_cash or 0.0) - reserved_cash)
 
     def _current_quantity(self, context: ComposeContext, symbol: str) -> float:
         position = context.portfolio.positions.get(symbol)
@@ -256,29 +264,6 @@ class SpotRsiLadderComposer(BaseComposer):
             and current_mtm < 0
         )
 
-    def _active_sell_thresholds(
-        self,
-        bear_market: bool,
-    ) -> tuple[tuple[int, ...], dict[int, float]]:
-        if bear_market and self._profile.bear_sell_rsi_thresholds:
-            return (
-                self._profile.bear_sell_rsi_thresholds,
-                self._profile.bear_sell_cumulative_ratios
-                or self._profile.sell_cumulative_ratios,
-            )
-        return self._profile.sell_rsi_thresholds, self._profile.sell_cumulative_ratios
-
-    def _active_entry_thresholds(
-        self,
-        bear_market: bool,
-    ) -> tuple[tuple[int, ...], dict[int, float]]:
-        if bear_market and self._profile.bear_entry_rsi_thresholds:
-            return (
-                self._profile.bear_entry_rsi_thresholds,
-                self._profile.bear_entry_buy_ratios or self._profile.entry_buy_ratios,
-            )
-        return self._profile.entry_rsi_thresholds, self._profile.entry_buy_ratios
-
     def _build_symbol_decision(
         self,
         *,
@@ -286,7 +271,7 @@ class SpotRsiLadderComposer(BaseComposer):
         feature_map: Dict[str, Dict[str, Dict[str, object]]],
         price_map: Dict[str, float],
         symbol: str,
-        bear_market: bool,
+        available_cash: float,
     ) -> TradeDecisionItem | None:
         symbol_features = feature_map.get(symbol)
         if not symbol_features:
@@ -311,13 +296,7 @@ class SpotRsiLadderComposer(BaseComposer):
             return None
 
         current_rsi = _value_to_float(primary, "rsi")
-        active_sell_thresholds, _ = self._active_sell_thresholds(bear_market)
-        reset_exit_rsi = (
-            active_sell_thresholds[0]
-            if bear_market and self._profile.bear_sell_rsi_thresholds
-            else self._profile.reset_exit_rsi
-        )
-        if current_rsi is not None and current_rsi < reset_exit_rsi:
+        if current_rsi is not None and current_rsi < self._profile.reset_exit_rsi:
             state.reset_exit_ladder()
 
         sell_item = self._build_sell_item(
@@ -326,7 +305,6 @@ class SpotRsiLadderComposer(BaseComposer):
             primary=primary,
             current_qty=current_qty,
             current_price=current_price,
-            bear_market=bear_market,
         )
         if sell_item is not None:
             state.entry_thresholds_hit.clear()
@@ -341,7 +319,7 @@ class SpotRsiLadderComposer(BaseComposer):
             primary=primary,
             current_qty=current_qty,
             current_price=current_price,
-            bear_market=bear_market,
+            available_cash=available_cash,
         )
         if add_item is not None:
             return add_item
@@ -354,7 +332,7 @@ class SpotRsiLadderComposer(BaseComposer):
             primary=primary,
             current_qty=current_qty,
             current_price=current_price,
-            bear_market=bear_market,
+            available_cash=available_cash,
         )
 
     def _build_entry_item(
@@ -367,11 +345,8 @@ class SpotRsiLadderComposer(BaseComposer):
         primary: Dict[str, object],
         current_qty: float,
         current_price: float,
-        bear_market: bool,
+        available_cash: float,
     ) -> TradeDecisionItem | None:
-        if bear_market and not self._profile.allow_entries_in_bear:
-            return None
-
         close_price = _value_to_float(primary, "close")
         ma_value = _value_to_float(primary, self._profile.ma_field)
         current_rsi = _value_to_float(primary, "rsi")
@@ -390,25 +365,25 @@ class SpotRsiLadderComposer(BaseComposer):
         if not self._momentum_confirmed(primary):
             return None
 
-        thresholds, entry_buy_ratios = self._active_entry_thresholds(bear_market)
+        if available_cash <= 0:
+            return None
 
-        budget = self._effective_symbol_budget(context, bear_market)
-        remaining_budget = max(0.0, budget - (current_qty * current_price))
-        if remaining_budget <= 0:
+        thresholds = self._profile.entry_rsi_thresholds
+        entry_buy_ratios = self._profile.entry_buy_ratios
+        strategy_bucket_total = self._strategy_bucket_total(context)
+        if strategy_bucket_total <= 0:
             return None
 
         buy_notional = 0.0
         triggered: List[int] = []
-        local_budget = remaining_budget
         for threshold in thresholds:
             if current_rsi > threshold or threshold in state.entry_thresholds_hit:
                 continue
-            tranche_ratio = entry_buy_ratios.get(threshold, 0.0)
-            tranche = local_budget * tranche_ratio
+            tranche = strategy_bucket_total * entry_buy_ratios.get(threshold, 0.0)
+            tranche = min(tranche, max(0.0, available_cash - buy_notional))
             if tranche <= 0:
                 continue
             buy_notional += tranche
-            local_budget -= tranche
             triggered.append(threshold)
 
         if buy_notional <= 0:
@@ -439,11 +414,9 @@ class SpotRsiLadderComposer(BaseComposer):
         primary: Dict[str, object],
         current_qty: float,
         current_price: float,
-        bear_market: bool,
+        available_cash: float,
     ) -> TradeDecisionItem | None:
         if current_qty <= self._quantity_precision:
-            return None
-        if bear_market:
             return None
         if state.add_count >= self._profile.max_additions:
             return None
@@ -458,9 +431,7 @@ class SpotRsiLadderComposer(BaseComposer):
         ):
             return None
 
-        budget = self._effective_symbol_budget(context, bear_market)
-        remaining_budget = max(0.0, budget - (current_qty * current_price))
-        add_notional = remaining_budget * ADD_BUY_RATIO
+        add_notional = max(0.0, available_cash) * ADD_BUY_RATIO
         if add_notional <= 0:
             return None
 
@@ -484,7 +455,6 @@ class SpotRsiLadderComposer(BaseComposer):
         primary: Dict[str, object],
         current_qty: float,
         current_price: float,
-        bear_market: bool,
     ) -> TradeDecisionItem | None:
         if current_qty <= self._quantity_precision:
             return None
@@ -495,9 +465,15 @@ class SpotRsiLadderComposer(BaseComposer):
         if close_price is None or ma_value is None or current_rsi is None:
             return None
 
-        if state.tail_peak_price is not None:
+        final_sell_threshold = self._profile.sell_rsi_thresholds[-1]
+        penultimate_sell_threshold = self._profile.sell_rsi_thresholds[-2]
+
+        if state.tail_stop_armed and state.tail_peak_price is not None:
             state.tail_peak_price = max(state.tail_peak_price, current_price)
-            if current_price <= state.tail_peak_price * (1.0 - TAIL_DRAWDOWN_RATIO):
+            if (
+                current_rsi < final_sell_threshold
+                and current_price <= state.tail_peak_price * (1.0 - TAIL_DRAWDOWN_RATIO)
+            ):
                 state.reset_on_flat()
                 return TradeDecisionItem(
                     instrument=InstrumentRef(symbol=symbol),
@@ -510,9 +486,8 @@ class SpotRsiLadderComposer(BaseComposer):
                     ),
                 )
 
-        sell_thresholds, sell_cumulative_ratios = self._active_sell_thresholds(
-            bear_market
-        )
+        sell_thresholds = self._profile.sell_rsi_thresholds
+        sell_cumulative_ratios = self._profile.sell_cumulative_ratios
         if close_price <= ma_value or current_rsi < sell_thresholds[0]:
             return None
 
@@ -538,17 +513,15 @@ class SpotRsiLadderComposer(BaseComposer):
             if threshold <= highest:
                 state.exit_thresholds_hit.add(threshold)
 
-        tail_activation_rsi = (
-            sell_thresholds[-1]
-            if bear_market and self._profile.bear_sell_rsi_thresholds
-            else self._profile.tail_activation_rsi
-        )
         if (
-            highest >= tail_activation_rsi
+            highest >= penultimate_sell_threshold
+            and highest < final_sell_threshold
             and (current_qty - sell_qty) > self._quantity_precision
         ):
+            state.tail_stop_armed = True
             state.tail_peak_price = current_price
         else:
+            state.tail_stop_armed = False
             state.tail_peak_price = None
 
         return TradeDecisionItem(

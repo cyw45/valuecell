@@ -9,14 +9,94 @@ from valuecell.agents.common.trading.models import CandleConfig
 DEFAULT_SPOT_SYMBOLS: tuple[str, ...] = (
     "BTC-USDT",
     "ETH-USDT",
-    "XRP-USDT",
     "BNB-USDT",
     "SOL-USDT",
-    "DOGE-USDT",
+    "XRP-USDT",
     "ADA-USDT",
-    "AVAX-USDT",
+    "DOGE-USDT",
     "DOT-USDT",
+    "USDC-USDT",
     "LTC-USDT",
+    "BCH-USDT",
+    "LINK-USDT",
+    "AVAX-USDT",
+    "MATIC-USDT",
+    "UNI-USDT",
+    "ATOM-USDT",
+    "ETC-USDT",
+    "FIL-USDT",
+    "AAVE-USDT",
+    "SAND-USDT",
+    "MANA-USDT",
+    "ALGO-USDT",
+    "FTM-USDT",
+    "NEAR-USDT",
+    "GRT-USDT",
+    "CAKE-USDT",
+    "XLM-USDT",
+    "EOS-USDT",
+    "TRX-USDT",
+    "WBTC-USDT",
+    "ARB-USDT",
+    "OP-USDT",
+    "MKR-USDT",
+    "SNX-USDT",
+    "CRV-USDT",
+    "1INCH-USDT",
+    "KAVA-USDT",
+    "ZRX-USDT",
+    "BAT-USDT",
+    "OMG-USDT",
+    "QTUM-USDT",
+    "ICX-USDT",
+    "VET-USDT",
+    "THETA-USDT",
+    "NEO-USDT",
+    "ONT-USDT",
+    "ZIL-USDT",
+    "RVN-USDT",
+    "XZC-USDT",
+    "DASH-USDT",
+    "HBAR-USDT",
+    "IOTA-USDT",
+    "WAVES-USDT",
+    "KSM-USDT",
+    "RSR-USDT",
+    "CELR-USDT",
+    "FET-USDT",
+    "OCEAN-USDT",
+    "REQ-USDT",
+    "BNT-USDT",
+    "LRC-USDT",
+    "GNO-USDT",
+    "PAXG-USDT",
+    "UMA-USDT",
+    "BAL-USDT",
+    "MIR-USDT",
+    "SPELL-USDT",
+    "AUDIO-USDT",
+    "RAY-USDT",
+    "SRM-USDT",
+    "FIDA-USDT",
+    "DEXE-USDT",
+    "CELO-USDT",
+    "LUNA-USDT",
+    "MASK-USDT",
+    "COTI-USDT",
+    "CHZ-USDT",
+    "ENJ-USDT",
+    "FUN-USDT",
+    "GAS-USDT",
+    "HOT-USDT",
+    "IOST-USDT",
+    "KEY-USDT",
+    "LOKA-USDT",
+    "MBL-USDT",
+    "NKN-USDT",
+    "OAX-USDT",
+    "PNT-USDT",
+    "RIF-USDT",
+    "SXP-USDT",
 )
 
 ADD_BUY_RATIO: float = 0.10
@@ -51,17 +131,6 @@ SHORT_SELL_CUMULATIVE_RATIOS: dict[int, float] = {
     68: 0.50,
     73: 0.90,
     78: 1.00,
-}
-
-BEAR_SHORT_ENTRY_RSI_THRESHOLDS: tuple[int, ...] = (18, 14)
-BEAR_SHORT_ENTRY_BUY_RATIOS: dict[int, float] = {
-    18: 0.50,
-    14: 0.50,
-}
-BEAR_SHORT_SELL_RSI_THRESHOLDS: tuple[int, ...] = (58, 63)
-BEAR_SHORT_SELL_CUMULATIVE_RATIOS: dict[int, float] = {
-    58: 0.50,
-    63: 1.00,
 }
 
 LONG_TERM_INTERVALS: tuple[CandleConfig, ...] = (
@@ -102,13 +171,10 @@ class SpotRsiStrategyProfile:
     entry_confirm_intervals: tuple[str, ...]
     trend_confirm_intervals: tuple[str, ...]
     candle_configurations: tuple[CandleConfig, ...]
-    allow_entries_in_bear: bool
-    bear_cap_ratio: float
     entry_rsi_thresholds: tuple[int, ...]
     entry_buy_ratios: dict[int, float]
     sell_rsi_thresholds: tuple[int, ...]
     sell_cumulative_ratios: dict[int, float]
-    tail_activation_rsi: int
     reset_exit_rsi: int
     require_bollinger_squeeze: bool
     require_bollinger_lower_touch: bool
@@ -116,10 +182,6 @@ class SpotRsiStrategyProfile:
     require_mtm_below_zero: bool
     add_requires_trend_up: bool
     add_requires_no_bear_trend_4h: bool
-    bear_entry_rsi_thresholds: tuple[int, ...] = ()
-    bear_entry_buy_ratios: dict[int, float] | None = None
-    bear_sell_rsi_thresholds: tuple[int, ...] = ()
-    bear_sell_cumulative_ratios: dict[int, float] | None = None
 
 
 LONG_TERM_PROFILE = SpotRsiStrategyProfile(
@@ -134,13 +196,10 @@ LONG_TERM_PROFILE = SpotRsiStrategyProfile(
     entry_confirm_intervals=("1m", "3m", "5m", "15m", "30m"),
     trend_confirm_intervals=("1h", "4h"),
     candle_configurations=LONG_TERM_INTERVALS,
-    allow_entries_in_bear=False,
-    bear_cap_ratio=0.0,
     entry_rsi_thresholds=LONG_ENTRY_RSI_THRESHOLDS,
     entry_buy_ratios=LONG_ENTRY_BUY_RATIOS,
     sell_rsi_thresholds=LONG_SELL_RSI_THRESHOLDS,
     sell_cumulative_ratios=LONG_SELL_CUMULATIVE_RATIOS,
-    tail_activation_rsi=85,
     reset_exit_rsi=70,
     require_bollinger_squeeze=True,
     require_bollinger_lower_touch=False,
@@ -160,15 +219,12 @@ SHORT_TERM_PROFILE = SpotRsiStrategyProfile(
     ma_field="sma20",
     max_additions=1,
     entry_confirm_intervals=("1m", "3m", "5m", "15m"),
-    trend_confirm_intervals=("30m",),
+    trend_confirm_intervals=("30m", "4h"),
     candle_configurations=SHORT_TERM_INTERVALS,
-    allow_entries_in_bear=True,
-    bear_cap_ratio=0.50,
     entry_rsi_thresholds=SHORT_ENTRY_RSI_THRESHOLDS,
     entry_buy_ratios=SHORT_ENTRY_BUY_RATIOS,
     sell_rsi_thresholds=SHORT_SELL_RSI_THRESHOLDS,
     sell_cumulative_ratios=SHORT_SELL_CUMULATIVE_RATIOS,
-    tail_activation_rsi=78,
     reset_exit_rsi=62,
     require_bollinger_squeeze=True,
     require_bollinger_lower_touch=True,
@@ -176,8 +232,4 @@ SHORT_TERM_PROFILE = SpotRsiStrategyProfile(
     require_mtm_below_zero=True,
     add_requires_trend_up=False,
     add_requires_no_bear_trend_4h=True,
-    bear_entry_rsi_thresholds=BEAR_SHORT_ENTRY_RSI_THRESHOLDS,
-    bear_entry_buy_ratios=BEAR_SHORT_ENTRY_BUY_RATIOS,
-    bear_sell_rsi_thresholds=BEAR_SHORT_SELL_RSI_THRESHOLDS,
-    bear_sell_cumulative_ratios=BEAR_SHORT_SELL_CUMULATIVE_RATIOS,
 )

@@ -123,10 +123,11 @@ async def test_long_term_composer_emits_buy_instruction() -> None:
     ]
     portfolio = PortfolioView(
         ts=1,
-        account_balance=1000.0,
+        account_balance=600.0,
         positions={},
         constraints=Constraints(max_positions=1, max_leverage=1.0),
-        total_value=1000.0,
+        total_value=600.0,
+        free_cash=600.0,
     )
     context = ComposeContext(
         ts=1,
@@ -141,7 +142,7 @@ async def test_long_term_composer_emits_buy_instruction() -> None:
 
     assert len(result.instructions) == 1
     assert result.instructions[0].action.value == "open_long"
-    assert result.instructions[0].quantity > 0
+    assert result.instructions[0].quantity == pytest.approx(240.0 / 95.0)
 
 
 @pytest.mark.asyncio
@@ -211,10 +212,11 @@ async def test_short_term_composer_emits_buy_instruction_with_momentum_filters()
     ]
     portfolio = PortfolioView(
         ts=1,
-        account_balance=1000.0,
+        account_balance=400.0,
         positions={},
         constraints=Constraints(max_positions=1, max_leverage=1.0),
-        total_value=1000.0,
+        total_value=400.0,
+        free_cash=400.0,
     )
     context = ComposeContext(
         ts=1,
@@ -229,11 +231,11 @@ async def test_short_term_composer_emits_buy_instruction_with_momentum_filters()
 
     assert len(result.instructions) == 1
     assert result.instructions[0].action.value == "open_long"
-    assert result.instructions[0].quantity > 0
+    assert result.instructions[0].quantity == pytest.approx(280.0 / 95.0)
 
 
 @pytest.mark.asyncio
-async def test_short_term_composer_emits_sell_instruction_in_bear_mode() -> None:
+async def test_composer_is_silent_in_bear_market() -> None:
     request = _make_request(SHORT_TERM_PROFILE.strategy_type)
     composer = SpotRsiLadderComposer(request, SHORT_TERM_PROFILE)
     features = [
@@ -287,6 +289,184 @@ async def test_short_term_composer_emits_sell_instruction_in_bear_mode() -> None
 
     result = await composer.compose(context)
 
+    assert result.instructions == []
+
+
+@pytest.mark.asyncio
+async def test_short_term_add_uses_ten_percent_of_remaining_cash() -> None:
+    request = _make_request(SHORT_TERM_PROFILE.strategy_type)
+    composer = SpotRsiLadderComposer(request, SHORT_TERM_PROFILE)
+    features = [
+        _make_feature(
+            "BTC-USDT",
+            "15m",
+            {
+                "close": 100.0,
+                "rsi": 50.0,
+                "sma20": 95.0,
+                "close_turn_up": True,
+                "rsi_turn_up": True,
+                "bb_mid_cross_up": True,
+            },
+        ),
+        _make_feature(
+            "BTC-USDT",
+            "4h",
+            {
+                "close": 101.0,
+                "sma20": 99.0,
+                "sma20_slope": 0.2,
+                "rsi": 50.0,
+                "mtm14": 1.5,
+            },
+        ),
+        _make_feature(
+            "BTC-USDT",
+            "30m",
+            {
+                "close": 100.0,
+                "rsi_turn_up": True,
+                "close_turn_up": True,
+                "sma20": 99.0,
+                "sma20_slope": 0.1,
+            },
+        ),
+        _make_feature("BTC-USDT", "1d", {"change_pct": 0.02}),
+        FeatureVector(
+            ts=1,
+            instrument=InstrumentRef(symbol="BTC-USDT"),
+            values={"price.last": 100.0},
+            meta={"group_by_key": "market_snapshot"},
+        ),
+    ]
+    portfolio = PortfolioView(
+        ts=1,
+        account_balance=300.0,
+        positions={
+            "BTC-USDT": PositionSnapshot(
+                instrument=InstrumentRef(symbol="BTC-USDT"),
+                quantity=1.0,
+                avg_price=90.0,
+                mark_price=100.0,
+            )
+        },
+        constraints=Constraints(max_positions=1, max_leverage=1.0),
+        total_value=500.0,
+        free_cash=300.0,
+    )
+    context = ComposeContext(
+        ts=1,
+        compose_id="compose-short-add",
+        strategy_id="strategy-short-add",
+        features=features,
+        portfolio=portfolio,
+        digest=TradeDigest(ts=1),
+    )
+
+    result = await composer.compose(context)
+
     assert len(result.instructions) == 1
-    assert result.instructions[0].action.value == "close_long"
-    assert result.instructions[0].quantity > 0
+    assert result.instructions[0].action.value == "open_long"
+    assert result.instructions[0].quantity == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
+async def test_long_term_tail_drawdown_closes_remaining_tail_before_final_rsi() -> None:
+    request = _make_request(LONG_TERM_PROFILE.strategy_type)
+    composer = SpotRsiLadderComposer(request, LONG_TERM_PROFILE)
+    portfolio = PortfolioView(
+        ts=1,
+        account_balance=0.0,
+        positions={
+            "BTC-USDT": PositionSnapshot(
+                instrument=InstrumentRef(symbol="BTC-USDT"),
+                quantity=1.0,
+                avg_price=90.0,
+                mark_price=120.0,
+            )
+        },
+        constraints=Constraints(max_positions=1, max_leverage=1.0),
+        total_value=120.0,
+        free_cash=0.0,
+    )
+    first_context = ComposeContext(
+        ts=1,
+        compose_id="compose-tail-1",
+        strategy_id="strategy-tail",
+        features=[
+            _make_feature(
+                "BTC-USDT",
+                "30m",
+                {
+                    "close": 120.0,
+                    "rsi": 80.0,
+                    "sma60": 100.0,
+                    "close_turn_up": True,
+                    "rsi_turn_up": True,
+                },
+            ),
+            _make_feature("BTC-USDT", "1d", {"change_pct": 0.02}),
+            FeatureVector(
+                ts=1,
+                instrument=InstrumentRef(symbol="BTC-USDT"),
+                values={"price.last": 120.0},
+                meta={"group_by_key": "market_snapshot"},
+            ),
+        ],
+        portfolio=portfolio,
+        digest=TradeDigest(ts=1),
+    )
+
+    first_result = await composer.compose(first_context)
+
+    assert len(first_result.instructions) == 1
+    assert first_result.instructions[0].action.value == "close_long"
+    assert first_result.instructions[0].quantity == pytest.approx(0.9)
+
+    second_context = ComposeContext(
+        ts=2,
+        compose_id="compose-tail-2",
+        strategy_id="strategy-tail",
+        features=[
+            _make_feature(
+                "BTC-USDT",
+                "30m",
+                {
+                    "close": 95.0,
+                    "rsi": 83.0,
+                    "sma60": 100.0,
+                    "close_turn_up": False,
+                    "rsi_turn_up": False,
+                },
+            ),
+            _make_feature("BTC-USDT", "1d", {"change_pct": -0.10}),
+            FeatureVector(
+                ts=2,
+                instrument=InstrumentRef(symbol="BTC-USDT"),
+                values={"price.last": 95.0},
+                meta={"group_by_key": "market_snapshot"},
+            ),
+        ],
+        portfolio=PortfolioView(
+            ts=2,
+            account_balance=0.0,
+            positions={
+                "BTC-USDT": PositionSnapshot(
+                    instrument=InstrumentRef(symbol="BTC-USDT"),
+                    quantity=0.1,
+                    avg_price=90.0,
+                    mark_price=95.0,
+                )
+            },
+            constraints=Constraints(max_positions=1, max_leverage=1.0),
+            total_value=9.5,
+            free_cash=0.0,
+        ),
+        digest=TradeDigest(ts=2),
+    )
+
+    second_result = await composer.compose(second_context)
+
+    assert len(second_result.instructions) == 1
+    assert second_result.instructions[0].action.value == "close_long"
+    assert second_result.instructions[0].quantity == pytest.approx(0.1)

@@ -14,6 +14,7 @@ class SymbolStrategyState:
     exit_basis_qty: float | None = None
     exit_thresholds_hit: set[int] = field(default_factory=set)
     tail_peak_price: float | None = None
+    tail_stop_armed: bool = False
 
     def reset_on_flat(self) -> None:
         """Reset the entire state after the symbol is fully closed."""
@@ -28,3 +29,4 @@ class SymbolStrategyState:
         self.exit_basis_qty = None
         self.exit_thresholds_hit.clear()
         self.tail_peak_price = None
+        self.tail_stop_armed = False
