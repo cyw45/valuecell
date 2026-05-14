@@ -143,6 +143,9 @@ class BaseComposer(ABC):
         # Step 2: notional/leverage cap (Phase 1 rules)
         price = price_map.get(symbol)
         if price is not None and price > 0:
+            is_reduction = (side is TradeSide.BUY and current_qty < 0) or (
+                side is TradeSide.SELL and current_qty > 0
+            )
             # cap_factor controls how aggressively we allow position sizing by notional.
             # Make it configurable via trading_config.cap_factor (strategy parameter).
             cap_factor = float(self._request.trading_config.cap_factor or 1.5)
@@ -157,7 +160,11 @@ class BaseComposer(ABC):
             max_abs_final = min(max_abs_by_factor, max_abs_by_lev)
 
             desired_final = current_qty + (qty if side is TradeSide.BUY else -qty)
-            if math.isfinite(max_abs_final) and abs(desired_final) > max_abs_final:
+            if (
+                not is_reduction
+                and math.isfinite(max_abs_final)
+                and abs(desired_final) > max_abs_final
+            ):
                 target_abs = max_abs_final
                 new_qty = max(0.0, target_abs - abs(current_qty))
                 if new_qty < qty:
