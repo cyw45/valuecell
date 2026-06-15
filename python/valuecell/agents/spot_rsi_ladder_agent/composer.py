@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+from loguru import logger
+
 from valuecell.agents.common.trading.decision.interfaces import BaseComposer
 from valuecell.agents.common.trading.models import (
     ComposeContext,
@@ -49,11 +51,14 @@ class SpotRsiLadderComposer(BaseComposer):
         self._profile = profile
         self._state: Dict[str, SymbolStrategyState] = {}
 
+    def _is_short_dual_mode(self) -> bool:
+        return self._profile.use_short_dual_mode
+
     async def compose(self, context: ComposeContext) -> ComposeResult:
         feature_map = self._build_feature_map(context)
         price_map = self._build_price_map(context, feature_map)
         bear_market = self._is_bear_market(feature_map)
-        if bear_market:
+        if bear_market and not self._profile.allow_entries_in_bear:
             return ComposeResult(
                 instructions=[],
                 rationale="Bear market silent mode: no orders generated",
@@ -69,6 +74,7 @@ class SpotRsiLadderComposer(BaseComposer):
                 feature_map=feature_map,
                 price_map=price_map,
                 symbol=symbol,
+                bear_market=bear_market,
                 available_cash=self._available_cash(context, reserved_cash),
             )
             if item is None:
@@ -122,8 +128,12 @@ class SpotRsiLadderComposer(BaseComposer):
     def _strategy_bucket_total(
         self,
         context: ComposeContext,
+        bear_market: bool,
     ) -> float:
-        return self._portfolio_equity(context)
+        bucket_total = self._portfolio_equity(context)
+        if bear_market:
+            bucket_total *= self._profile.bear_cap_ratio
+        return bucket_total
 
     def _available_cash(self, context: ComposeContext, reserved_cash: float) -> float:
         free_cash = context.portfolio.free_cash
@@ -221,6 +231,13 @@ class SpotRsiLadderComposer(BaseComposer):
             return False
         return True
 
+    def _log_entry_block(self, symbol: str, reason: str) -> None:
+        logger.debug(
+            "Spot RSI entry blocked for {symbol}: {reason}",
+            symbol=symbol,
+            reason=reason,
+        )
+
     def _volatility_confirmed(self, primary: Dict[str, object]) -> bool:
         if self._profile.require_bollinger_squeeze and not _value_to_bool(
             primary, "bb_squeeze"
@@ -230,6 +247,157 @@ class SpotRsiLadderComposer(BaseComposer):
             primary, "bb_near_lower"
         ):
             return False
+        return True
+
+    def _daily_overbought_locked(
+        self,
+        symbol_features: Dict[str, Dict[str, object]],
+    ) -> bool:
+        day_values = symbol_features.get("1d")
+        if not day_values:
+            return False
+        daily_rsi = _value_to_float(day_values, "rsi")
+        return (
+            daily_rsi is not None
+            and daily_rsi >= self._profile.daily_overbought_rsi
+        )
+
+    def _daily_structure_is_strong(
+        self,
+        symbol_features: Dict[str, Dict[str, object]],
+    ) -> bool:
+        day_values = symbol_features.get("1d")
+        if not day_values:
+            return False
+        close_price = _value_to_float(day_values, "close")
+        sma20 = _value_to_float(day_values, "sma20")
+        sma60 = _value_to_float(day_values, "sma60")
+        daily_rsi = _value_to_float(day_values, "rsi")
+        if close_price is None or sma20 is None or sma60 is None or daily_rsi is None:
+            return False
+        return (
+            sma20 > sma60
+            and close_price > sma60
+            and daily_rsi < self._profile.daily_overbought_rsi
+        )
+
+    def _short_rsi_uptrend_confirmed(self, values: Dict[str, object]) -> bool:
+        if _value_to_bool(values, "rsi_uptrend_3bar"):
+            return True
+        if (
+            _value_to_bool(values, "price_above_bb_middle")
+            and _value_to_bool(values, "rsi_turn_up")
+        ):
+            return True
+        return _value_to_bool(values, "low_uptrend_3bar")
+
+    def _short_strong_rsi_trend_confirmed(
+        self,
+        symbol_features: Dict[str, Dict[str, object]],
+    ) -> bool:
+        confirmed = 0
+        for interval in self._profile.strong_entry_intervals:
+            values = symbol_features.get(interval)
+            if values and self._short_rsi_uptrend_confirmed(values):
+                confirmed += 1
+        return confirmed >= self._profile.strong_entry_min_confirmations
+
+    def _short_weak_entry_confirmed(
+        self,
+        symbol_features: Dict[str, Dict[str, object]],
+        primary: Dict[str, object],
+    ) -> bool:
+        if not self._entry_confirmed(symbol_features):
+            return False
+        if not self._trend_confirmed(symbol_features):
+            return False
+        if not _value_to_bool(primary, "bb_squeeze"):
+            return False
+        if not _value_to_bool(primary, "bb_near_lower"):
+            return False
+        if not _value_to_bool(primary, "mtm_turn_up"):
+            return False
+        return _value_to_bool(primary, "mtm_below_zero")
+
+    def _short_strong_entry_confirmed(
+        self,
+        *,
+        symbol: str,
+        symbol_features: Dict[str, Dict[str, object]],
+        primary: Dict[str, object],
+    ) -> bool:
+        close_price = _value_to_float(primary, "close")
+        sma20 = _value_to_float(primary, "sma20")
+        if close_price is None or sma20 is None:
+            self._log_entry_block(symbol, "missing 15m close or SMA20")
+            return False
+        if close_price >= sma20:
+            self._log_entry_block(symbol, "price is above 15m SMA20; no chasing")
+            return False
+        if not self._trend_confirmed(symbol_features):
+            self._log_entry_block(symbol, "30m trend filter not confirmed")
+            return False
+        if not self._short_strong_rsi_trend_confirmed(symbol_features):
+            self._log_entry_block(symbol, "less than two RSI uptrend intervals")
+            return False
+        if not _value_to_bool(primary, "bb_mid_cross_up_confirmed"):
+            self._log_entry_block(
+                symbol,
+                "15m Bollinger midline breakout not confirmed by next candle",
+            )
+            return False
+        if not _value_to_bool(primary, "mtm_turn_up"):
+            self._log_entry_block(symbol, "15m momentum is not turning up")
+            return False
+        return True
+
+    def _short_relaxed_entry_confirmed(
+        self,
+        *,
+        symbol: str,
+        symbol_features: Dict[str, Dict[str, object]],
+        primary: Dict[str, object],
+    ) -> bool:
+        day_values = symbol_features.get("1d")
+        thirty_min_values = symbol_features.get("30m")
+        five_min_values = symbol_features.get("5m")
+        if not day_values or not thirty_min_values or not five_min_values:
+            self._log_entry_block(symbol, "missing 1d, 30m, or 5m features")
+            return False
+
+        day_close = _value_to_float(day_values, "close")
+        day_sma20 = _value_to_float(day_values, "sma20")
+        if day_close is None or day_sma20 is None or day_close <= day_sma20:
+            self._log_entry_block(symbol, "daily close is not above daily SMA20")
+            return False
+
+        thirty_min_rsi = _value_to_float(thirty_min_values, "rsi")
+        if thirty_min_rsi is None or thirty_min_rsi > 30:
+            self._log_entry_block(symbol, "30m RSI is above 30")
+            return False
+
+        fifteen_min_rsi = _value_to_float(primary, "rsi")
+        if fifteen_min_rsi is None or fifteen_min_rsi > 30:
+            self._log_entry_block(symbol, "15m RSI is above 30")
+            return False
+
+        five_min_rsi = _value_to_float(five_min_values, "rsi")
+        if five_min_rsi is None or five_min_rsi > 20:
+            self._log_entry_block(symbol, "5m RSI is above 20")
+            return False
+
+        if not _value_to_bool(primary, "mtm_below_zero"):
+            self._log_entry_block(symbol, "15m MTM is not below zero")
+            return False
+
+        if not _value_to_bool(five_min_values, "bb_mid_cross_up"):
+            self._log_entry_block(symbol, "5m Bollinger midline cross-up is missing")
+            return False
+
+        if not _value_to_bool(five_min_values, "price_above_bb_middle"):
+            self._log_entry_block(symbol, "5m close is not above Bollinger middle")
+            return False
+
         return True
 
     def _ma_is_up(self, values: Dict[str, object], ma_key: str) -> bool:
@@ -271,6 +439,7 @@ class SpotRsiLadderComposer(BaseComposer):
         feature_map: Dict[str, Dict[str, Dict[str, object]]],
         price_map: Dict[str, float],
         symbol: str,
+        bear_market: bool,
         available_cash: float,
     ) -> TradeDecisionItem | None:
         symbol_features = feature_map.get(symbol)
@@ -332,6 +501,7 @@ class SpotRsiLadderComposer(BaseComposer):
             primary=primary,
             current_qty=current_qty,
             current_price=current_price,
+            bear_market=bear_market,
             available_cash=available_cash,
         )
 
@@ -345,6 +515,7 @@ class SpotRsiLadderComposer(BaseComposer):
         primary: Dict[str, object],
         current_qty: float,
         current_price: float,
+        bear_market: bool,
         available_cash: float,
     ) -> TradeDecisionItem | None:
         close_price = _value_to_float(primary, "close")
@@ -352,25 +523,37 @@ class SpotRsiLadderComposer(BaseComposer):
         current_rsi = _value_to_float(primary, "rsi")
         if close_price is None or ma_value is None or current_rsi is None:
             return None
-        if close_price >= ma_value:
-            return None
-        if self._profile.ma_field == "sma60" and not self._ma_is_flat_or_up(primary, "sma60"):
-            return None
-        if not self._entry_confirmed(symbol_features):
-            return None
-        if not self._trend_confirmed(symbol_features):
-            return None
-        if not self._volatility_confirmed(primary):
-            return None
-        if not self._momentum_confirmed(primary):
-            return None
+
+        if self._is_short_dual_mode():
+            if not self._short_relaxed_entry_confirmed(
+                symbol=symbol,
+                symbol_features=symbol_features,
+                primary=primary,
+            ):
+                return None
+        else:
+            if close_price >= ma_value:
+                return None
+            if self._profile.ma_field == "sma60" and not self._ma_is_flat_or_up(
+                primary,
+                "sma60",
+            ):
+                return None
+            if not self._entry_confirmed(symbol_features):
+                return None
+            if not self._trend_confirmed(symbol_features):
+                return None
+            if not self._volatility_confirmed(primary):
+                return None
+            if not self._momentum_confirmed(primary):
+                return None
 
         if available_cash <= 0:
             return None
 
         thresholds = self._profile.entry_rsi_thresholds
         entry_buy_ratios = self._profile.entry_buy_ratios
-        strategy_bucket_total = self._strategy_bucket_total(context)
+        strategy_bucket_total = self._strategy_bucket_total(context, bear_market)
         if strategy_bucket_total <= 0:
             return None
 

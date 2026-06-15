@@ -103,13 +103,18 @@ ADD_BUY_RATIO: float = 0.10
 TAIL_DRAWDOWN_RATIO: float = 0.20
 DAILY_CIRCUIT_BREAKER_RATIO: float = 0.15
 
-LONG_ENTRY_RSI_THRESHOLDS: tuple[int, ...] = (30, 25, 20, 15, 10)
+RELAXED_ENTRY_RSI_THRESHOLDS: tuple[int, ...] = (32, 28, 24)
+RELAXED_ENTRY_BUY_RATIOS: dict[int, float] = {
+    32: 0.30,
+    28: 0.40,
+    24: 0.30,
+}
+
+LONG_ENTRY_RSI_THRESHOLDS: tuple[int, ...] = (28, 24, 20)
 LONG_ENTRY_BUY_RATIOS: dict[int, float] = {
-    30: 0.20,
-    25: 0.20,
-    20: 0.20,
-    15: 0.20,
-    10: 0.20,
+    28: 0.30,
+    24: 0.40,
+    20: 0.30,
 }
 LONG_SELL_RSI_THRESHOLDS: tuple[int, ...] = (70, 75, 80, 85)
 LONG_SELL_CUMULATIVE_RATIOS: dict[int, float] = {
@@ -119,11 +124,9 @@ LONG_SELL_CUMULATIVE_RATIOS: dict[int, float] = {
     85: 1.00,
 }
 
-SHORT_ENTRY_RSI_THRESHOLDS: tuple[int, ...] = (22, 18, 14)
+SHORT_ENTRY_RSI_THRESHOLDS: tuple[int, ...] = RELAXED_ENTRY_RSI_THRESHOLDS
 SHORT_ENTRY_BUY_RATIOS: dict[int, float] = {
-    22: 0.30,
-    18: 0.40,
-    14: 0.30,
+    **RELAXED_ENTRY_BUY_RATIOS,
 }
 SHORT_SELL_RSI_THRESHOLDS: tuple[int, ...] = (62, 68, 73, 78)
 SHORT_SELL_CUMULATIVE_RATIOS: dict[int, float] = {
@@ -171,6 +174,8 @@ class SpotRsiStrategyProfile:
     entry_confirm_intervals: tuple[str, ...]
     trend_confirm_intervals: tuple[str, ...]
     candle_configurations: tuple[CandleConfig, ...]
+    allow_entries_in_bear: bool
+    bear_cap_ratio: float
     entry_rsi_thresholds: tuple[int, ...]
     entry_buy_ratios: dict[int, float]
     sell_rsi_thresholds: tuple[int, ...]
@@ -182,6 +187,10 @@ class SpotRsiStrategyProfile:
     require_mtm_below_zero: bool
     add_requires_trend_up: bool
     add_requires_no_bear_trend_4h: bool
+    use_short_dual_mode: bool
+    daily_overbought_rsi: float
+    strong_entry_intervals: tuple[str, ...]
+    strong_entry_min_confirmations: int
 
 
 LONG_TERM_PROFILE = SpotRsiStrategyProfile(
@@ -190,23 +199,29 @@ LONG_TERM_PROFILE = SpotRsiStrategyProfile(
     display_name="Long-Term Spot RSI Strategy",
     capital_fraction=0.60,
     primary_interval="30m",
-    default_decide_interval=300,
+    default_decide_interval=60,
     ma_field="sma60",
     max_additions=2,
-    entry_confirm_intervals=("1m", "3m", "5m", "15m", "30m"),
-    trend_confirm_intervals=("1h", "4h"),
+    entry_confirm_intervals=("3m", "5m", "15m"),
+    trend_confirm_intervals=("30m",),
     candle_configurations=LONG_TERM_INTERVALS,
+    allow_entries_in_bear=True,
+    bear_cap_ratio=1.0,
     entry_rsi_thresholds=LONG_ENTRY_RSI_THRESHOLDS,
     entry_buy_ratios=LONG_ENTRY_BUY_RATIOS,
     sell_rsi_thresholds=LONG_SELL_RSI_THRESHOLDS,
     sell_cumulative_ratios=LONG_SELL_CUMULATIVE_RATIOS,
     reset_exit_rsi=70,
-    require_bollinger_squeeze=True,
+    require_bollinger_squeeze=False,
     require_bollinger_lower_touch=False,
     require_mtm_turn_up=True,
     require_mtm_below_zero=False,
     add_requires_trend_up=True,
     add_requires_no_bear_trend_4h=False,
+    use_short_dual_mode=False,
+    daily_overbought_rsi=75.0,
+    strong_entry_intervals=(),
+    strong_entry_min_confirmations=0,
 )
 
 SHORT_TERM_PROFILE = SpotRsiStrategyProfile(
@@ -218,18 +233,24 @@ SHORT_TERM_PROFILE = SpotRsiStrategyProfile(
     default_decide_interval=60,
     ma_field="sma20",
     max_additions=1,
-    entry_confirm_intervals=("1m", "3m", "5m", "15m"),
-    trend_confirm_intervals=("30m", "4h"),
+    entry_confirm_intervals=("3m", "5m", "15m"),
+    trend_confirm_intervals=("30m",),
     candle_configurations=SHORT_TERM_INTERVALS,
+    allow_entries_in_bear=True,
+    bear_cap_ratio=1.0,
     entry_rsi_thresholds=SHORT_ENTRY_RSI_THRESHOLDS,
     entry_buy_ratios=SHORT_ENTRY_BUY_RATIOS,
     sell_rsi_thresholds=SHORT_SELL_RSI_THRESHOLDS,
     sell_cumulative_ratios=SHORT_SELL_CUMULATIVE_RATIOS,
     reset_exit_rsi=62,
-    require_bollinger_squeeze=True,
-    require_bollinger_lower_touch=True,
+    require_bollinger_squeeze=False,
+    require_bollinger_lower_touch=False,
     require_mtm_turn_up=True,
-    require_mtm_below_zero=True,
+    require_mtm_below_zero=False,
     add_requires_trend_up=False,
     add_requires_no_bear_trend_4h=True,
+    use_short_dual_mode=True,
+    daily_overbought_rsi=75.0,
+    strong_entry_intervals=("3m", "5m", "15m"),
+    strong_entry_min_confirmations=2,
 )
