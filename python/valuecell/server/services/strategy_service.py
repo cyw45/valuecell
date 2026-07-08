@@ -7,9 +7,13 @@ from valuecell.server.api.schemas.strategy import (
     PositionHoldingItem,
     StrategyActionCard,
     StrategyCycleDetail,
+    StrategyDiagnosticsCycleData,
+    StrategyDiagnosticsData,
     StrategyHoldingData,
+    StrategyMarketDataHealth,
     StrategyPerformanceData,
     StrategyPortfolioSummaryData,
+    StrategySymbolDecisionData,
     StrategyType,
 )
 from valuecell.server.db.repositories import get_strategy_repository
@@ -153,6 +157,139 @@ class StrategyService:
             net_exposure=_to_optional_float(getattr(snapshot, "net_exposure", None)),
         )
 
+
+    @staticmethod
+    def _normalize_trading_mode(meta: dict, cfg: dict) -> Optional[str]:
+        exchange_config = cfg.get("exchange_config", {}) or {}
+        value = meta.get("trading_mode") or exchange_config.get("trading_mode")
+        if value is None:
+            return None
+        raw = str(value).lower()
+        if raw in ("live", "real", "realtime"):
+            return "live"
+        if raw in ("virtual", "paper", "sim"):
+            return "virtual"
+        return None
+
+    @staticmethod
+    def _diagnostics_config(cfg: dict) -> dict:
+        llm_config = cfg.get("llm_model_config", {}) or {}
+        exchange_config = cfg.get("exchange_config", {}) or {}
+        trading_config = cfg.get("trading_config", {}) or {}
+        return {
+            "llm_provider": llm_config.get("provider"),
+            "llm_model_id": llm_config.get("model_id"),
+            "market_type": exchange_config.get("market_type"),
+            "symbols": trading_config.get("symbols") or [],
+            "decide_interval": trading_config.get("decide_interval"),
+            "max_leverage": trading_config.get("max_leverage"),
+            "cap_factor": trading_config.get("cap_factor"),
+            "initial_capital": trading_config.get("initial_capital"),
+        }
+
+    @staticmethod
+    def _cycle_created_at(row, payload: dict) -> Optional[datetime]:
+        raw = payload.get("created_at")
+        if raw:
+            try:
+                return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        raw_ms = payload.get("created_at_ms")
+        if raw_ms is not None:
+            try:
+                return datetime.fromtimestamp(int(raw_ms) / 1000.0)
+            except Exception:
+                pass
+        return getattr(row, "created_at", None)
+
+    @staticmethod
+    def _market_health(payload: dict, exchange_id: Optional[str]) -> StrategyMarketDataHealth:
+        raw = dict(payload.get("market_data_health") or {})
+        missing_symbols = raw.get("missing_symbols") or raw.get("missing") or []
+        if not isinstance(missing_symbols, list):
+            missing_symbols = []
+        fetched_count = raw.get("fetched_count", raw.get("market_snapshot_count"))
+        if fetched_count is None:
+            fetched_count = len(raw.get("market_snapshot_symbols") or [])
+        missing_count = raw.get("missing_count", raw.get("missing_symbol_count"))
+        if missing_count is None:
+            missing_count = len(missing_symbols)
+        return StrategyMarketDataHealth(
+            ok=bool(raw.get("ok", missing_count == 0)),
+            provider=raw.get("provider") or exchange_id,
+            fetched_count=int(fetched_count or 0),
+            missing_count=int(missing_count or 0),
+            missing_symbols=[str(symbol) for symbol in missing_symbols],
+        )
+
+    @staticmethod
+    def _diagnostics_cycle(row, exchange_id: Optional[str]) -> StrategyDiagnosticsCycleData:
+        payload = dict(getattr(row, "payload", None) or {})
+        return StrategyDiagnosticsCycleData(
+            compose_id=str(payload.get("compose_id") or getattr(row, "compose_id", "")),
+            cycle_index=payload.get("cycle_index"),
+            created_at=StrategyService._cycle_created_at(row, payload),
+            rationale=payload.get("rationale"),
+            instruction_count=int(payload.get("instruction_count") or 0),
+            order_count=int(payload.get("order_count") or 0),
+            no_order_count=int(payload.get("no_order_count") or 0),
+            market_data_health=StrategyService._market_health(payload, exchange_id),
+        )
+
+    @staticmethod
+    def _symbol_decisions(payload: dict) -> list[StrategySymbolDecisionData]:
+        decisions = payload.get("symbol_decisions") or []
+        if not isinstance(decisions, list):
+            return []
+        return [StrategySymbolDecisionData(**item) for item in decisions]
+
+    @staticmethod
+    async def get_strategy_diagnostics(
+        strategy_id: str,
+    ) -> Optional[StrategyDiagnosticsData]:
+        repo = get_strategy_repository()
+        strategy = repo.get_strategy_by_strategy_id(strategy_id)
+        if strategy is None:
+            return None
+
+        cfg = dict(strategy.config or {})
+        meta = dict(strategy.strategy_metadata or {})
+        exchange_config = cfg.get("exchange_config", {}) or {}
+        trading_config = cfg.get("trading_config", {}) or {}
+        exchange_id = meta.get("exchange_id") or exchange_config.get("exchange_id")
+        rows = repo.get_cycle_diagnostics(strategy_id, limit=20)
+        latest_row = rows[0] if rows else None
+        latest_payload = dict(getattr(latest_row, "payload", None) or {}) if latest_row else {}
+        recent_cycles = [
+            StrategyService._diagnostics_cycle(row, exchange_id) for row in rows
+        ]
+        symbol_decisions = StrategyService._symbol_decisions(latest_payload)
+
+        observed_count = sum(1 for item in symbol_decisions if item.has_market_snapshot)
+        if not symbol_decisions:
+            observed_count = int(latest_payload.get("observed_symbol_count") or 0)
+        expected_count = int(
+            latest_payload.get("expected_symbol_count")
+            or len(trading_config.get("symbols") or [])
+            or 0
+        )
+
+        return StrategyDiagnosticsData(
+            strategy_id=strategy.strategy_id,
+            strategy_name=strategy.name,
+            status=strategy.status,
+            trading_mode=StrategyService._normalize_trading_mode(meta, cfg),
+            exchange_id=exchange_id,
+            strategy_type=StrategyService._normalize_strategy_type(meta, cfg),
+            runtime_health=meta.get("runtime_health") or {},
+            config=StrategyService._diagnostics_config(cfg),
+            observed_symbol_count=observed_count,
+            expected_symbol_count=expected_count,
+            latest_cycle=recent_cycles[0] if recent_cycles else None,
+            symbol_decisions=symbol_decisions,
+            recent_cycles=recent_cycles,
+        )
     @staticmethod
     def _combine_realized_unrealized(snapshot) -> float:
         realized = _to_optional_float(getattr(snapshot, "total_realized_pnl", None))
@@ -184,8 +321,18 @@ class StrategyService:
 
         if raw in ("prompt based strategy", "grid strategy"):
             return ST.PROMPT if raw.startswith("prompt") else ST.GRID
-        if raw_compact in ("promptbasedstrategy", "gridstrategy"):
-            return ST.PROMPT if raw_compact.startswith("prompt") else ST.GRID
+        strategy_types = {item.value.lower(): item for item in ST}
+        strategy_names = {item.name.lower(): item for item in ST}
+        if raw in strategy_types:
+            return strategy_types[raw]
+        if raw in strategy_names:
+            return strategy_names[raw]
+        compact_types = {
+            "".join(ch for ch in item.value.lower() if ch.isalnum()): item
+            for item in ST
+        }
+        if raw_compact in compact_types:
+            return compact_types[raw_compact]
         if raw in ("prompt", "grid"):
             return ST.PROMPT if raw == "prompt" else ST.GRID
 

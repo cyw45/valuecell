@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from valuecell.server.api.schemas.base import StatusCode, SuccessResponse
 from valuecell.server.api.schemas.strategy import (
     StrategyCurveResponse,
+    StrategyDiagnosticsResponse,
     StrategyDetailResponse,
     StrategyHoldingFlatItem,
     StrategyHoldingFlatResponse,
@@ -130,12 +131,18 @@ def create_strategy_router() -> APIRouter:
                         if raw.startswith("prompt")
                         else StrategyType.GRID
                     )
-                if raw_compact in ("promptbasedstrategy", "gridstrategy"):
-                    return (
-                        StrategyType.PROMPT
-                        if raw_compact.startswith("prompt")
-                        else StrategyType.GRID
-                    )
+                strategy_types = {item.value.lower(): item for item in StrategyType}
+                strategy_names = {item.name.lower(): item for item in StrategyType}
+                if raw in strategy_types:
+                    return strategy_types[raw]
+                if raw in strategy_names:
+                    return strategy_names[raw]
+                compact_types = {
+                    "".join(ch for ch in item.value.lower() if ch.isalnum()): item
+                    for item in StrategyType
+                }
+                if raw_compact in compact_types:
+                    return compact_types[raw_compact]
                 if raw in ("prompt", "grid"):
                     return StrategyType.PROMPT if raw == "prompt" else StrategyType.GRID
 
@@ -247,6 +254,31 @@ def create_strategy_router() -> APIRouter:
                 status_code=500,
                 detail=f"Failed to retrieve strategy performance: {str(e)}",
             )
+    @router.get(
+        "/diagnostics",
+        response_model=StrategyDiagnosticsResponse,
+        summary="Get transparent strategy diagnostics",
+        description="Return strategy config, market data health, and per-symbol order/no-order reasons.",
+    )
+    async def get_strategy_diagnostics(
+        id: str = Query(..., description="Strategy ID"),
+    ) -> StrategyDiagnosticsResponse:
+        try:
+            data = await StrategyService.get_strategy_diagnostics(id)
+            if not data:
+                raise HTTPException(status_code=404, detail="Strategy not found")
+            return SuccessResponse.create(
+                data=data,
+                msg="Successfully retrieved strategy diagnostics",
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to retrieve strategy diagnostics: {str(e)}",
+            )
+
 
     @router.get(
         "/holding",

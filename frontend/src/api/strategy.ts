@@ -3,6 +3,7 @@ import { API_QUERY_KEYS } from "@/constants/api";
 import { type ApiResponse, apiClient } from "@/lib/api-client";
 import type {
   CreateStrategy,
+  StrategyDiagnostics,
   PortfolioSummary,
   Position,
   Strategy,
@@ -72,6 +73,19 @@ export const useGetStrategyPortfolioSummary = (strategyId?: number) => {
     queryFn: () =>
       apiClient.get<ApiResponse<PortfolioSummary>>(
         `/strategies/portfolio_summary?id=${strategyId}`,
+      ),
+    select: (data) => data.data,
+    refetchInterval: 5 * 1000,
+    enabled: !!strategyId,
+  });
+};
+
+export const useGetStrategyDiagnostics = (strategyId?: number) => {
+  return useQuery({
+    queryKey: ["strategy", "diagnostics", strategyId ?? ""],
+    queryFn: () =>
+      apiClient.get<ApiResponse<StrategyDiagnostics>>(
+        `/strategies/diagnostics?id=${strategyId}`,
       ),
     select: (data) => data.data,
     refetchInterval: 5 * 1000,

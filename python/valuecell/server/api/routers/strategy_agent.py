@@ -146,17 +146,17 @@ def create_strategy_agent_router() -> APIRouter:
                 user_request.trading_config.strategy_type or StrategyType.PROMPT
             )
 
-            if strategy_type_enum == StrategyType.PROMPT:
-                agent_name = "PromptBasedStrategyAgent"
-            elif strategy_type_enum == StrategyType.GRID:
-                agent_name = "GridStrategyAgent"
-            else:
+            agent_name_by_strategy_type = {
+                StrategyType.PROMPT: "PromptBasedStrategyAgent",
+                StrategyType.GRID: "GridStrategyAgent",
+                StrategyType.LONG_TERM_SPOT_RSI: "LongTermSpotRsiStrategyAgent",
+                StrategyType.SHORT_TERM_SPOT_RSI: "ShortTermSpotRsiStrategyAgent",
+            }
+            agent_name = agent_name_by_strategy_type.get(strategy_type_enum)
+            if agent_name is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"Unsupported strategy_type: '{strategy_type_enum}'. "
-                        "Use 'PromptBasedStrategy' or 'GridStrategy'"
-                    ),
+                    detail=f"Unsupported strategy_type: '{strategy_type_enum}'.",
                 )
 
             # Build UserInput for orchestrator

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from ..connection import get_database_manager
 from ..models.strategy import Strategy
 from ..models.strategy_compose_cycle import StrategyComposeCycle
+from ..models.strategy_cycle_diagnostics import StrategyCycleDiagnostics
 from ..models.strategy_detail import StrategyDetail
 from ..models.strategy_holding import StrategyHolding
 from ..models.strategy_instruction import StrategyInstruction
@@ -530,6 +531,64 @@ class StrategyRepository:
             if not self.db_session:
                 session.close()
 
+    def upsert_cycle_diagnostics(
+        self,
+        strategy_id: str,
+        compose_id: str,
+        payload: dict,
+    ) -> Optional[StrategyCycleDiagnostics]:
+        """Create or update compact diagnostics for one compose cycle."""
+        session = self._get_session()
+        try:
+            item = (
+                session.query(StrategyCycleDiagnostics)
+                .filter(
+                    StrategyCycleDiagnostics.strategy_id == strategy_id,
+                    StrategyCycleDiagnostics.compose_id == compose_id,
+                )
+                .first()
+            )
+            if item:
+                item.payload = payload
+            else:
+                item = StrategyCycleDiagnostics(
+                    strategy_id=strategy_id,
+                    compose_id=compose_id,
+                    payload=payload,
+                )
+                session.add(item)
+            session.commit()
+            session.refresh(item)
+            session.expunge(item)
+            return item
+        except Exception:
+            session.rollback()
+            return None
+        finally:
+            if not self.db_session:
+                session.close()
+
+    def get_cycle_diagnostics(
+        self, strategy_id: str, limit: Optional[int] = None
+    ) -> List[StrategyCycleDiagnostics]:
+        """Return diagnostics payloads newest first."""
+        session = self._get_session()
+        try:
+            query = (
+                session.query(StrategyCycleDiagnostics)
+                .filter(StrategyCycleDiagnostics.strategy_id == strategy_id)
+                .order_by(desc(StrategyCycleDiagnostics.created_at))
+            )
+            if limit:
+                query = query.limit(limit)
+            items = query.all()
+            for item in items:
+                session.expunge(item)
+            return items
+        finally:
+            if not self.db_session:
+                session.close()
+
     # Prompts operations (kept under strategy namespace)
     def list_prompts(self) -> List[StrategyPrompt]:
         """Return all prompts ordered by updated_at desc."""
@@ -639,6 +698,9 @@ class StrategyRepository:
                 ).delete(synchronize_session=False)
                 session.query(StrategyDetail).filter(
                     StrategyDetail.strategy_id == strategy_id
+                ).delete(synchronize_session=False)
+                session.query(StrategyCycleDiagnostics).filter(
+                    StrategyCycleDiagnostics.strategy_id == strategy_id
                 ).delete(synchronize_session=False)
 
             session.query(Strategy).filter(Strategy.strategy_id == strategy_id).delete(

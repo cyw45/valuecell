@@ -50,14 +50,12 @@ class TradeSide(str, Enum):
 
 
 class StrategyType(str, Enum):
-    """Strategy type selection for StrategyAgent variants.
-
-    - PROMPT: Prompt-based strategy agent
-    - GRID: Grid strategy agent
-    """
+    """Strategy type selection for StrategyAgent variants."""
 
     PROMPT = "PromptBasedStrategy"
     GRID = "GridStrategy"
+    LONG_TERM_SPOT_RSI = "LongTermSpotRsiStrategy"
+    SHORT_TERM_SPOT_RSI = "ShortTermSpotRsiStrategy"
 
 
 class ComponentType(str, Enum):
@@ -84,7 +82,7 @@ class LLMModelConfig(BaseModel):
         default=DEFAULT_AGENT_MODEL,
         description="Model identifier (e.g., 'deepseek-ai/deepseek-v3.1', 'gpt-4o')",
     )
-    api_key: str = Field(..., description="API key for the model provider")
+    api_key: str = Field(default="", description="API key for the model provider")
 
     @model_validator(mode="before")
     @classmethod
@@ -956,3 +954,4 @@ class DecisionCycleResult:
     history_records: List[HistoryRecord]
     digest: TradeDigest
     portfolio_view: PortfolioView
+    request: UserRequest | None = None

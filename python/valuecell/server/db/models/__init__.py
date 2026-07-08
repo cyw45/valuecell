@@ -14,6 +14,7 @@ from .base import Base
 from .strategy import Strategy
 from .strategy_compose_cycle import StrategyComposeCycle
 from .strategy_detail import StrategyDetail
+from .strategy_cycle_diagnostics import StrategyCycleDiagnostics
 from .strategy_holding import StrategyHolding
 from .strategy_instruction import StrategyInstruction
 from .strategy_portfolio import StrategyPortfolioView
@@ -32,6 +33,7 @@ __all__ = [
     "ProfileCategory",
     "StrategyHolding",
     "StrategyDetail",
+    "StrategyCycleDiagnostics",
     "StrategyPortfolioView",
     "StrategyComposeCycle",
     "StrategyInstruction",

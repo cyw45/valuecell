@@ -14,6 +14,8 @@ from .base import SuccessResponse
 class StrategyType(str, Enum):
     PROMPT = "PromptBasedStrategy"
     GRID = "GridStrategy"
+    LONG_TERM_SPOT_RSI = "LongTermSpotRsiStrategy"
+    SHORT_TERM_SPOT_RSI = "ShortTermSpotRsiStrategy"
 
 
 class StrategySummaryData(BaseModel):
@@ -25,7 +27,7 @@ class StrategySummaryData(BaseModel):
     strategy_name: Optional[str] = Field(None, description="User-defined strategy name")
     strategy_type: Optional[StrategyType] = Field(
         None,
-        description="Strategy type identifier: 'prompt based strategy' or 'grid strategy'",
+        description="Strategy type identifier",
     )
     status: Literal["running", "stopped"] = Field(..., description="Strategy status")
     stop_reason: Optional[str] = Field(None, description="Reason for strategy stop")
@@ -249,6 +251,54 @@ class PromptDeleteResponse(BaseModel):
 PromptDeleteSuccessResponse = SuccessResponse[PromptDeleteResponse]
 
 
+class StrategyMarketDataHealth(BaseModel):
+    ok: bool = Field(..., description="Whether the latest market data scan covered all expected symbols")
+    provider: Optional[str] = Field(None, description="Market data provider/exchange")
+    fetched_count: int = Field(0, description="Symbols with fresh market snapshot data")
+    missing_count: int = Field(0, description="Expected symbols missing market snapshot data")
+    missing_symbols: List[str] = Field(default_factory=list, description="Expected symbols missing data")
+
+
+class StrategySymbolDecisionData(BaseModel):
+    symbol: str = Field(..., description="Observed or expected symbol")
+    intervals_seen: List[str] = Field(default_factory=list, description="Intervals observed in this scan")
+    has_market_snapshot: bool = Field(False, description="Whether realtime market snapshot was fetched")
+    latest_price: Optional[float] = Field(None, description="Latest observed price")
+    action: Optional[str] = Field(None, description="Action emitted by the strategy or noop")
+    quantity: Optional[float] = Field(None, description="Order quantity if an order was emitted")
+    reason: Optional[str] = Field(None, description="Human-readable order/no-order reason")
+
+
+class StrategyDiagnosticsCycleData(BaseModel):
+    compose_id: str = Field(..., description="Compose cycle identifier")
+    cycle_index: Optional[int] = Field(None, description="Cycle index")
+    created_at: Optional[datetime] = Field(None, description="Cycle creation time")
+    rationale: Optional[str] = Field(None, description="Decision rationale")
+    instruction_count: int = Field(0, description="Total instructions emitted")
+    order_count: int = Field(0, description="Executable order count")
+    no_order_count: int = Field(0, description="Symbols with no order")
+    market_data_health: StrategyMarketDataHealth = Field(..., description="Market data fetch health")
+
+
+class StrategyDiagnosticsData(BaseModel):
+    strategy_id: str = Field(..., description="Strategy identifier")
+    strategy_name: Optional[str] = Field(None, description="Strategy display name")
+    status: Optional[str] = Field(None, description="Strategy runtime status")
+    trading_mode: Optional[str] = Field(None, description="Trading mode")
+    exchange_id: Optional[str] = Field(None, description="Exchange identifier")
+    strategy_type: Optional[StrategyType] = Field(None, description="Strategy type")
+    runtime_health: dict = Field(default_factory=dict, description="Runtime health summary")
+    config: dict = Field(default_factory=dict, description="User-facing strategy configuration")
+    observed_symbol_count: int = Field(0, description="Symbols with market snapshot data")
+    expected_symbol_count: int = Field(0, description="Configured symbol count")
+    latest_cycle: Optional[StrategyDiagnosticsCycleData] = Field(None, description="Latest scan diagnostics")
+    symbol_decisions: List[StrategySymbolDecisionData] = Field(default_factory=list, description="Latest per-symbol decisions")
+    recent_cycles: List[StrategyDiagnosticsCycleData] = Field(default_factory=list, description="Recent scan summaries")
+
+
+StrategyDiagnosticsResponse = SuccessResponse[StrategyDiagnosticsData]
+
+
 class StrategyPerformanceData(BaseModel):
     """Performance overview for a strategy including ROI and config."""
 
@@ -268,7 +318,7 @@ class StrategyPerformanceData(BaseModel):
     )
     exchange_id: Optional[str] = Field(None, description="Exchange identifier")
     strategy_type: Optional[StrategyType] = Field(
-        None, description="Strategy type (PromptBasedStrategy/GridStrategy)"
+        None, description="Strategy type"
     )
     trading_mode: Optional[Literal["live", "virtual"]] = Field(
         None, description="Trading mode: live or virtual"

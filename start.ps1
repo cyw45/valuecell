@@ -5,6 +5,7 @@
 param(
     [switch]$NoFrontend,
     [switch]$NoBackend,
+    [switch]$InstallBrowser,
     [Alias("h")]
     [switch]$Help
 )
@@ -119,8 +120,11 @@ function Compile {
         try {
             # Run prepare environments script
             if (Test-Path "scripts\prepare_envs.ps1") {
-                Write-Info "Running environment preparation script..."
-                & ".\scripts\prepare_envs.ps1"
+                if ($InstallBrowser -or $env:VALUECELL_INSTALL_BROWSER -eq "1") {
+                    & ".\scripts\prepare_envs.ps1" -InstallBrowser
+                } else {
+                    & ".\scripts\prepare_envs.ps1"
+                }
             } else {
                 Write-Warn "prepare_envs.ps1 not found, running uv sync directly..."
                 uv sync
@@ -259,6 +263,7 @@ Description:
 Options:
   -NoFrontend     Start backend only
   -NoBackend      Start frontend only
+  -InstallBrowser  Also download Playwright Chromium for ResearchAgent browser scraping
   -Help, -h       Show this help message
 "@
 }

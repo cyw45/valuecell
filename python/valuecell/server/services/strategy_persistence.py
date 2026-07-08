@@ -334,6 +334,27 @@ def persist_compose_cycle(
         return False
 
 
+def persist_cycle_diagnostics(
+    strategy_id: str,
+    compose_id: str,
+    payload: dict,
+) -> bool:
+    """Persist compact diagnostics for one compose cycle."""
+    repo = get_strategy_repository()
+    try:
+        item = repo.upsert_cycle_diagnostics(
+            strategy_id=strategy_id,
+            compose_id=compose_id,
+            payload=payload,
+        )
+        return item is not None
+    except Exception:
+        logger.exception(
+            "persist_cycle_diagnostics failed for {} {}", strategy_id, compose_id
+        )
+        return False
+
+
 def persist_instructions(
     strategy_id: str,
     compose_id: str,

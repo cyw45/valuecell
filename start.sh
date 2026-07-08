@@ -148,6 +148,7 @@ Description:
 Options:
   --no-frontend   Start backend only
   --no-backend    Start frontend only
+  --install-browser  Also download Playwright Chromium for ResearchAgent browser scraping
   -h, --help      Show help
 EOF
 }
@@ -155,11 +156,13 @@ EOF
 main() {
   local start_frontend_flag=1
   local start_backend_flag=1
+  local install_browser_flag=0
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --no-frontend) start_frontend_flag=0; shift ;;
       --no-backend)  start_backend_flag=0; shift ;;
+      --install-browser) install_browser_flag=1; shift ;;
       -h|--help)     print_usage; exit 0 ;;
       *) error "Unknown argument: $1"; print_usage; exit 1 ;;
     esac
@@ -169,7 +172,11 @@ main() {
   ensure_tool bun oven-sh/bun/bun
   ensure_tool uv uv
 
-  compile
+  if (( install_browser_flag )); then
+    VALUECELL_INSTALL_BROWSER=1 compile
+  else
+    compile
+  fi
 
   if (( start_frontend_flag )); then
     start_frontend

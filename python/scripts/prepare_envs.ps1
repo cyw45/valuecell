@@ -1,3 +1,7 @@
+param(
+    [switch]$InstallBrowser
+)
+
 # PowerShell script to prepare Python environments
 
 $ErrorActionPreference = "Stop"
@@ -46,7 +50,12 @@ if (-not (Test-Path ".venv")) {
 }
 Highlight-Command "uv sync --group dev"
 uv sync --group dev
-uvx playwright install --with-deps chromium
+if ($InstallBrowser -or $env:VALUECELL_INSTALL_BROWSER -eq "1") {
+    Highlight-Command "uvx playwright install --with-deps chromium"
+    uvx playwright install --with-deps chromium
+} else {
+    Write-Warn "Skipping Playwright Chromium install. Use -InstallBrowser only if ResearchAgent RootData scraping needs it."
+}
 Write-Success "Main environment setup complete."
 
 Write-Success "=========================================="

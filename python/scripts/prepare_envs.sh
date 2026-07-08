@@ -49,7 +49,12 @@ else
 fi
 highlight_command "uv sync --group dev"
 uv sync --group dev
-uvx playwright install --with-deps chromium
+if [ "${VALUECELL_INSTALL_BROWSER:-0}" = "1" ]; then
+    highlight_command "uvx playwright install --with-deps chromium"
+    uvx playwright install --with-deps chromium
+else
+    echo -e "${YELLOW}Skipping Playwright Chromium install. Set VALUECELL_INSTALL_BROWSER=1 only if ResearchAgent RootData scraping needs it.${NC}"
+fi
 echo -e "${GREEN}Main environment setup complete.${NC}"
 
 echo -e "${GREEN}==========================================${NC}"

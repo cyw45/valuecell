@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from valuecell.agents.common.trading import models as agent_models
+from valuecell.agents.common.trading.diagnostics import build_cycle_diagnostics
 from valuecell.server.db.repositories.strategy_repository import get_strategy_repository
 from valuecell.server.services import strategy_persistence
 from valuecell.utils.ts import get_current_timestamp_ms
@@ -252,6 +253,27 @@ class StreamController:
                     "Failed to persist compose instructions for strategy={} compose_id={}",
                     self.strategy_id,
                     result.compose_id,
+                )
+
+            try:
+                if result.request is None:
+                    raise ValueError("Decision cycle result is missing request")
+                diagnostics = build_cycle_diagnostics(
+                    request=result.request,
+                    result=result,
+                )
+            except Exception:
+                diagnostics = None
+                logger.warning(
+                    "Failed to build cycle diagnostics for strategy={} compose_id={}",
+                    self.strategy_id,
+                    result.compose_id,
+                )
+            if diagnostics is not None:
+                strategy_persistence.persist_cycle_diagnostics(
+                    strategy_id=self.strategy_id,
+                    compose_id=result.compose_id,
+                    payload=diagnostics,
                 )
 
             for trade in result.trades:

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import {
   useDeleteStrategy,
   useGetStrategyDetails,
+  useGetStrategyDiagnostics,
   useGetStrategyHoldings,
   useGetStrategyList,
   useGetStrategyPortfolioSummary,
@@ -16,6 +17,7 @@ import type { AgentViewProps } from "@/types/agent";
 import type { Strategy } from "@/types/strategy";
 import {
   PortfolioPositionsGroup,
+  StrategyDiagnosticsPanel,
   StrategyComposeList,
   TradeStrategyGroup,
 } from "../strategy-items";
@@ -67,6 +69,9 @@ const StrategyAgentArea: FC<AgentViewProps> = () => {
     selectedStrategy?.strategy_id,
   );
   const { data: summary } = useGetStrategyPortfolioSummary(
+    selectedStrategy?.strategy_id,
+  );
+  const { data: diagnostics } = useGetStrategyDiagnostics(
     selectedStrategy?.strategy_id,
   );
 
@@ -132,12 +137,19 @@ const StrategyAgentArea: FC<AgentViewProps> = () => {
       </div>
 
       {/* Right section: Trade History and Portfolio/Positions */}
-      <div className="flex flex-1">
+      <div className="flex flex-1 min-w-0">
         {selectedStrategy ? (
-          <>
+          <div className="grid min-w-0 flex-1 grid-cols-[minmax(360px,0.9fr)_minmax(520px,1.3fr)_minmax(360px,0.9fr)] overflow-hidden">
             <StrategyComposeList
               composes={composes}
               tradingMode={selectedStrategy.trading_mode}
+            />
+            <StrategyDiagnosticsPanel
+              diagnostics={diagnostics}
+              priceCurve={priceCurve}
+              positions={positions}
+              strategy={selectedStrategy}
+              summary={summary}
             />
             <PortfolioPositionsGroup
               summary={summary}
@@ -145,7 +157,7 @@ const StrategyAgentArea: FC<AgentViewProps> = () => {
               positions={positions}
               strategy={selectedStrategy}
             />
-          </>
+          </div>
         ) : (
           <div className="flex size-full flex-col items-center justify-center gap-8">
             <EmptyIllustration />

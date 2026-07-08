@@ -253,6 +253,7 @@ class DefaultDecisionCoordinator(DecisionCoordinator):
             history_records=history_records,
             digest=digest,
             portfolio_view=portfolio,
+            request=self._request,
         )
 
     def _create_trades(
