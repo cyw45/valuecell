@@ -1,6 +1,6 @@
 import { MultiSelect } from "@valuecell/multi-select";
 import { Eye, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   useCreateStrategyPrompt,
@@ -34,7 +34,15 @@ import {
 } from "@/components/ui/select";
 import { TRADING_SYMBOLS } from "@/constants/agent";
 import { withForm } from "@/hooks/use-form";
-import type { Strategy, StrategyPrompt } from "@/types/strategy";
+import type { Strategy, StrategyConfigField, StrategyConfigSchema, StrategyPrompt } from "@/types/strategy";
+type TradingConfigFieldKey =
+  | "symbols"
+  | "initial_capital"
+  | "decide_interval"
+  | "max_leverage"
+  | "max_positions"
+  | "cap_factor"
+  | "template_id";
 
 export const TradingStrategyForm = withForm({
   defaultValues: {
@@ -45,17 +53,167 @@ export const TradingStrategyForm = withForm({
     decide_interval: 60,
     symbols: TRADING_SYMBOLS,
     template_id: "",
+    max_positions: 5,
+    cap_factor: 1,
+    strategy_params: {} as Record<string, unknown>,
   },
   props: {
     prompts: [] as StrategyPrompt[],
     tradingMode: "live" as "live" | "virtual",
+    strategySchemas: [] as StrategyConfigSchema[],
   },
-  render({ form, prompts, tradingMode }) {
+  render({ form, prompts, tradingMode, strategySchemas }) {
     const { t } = useTranslation();
     const { mutateAsync: createStrategyPrompt } = useCreateStrategyPrompt();
     const { mutate: deleteStrategyPrompt } = useDeleteStrategyPrompt();
     const [deletePromptId, setDeletePromptId] = useState<string | null>(null);
     const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+
+    const selectedSchema = useMemo(
+      () =>
+        strategySchemas.find(
+          (schema) => schema.strategy_type === form.state.values.strategy_type,
+        ),
+      [strategySchemas, form.state.values.strategy_type],
+    );
+
+    const tradingConfigFields = useMemo(
+      () =>
+        (selectedSchema?.fields ?? []).filter(
+          (field) => field.persistence_target === "trading_config",
+        ),
+      [selectedSchema],
+    );
+
+    const dynamicFields = useMemo(
+      () =>
+        (selectedSchema?.fields ?? []).filter(
+          (field) => field.persistence_target === "strategy_params",
+        ),
+      [selectedSchema],
+    );
+
+    useEffect(() => {
+      if (!selectedSchema) return;
+      const defaults = selectedSchema.defaults ?? {};
+      for (const field of tradingConfigFields) {
+        form.setFieldValue(
+          field.key as TradingConfigFieldKey,
+          (defaults[field.key] ?? field.default) as never,
+        );
+      }
+      form.setFieldValue(
+        "strategy_params",
+        Object.fromEntries(
+          dynamicFields.map((field) => [field.key, defaults[field.key] ?? field.default]),
+        ),
+      );
+    }, [selectedSchema, dynamicFields, form, tradingConfigFields]);
+
+    const updateStrategyParam = (key: string, value: unknown) => {
+      form.setFieldValue("strategy_params", {
+        ...(form.state.values.strategy_params ?? {}),
+        [key]: value,
+      });
+    };
+    const fieldValue = (field: StrategyConfigField) =>
+      field.persistence_target === "trading_config"
+        ? form.state.values[field.key as TradingConfigFieldKey]
+        : (form.state.values.strategy_params ?? {})[field.key];
+
+    const updateFieldValue = (field: StrategyConfigField, value: unknown) => {
+      if (field.persistence_target === "trading_config") {
+        form.setFieldValue(
+          field.key as TradingConfigFieldKey,
+          value as never,
+        );
+        return;
+      }
+      updateStrategyParam(field.key, value);
+    };
+
+    const renderDynamicField = (field: StrategyConfigField) => {
+      const value = fieldValue(field);
+      if (field.field_type === "boolean") {
+        return (
+          <Field key={field.key} orientation="horizontal" className="items-center justify-between rounded-lg border p-3">
+            <div>
+              <FieldLabel>{field.label}</FieldLabel>
+              {field.description && <p className="text-muted-foreground text-xs">{field.description}</p>}
+            </div>
+            <input
+              type="checkbox"
+              checked={Boolean(value)}
+              onChange={(event) => updateFieldValue(field, event.target.checked)}
+            />
+          </Field>
+        );
+      }
+      if (field.field_type === "select") {
+        return (
+          <Field key={field.key}>
+            <FieldLabel>{field.label}</FieldLabel>
+            <Select
+              value={String(value ?? field.default ?? "")}
+              onValueChange={(nextValue) => updateFieldValue(field, nextValue)}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {field.options.map((option) => (
+                  <SelectItem key={String(option.value)} value={String(option.value)}>
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        );
+      }
+      if (field.field_type === "number_list") {
+        const listValue = Array.isArray(value) ? value.join(",") : "";
+        return (
+          <Field key={field.key}>
+            <FieldLabel>{field.label}</FieldLabel>
+            <input
+              className="h-10 rounded-md border bg-background px-3 text-sm"
+              value={listValue}
+              onChange={(event) =>
+                updateFieldValue(
+                  field,
+                  event.target.value
+                    .split(",")
+                    .map((item) => Number(item.trim()))
+                    .filter((item) => Number.isFinite(item)),
+                )
+              }
+            />
+            {field.description && <p className="text-muted-foreground text-xs">{field.description}</p>}
+          </Field>
+        );
+      }
+      return (
+        <Field key={field.key}>
+          <FieldLabel>{field.label}</FieldLabel>
+          <input
+            className="h-10 rounded-md border bg-background px-3 text-sm"
+            type={field.field_type === "number" ? "number" : "text"}
+            min={field.min}
+            max={field.max}
+            step={field.step}
+            value={String(value ?? field.default ?? "")}
+            onChange={(event) =>
+              updateFieldValue(
+                field,
+                field.field_type === "number"
+                  ? Number(event.target.value)
+                  : event.target.value,
+              )
+            }
+          />
+          {field.description && <p className="text-muted-foreground text-xs">{field.description}</p>}
+        </Field>
+      );
+    };
 
     const handleDeletePrompt = (promptId: string) => {
       setDeletePromptId(promptId);
@@ -91,23 +249,44 @@ export const TradingStrategyForm = withForm({
         <form.AppField
           listeners={{
             onChange: ({ value }: { value: Strategy["strategy_type"] }) => {
-              if (value === "GridStrategy") {
-                form.setFieldValue("symbols", [TRADING_SYMBOLS[0]]);
-              } else {
-                form.setFieldValue("symbols", TRADING_SYMBOLS);
+              const schema = strategySchemas.find(
+                (item) => item.strategy_type === value,
+              );
+              const defaults = schema?.defaults ?? {};
+              for (const field of schema?.fields ?? []) {
+                const defaultValue = defaults[field.key] ?? field.default;
+                if (field.persistence_target === "trading_config") {
+                  form.setFieldValue(
+                    field.key as TradingConfigFieldKey,
+                    defaultValue as never,
+                  );
+                }
               }
+              form.setFieldValue(
+                "strategy_params",
+                Object.fromEntries(
+                  (schema?.fields ?? [])
+                    .filter((field) => field.persistence_target === "strategy_params")
+                    .map((field) => [field.key, defaults[field.key] ?? field.default]),
+                ),
+              );
             },
           }}
           name="strategy_type"
         >
           {(field) => (
             <field.SelectField label={t("strategy.form.strategyType.label")}>
-              <SelectItem value="PromptBasedStrategy">
-                {t("strategy.form.strategyType.promptBased")}
-              </SelectItem>
-              <SelectItem value="GridStrategy">
-                {t("strategy.form.strategyType.grid")}
-              </SelectItem>
+              {(strategySchemas.length > 0
+                ? strategySchemas
+                : [
+                    { strategy_type: "PromptBasedStrategy", label: t("strategy.form.strategyType.promptBased") },
+                    { strategy_type: "GridStrategy", label: t("strategy.form.strategyType.grid") },
+                  ]
+              ).map((schema) => (
+                <SelectItem key={schema.strategy_type} value={schema.strategy_type}>
+                  {schema.label}
+                </SelectItem>
+              ))}
             </field.SelectField>
           )}
         </form.AppField>
@@ -121,72 +300,39 @@ export const TradingStrategyForm = withForm({
           )}
         </form.AppField>
 
-        <FieldGroup className="flex flex-row gap-4">
-          {tradingMode === "virtual" && (
-            <form.AppField name="initial_capital">
-              {(field) => (
-                <field.NumberField
-                  className="flex-1"
-                  label={t("strategy.form.initialCapital.label")}
-                  placeholder={t("strategy.form.initialCapital.placeholder")}
-                />
-              )}
-            </form.AppField>
-          )}
+        {tradingConfigFields
+          .filter(
+            (field) =>
+              !["symbols", "template_id"].includes(field.key) &&
+              !(tradingMode === "live" && field.key === "initial_capital"),
+          )
+          .map(renderDynamicField)}
 
-          <form.AppField name="max_leverage">
-            {(field) => (
-              <field.NumberField
-                className="flex-1"
-                label={t("strategy.form.maxLeverage.label")}
-                placeholder={t("strategy.form.maxLeverage.placeholder")}
-              />
-            )}
-          </form.AppField>
-        </FieldGroup>
-
-        <form.AppField name="decide_interval">
+        <form.Field name="symbols">
           {(field) => (
-            <field.NumberField
-              label={t("strategy.form.decideInterval.label")}
-              placeholder={t("strategy.form.decideInterval.placeholder")}
-            />
+            <Field>
+              <FieldLabel className="font-medium text-base text-foreground">
+                {selectedSchema?.fields.find((item) => item.key === "symbols")?.label ?? t("strategy.form.tradingSymbols.label")}
+              </FieldLabel>
+              <MultiSelect
+                maxSelected={selectedSchema?.strategy_type === "GridStrategy" ? 1 : undefined}
+                options={
+                  selectedSchema?.fields
+                    .find((item) => item.key === "symbols")
+                    ?.options.map((item) => String(item.value)) ?? TRADING_SYMBOLS
+                }
+                value={field.state.value}
+                onValueChange={field.handleChange}
+                placeholder={t("strategy.form.tradingSymbols.placeholder")}
+                searchPlaceholder={t("strategy.form.tradingSymbols.searchPlaceholder")}
+                emptyText={t("strategy.form.tradingSymbols.emptyText")}
+                maxDisplayed={5}
+                creatable
+              />
+              <FieldError errors={field.state.meta.errors} />
+            </Field>
           )}
-        </form.AppField>
-
-        <form.Subscribe selector={(state) => state.values.strategy_type}>
-          {(strategyType) => {
-            return (
-              <form.Field name="symbols">
-                {(field) => (
-                  <Field>
-                    <FieldLabel className="font-medium text-base text-foreground">
-                      {t("strategy.form.tradingSymbols.label")}
-                    </FieldLabel>
-                    <MultiSelect
-                      maxSelected={
-                        strategyType === "GridStrategy" ? 1 : undefined
-                      }
-                      options={TRADING_SYMBOLS}
-                      value={field.state.value}
-                      onValueChange={(value) => field.handleChange(value)}
-                      placeholder={t(
-                        "strategy.form.tradingSymbols.placeholder",
-                      )}
-                      searchPlaceholder={t(
-                        "strategy.form.tradingSymbols.searchPlaceholder",
-                      )}
-                      emptyText={t("strategy.form.tradingSymbols.emptyText")}
-                      maxDisplayed={5}
-                      creatable
-                    />
-                    <FieldError errors={field.state.meta.errors} />
-                  </Field>
-                )}
-              </form.Field>
-            );
-          }}
-        </form.Subscribe>
+        </form.Field>
 
         <form.Subscribe selector={(state) => state.values.strategy_type}>
           {(strategyType) => {
@@ -271,6 +417,20 @@ export const TradingStrategyForm = withForm({
             );
           }}
         </form.Subscribe>
+
+        {dynamicFields.length > 0 && (
+          <FieldGroup className="rounded-lg border bg-muted/20 p-4">
+            <div>
+              <FieldLabel className="text-base">策略动态参数</FieldLabel>
+              <p className="text-muted-foreground text-sm">
+                {selectedSchema?.description}
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {dynamicFields.map(renderDynamicField)}
+            </div>
+          </FieldGroup>
+        )}
 
         {/* Delete Confirmation Dialog */}
         <AlertDialog

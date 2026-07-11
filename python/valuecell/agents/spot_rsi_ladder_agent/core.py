@@ -12,6 +12,7 @@ from .config import (
     LONG_TERM_PROFILE,
     SHORT_TERM_PROFILE,
     SpotRsiStrategyProfile,
+    profile_with_overrides,
 )
 from .features import SpotRsiLadderFeaturesPipeline
 from .symbol_filter import filter_supported_spot_symbols
@@ -22,14 +23,23 @@ class BaseSpotRsiStrategyAgent(BaseStrategyAgent):
 
     PROFILE: SpotRsiStrategyProfile
 
+    def _effective_profile(self, request: UserRequest) -> SpotRsiStrategyProfile:
+        return profile_with_overrides(
+            self.PROFILE,
+            request.trading_config.strategy_params,
+        )
+
     async def _build_features_pipeline(
         self,
         request: UserRequest,
     ) -> BaseFeaturesPipeline | None:
-        return SpotRsiLadderFeaturesPipeline.from_request(request, self.PROFILE)
+        return SpotRsiLadderFeaturesPipeline.from_request(
+            request,
+            self._effective_profile(request),
+        )
 
     async def _create_decision_composer(self, request: UserRequest):
-        return SpotRsiLadderComposer(request, self.PROFILE)
+        return SpotRsiLadderComposer(request, self._effective_profile(request))
 
     async def _create_runtime(
         self,
@@ -56,13 +66,14 @@ class BaseSpotRsiStrategyAgent(BaseStrategyAgent):
             request.trading_config.max_positions,
             len(request.trading_config.symbols),
         )
+        profile = self._effective_profile(request)
         if request.trading_config.decide_interval == 60:
-            request.trading_config.decide_interval = self.PROFILE.default_decide_interval
+            request.trading_config.decide_interval = profile.default_decide_interval
         if not request.trading_config.strategy_name:
-            request.trading_config.strategy_name = self.PROFILE.display_name
+            request.trading_config.strategy_name = profile.display_name
         if request.exchange_config.trading_mode.value == "virtual":
-            request.trading_config.initial_capital *= self.PROFILE.capital_fraction
-            request.trading_config.initial_free_cash *= self.PROFILE.capital_fraction
+            request.trading_config.initial_capital *= profile.capital_fraction
+            request.trading_config.initial_free_cash *= profile.capital_fraction
 
 
 class LongTermSpotRsiStrategyAgent(BaseSpotRsiStrategyAgent):

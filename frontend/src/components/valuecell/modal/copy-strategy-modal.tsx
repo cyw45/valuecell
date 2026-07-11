@@ -163,7 +163,13 @@ const CopyStrategyModal: FC<CopyStrategyModalProps> = ({
       const payload = {
         llm_model_config: form1.state.values,
         exchange_config: form2.state.values,
-        trading_config: { ...rest, template_id },
+        trading_config: {
+          ...rest,
+          template_id,
+          max_positions: 5,
+          cap_factor: 1,
+          strategy_params: {},
+        },
       };
 
       const { code, msg } = await createStrategy(payload);
@@ -226,7 +232,7 @@ const CopyStrategyModal: FC<CopyStrategyModalProps> = ({
           {currentStep === 1 && <AIModelForm form={form1} />}
 
           {/* Step 2: Exchanges */}
-          {currentStep === 2 && <ExchangeForm form={form2} />}
+          {currentStep === 2 && <ExchangeForm form={form2} paperOnly={false} />}
 
           {/* Step 3: Trading Strategy */}
           {currentStep === 3 && (

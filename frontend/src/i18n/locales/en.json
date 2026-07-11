@@ -100,7 +100,87 @@
       "loading": "Loading...",
       "noMemories": "No memories yet",
       "delete": "Delete"
+    },
+    "sandboxExchanges": {
+    "link": "Sandbox exchanges",
+    "title": "Sandbox exchange management",
+    "description": "Connect and use exchange test environments only.",
+    "back": "Back to settings",
+    "warning": {
+      "title": "Test environment only",
+      "description": "Only Binance Testnet and OKX Demo credentials are supported. No live funds are used, and strategies cannot submit orders automatically."
+    },
+    "providers": {
+      "binance": "Binance Testnet",
+      "okx": "OKX Demo"
+    },
+    "connection": {
+      "title": "Connect a sandbox exchange",
+      "description": "Credentials are used to validate and save this test-only connection.",
+      "provider": "Provider",
+      "label": "Connection label",
+      "apiKey": "API key",
+      "apiSecret": "API secret",
+      "passphrase": "Passphrase",
+      "submit": "Validate and save"
+    },
+    "connections": {
+      "title": "Connections",
+      "description": "Saved connection metadata and test balances.",
+      "empty": "No sandbox connections yet.",
+      "balance": "Read test balance"
+    },
+    "balance": {
+      "asset": "Asset",
+      "free": "Available",
+      "used": "In use",
+      "total": "Total"
+    },
+    "order": {
+      "title": "Submit a sandbox order",
+      "description": "This explicit action creates an order only in the selected test environment.",
+      "connection": "Connection",
+      "connectionPlaceholder": "Select a connection",
+      "symbol": "Symbol",
+      "side": "Side",
+      "type": "Order type",
+      "quoteAmount": "Quote amount",
+      "price": "Limit price",
+      "submit": "Submit sandbox order",
+      "sides": { "buy": "Buy", "sell": "Sell" },
+      "types": { "market": "Market", "limit": "Limit" },
+      "result": {
+        "title": "Order status",
+        "description": "Sanitized status metadata from the sandbox exchange.",
+        "symbol": "Symbol:",
+        "side": "Side:",
+        "status": "Status:",
+        "amount": "Quote amount:",
+        "price": "Price:",
+        "filled": "Filled:"
+      }
+    },
+    "messages": {
+      "connectionSaved": "Sandbox connection saved.",
+      "connectionFailed": "Unable to validate or save the sandbox connection.",
+      "invalidOrder": "Provide a connection and valid order values.",
+      "orderSubmitted": "Sandbox order submitted.",
+      "orderFailed": "Sandbox order could not be submitted."
     }
+  },
+  "liveExecution": {
+    "link": "Live execution (controlled)",
+    "title": "Live execution controls",
+    "description": "Live exchange execution remains disabled until every server-enforced gate is satisfied.",
+    "back": "Back to settings",
+    "status": { "loading": "Loading live status", "enabled": "Global live execution is enabled", "disabled": "Global live execution is disabled", "description": "This status is controlled by the server. Enabling it never authorizes an order by itself." },
+    "gates": { "title": "Current execution gates" },
+    "marketTypes": { "spot": "Spot", "swap": "Perpetual swap" },
+    "connection": { "title": "Live exchange connection", "description": "Credentials are submitted only to validate and create this encrypted live connection.", "label": "Connection label", "provider": "Exchange", "marketType": "Market type", "apiKey": "API key", "apiSecret": "API secret", "passphrase": "OKX passphrase", "withdrawalDisabled": "I confirm withdrawals are disabled for this API key.", "ipAllowlist": "I confirm an IP allowlist is configured for this API key.", "submit": "Validate and save live connection" },
+    "risk": { "title": "Risk policy", "description": "Server-side policy is checked before every order.", "maxNotional": "Maximum order notional", "maxPositions": "Maximum open positions", "maxLeverage": "Maximum leverage", "allowedSymbols": "Allowed symbols (comma-separated)", "submit": "Save risk policy" },
+    "binding": { "title": "Strategy binding", "description": "Only an active, non-revoked binding can route a strategy to a live connection.", "strategyId": "Strategy ID", "connection": "Live connection", "connectionPlaceholder": "Select live connection", "submit": "Create binding", "empty": "No live strategy bindings.", "active": "Active", "revoked": "Revoked", "revoke": "Revoke binding" },
+    "authorization": { "title": "Startup authorization", "description": "Authorization expires on restart and at its server-defined expiry.", "request": "Request startup challenge", "challenge": "Challenge code", "manualEntry": "Copy or manually transcribe this code, then type it again below. It is not retained after confirmation.", "confirmation": "Type challenge code again", "confirm": "Confirm runtime authorization", "active": "Runtime authorization active until {{expiresAt}}", "revoke": "Revoke authorization" },
+    "order": { "title": "Live order test", "description": "This command can submit a real exchange order after the server completes all preflight and risk checks.", "connection": "Live connection", "connectionPlaceholder": "Select live connection", "symbol": "Symbol", "side": "Side", "type": "Order type", "quoteAmount": "Quote amount", "price": "Limit price", "submit": "Submit live order", "unavailable": "Live order submission is unavailable until the server reports both the global gate and runtime authorization as active.", "sides": { "buy": "Buy", "sell": "Sell" }, "types": { "market": "Market", "limit": "Limit" } }
   },
   "common": {
     "back": "Back",
@@ -430,5 +510,112 @@
         "description": "Personalized news updates on a custom schedule."
       }
     }
+  },
+  "saas": {
+    "brand": "Value Cell",
+    "login": {
+      "aria": { "authentication": "Authentication" },
+      "subtitle": "Paper trading research platform",
+      "signIn": "Sign in",
+      "createAccount": "Create account",
+      "signInDescription": "Access your paper trading workspace",
+      "createAccountDescription": "Set up a new paper trading workspace",
+      "email": "Email",
+      "password": "Password",
+      "workspaceName": "Workspace name",
+      "minimumPasswordLength": "(min 12 chars)",
+      "signingIn": "Signing in…",
+      "creating": "Creating…",
+      "createWorkspace": "Create workspace",
+      "errors": {
+        "incompleteAuthentication": "Authentication response was incomplete. Please try again.",
+        "invalidCredentials": "Invalid email or password",
+        "incompleteRegistration": "Registration response was incomplete. Please try again.",
+        "registrationFailed": "Registration failed"
+      }
+    },
+    "navigation": {
+      "primary": "Primary navigation",
+      "workspace": "Workspace",
+      "valueCellDashboard": "Value Cell dashboard",
+      "dashboard": "Dashboard",
+      "charts": "Charts",
+      "strategies": "Strategies",
+      "trades": "Trades",
+      "funding": "Funding",
+      "settings": "Settings",
+      "paperWorkspace": "Paper workspace",
+      "signOut": "Sign out"
+    },
+    "dashboard": {
+      "paperWorkspace": "Paper workspace",
+      "researchOnly": "Research only",
+      "title": "Dashboard",
+      "subtitle": "Market context and strategy research. No live orders are connected.",
+      "reviewStrategies": "Review strategies",
+      "marketTicker": "Market ticker",
+      "workspaceOverview": "Workspace overview",
+      "workspaceStatus": "Workspace status",
+      "paperOnly": "Paper-only",
+      "workspaceStatusDescription": "This workspace is for research and simulated workflows. Execution wiring is not available.",
+      "strategyWorkflow": "Strategy workflow",
+      "configureRules": "Configure rules",
+      "strategyWorkflowDescription": "Build repeatable rule sets, then evaluate their market context before the next platform step.",
+      "paperStrategyActivity": "Paper strategy activity",
+      "evaluationActive": "Evaluation active",
+      "evaluationStopped": "Evaluation stopped",
+      "noStrategySaved": "No strategy saved",
+      "showingRecords": "Showing only deterministic server records for {{name}}.",
+      "saveStrategyPrompt": "Save a paper rules strategy to begin collecting deterministic evaluation records.",
+      "cumulativePnl": "Cumulative PnL",
+      "cumulativePnlDescription": "Running paper profit/loss from journal evaluations.",
+      "noEvaluationData": "No evaluation data yet. Run the strategy to collect PnL records.",
+      "latestRuleConditions": "Latest rule conditions",
+      "latestRuleConditionsDescription": "Triggered, blocked, and unavailable conditions are reported by the server after evaluation.",
+      "noStrategySelected": "No paper strategy is selected.",
+      "loadingSignals": "Loading server signal records…",
+      "signalsUnavailable": "Signal records are unavailable. No result is assumed.",
+      "noConditions": "No conditions have been recorded. Evaluate explicit market inputs to create a signal record.",
+      "signalStates": { "triggered": "Triggered", "blocked": "Blocked", "unavailable": "Unavailable" }
+    },
+    "charts": {
+      "researchChart": "Research chart",
+      "paperOnly": "Paper-only",
+      "title": "Charts",
+      "subtitle": "Explore reference market data. Chart controls do not place orders or connect an execution account.",
+      "marketChart": "Market chart",
+      "poweredByTradingView": "Powered by TradingView market data.",
+      "symbols": { "bitcoin": "Bitcoin / US Dollar", "ether": "Ether / US Dollar", "solana": "Solana / US Dollar" },
+      "intervals": { "fifteenMinutes": "15 minutes", "oneHour": "1 hour", "fourHours": "4 hours", "oneDay": "1 day" },
+      "researchContext": "Research context",
+      "researchContextDescription": "Use chart observations to inform a rules strategy. Performance and execution remain unavailable until the backend integration step.",
+      "openTradingView": "Open TradingView"
+    },
+    "chart": { "pnl": "PnL" },
+    "operations": {
+      "strategy": {
+        "title": "Rules strategy", "paperOnly": "Paper only", "subtitle": "Define a transparent, fixed-rule playbook for paper evaluation.", "defaultName": "Paper rules strategy", "included": "Included", "off": "Off", "ruleToggle": "{{title}} {{status}}",
+        "status": { "active": "Paper evaluation active", "ready": "Paper evaluation ready" },
+        "explicitInputs": { "title": "Explicit paper inputs only", "description": "Save fixed rules, then provide typed candles and an account snapshot for deterministic evaluation. This workspace never fetches market data or submits orders." },
+        "fields": { "name": "Strategy name", "description": "Description", "optional": "(optional)", "markets": "Markets", "marketsHint": "Select up to {{max}} markets to evaluate independently.", "marketsLoading": "Loading available markets…", "marketsError": "Available markets could not be loaded. Try again shortly.", "paperMarkets": "Paper markets", "candleTimeframe": "Candle timeframe", "candleTimeframeHint": "Evaluations run on closed candles; this timeframe sets the maximum polling cadence.", "fastMovingAverage": "Fast moving average", "slowMovingAverage": "Slow moving average", "period": "Period", "lowerThreshold": "Lower threshold", "upperThreshold": "Upper threshold", "standardDeviations": "Standard deviations", "macdFastPeriod": "MACD fast period", "macdSlowPeriod": "MACD slow period", "macdSignalPeriod": "MACD signal period", "positionSize": "Position size", "takeProfit": "Take profit", "stopLoss": "Stop loss", "maximumOpenPositions": "Maximum open positions", "maximumLeverage": "Maximum leverage", "paperEvaluationOnly": "Paper evaluation only" },
+        "sections": { "marketScope": { "title": "Market scope", "description": "Choose the paper markets and bar interval used by this ruleset." }, "trendEntry": { "title": "Trend entry", "description": "Enter long when the faster average crosses above the slower average." }, "rsi": { "title": "RSI filter", "description": "Avoid entries when momentum is already stretched." }, "bollinger": { "title": "Bollinger confirmation", "description": "Require price to remain within its volatility band." }, "momentum": { "title": "Momentum confirmation", "description": "Use MACD direction to confirm the crossover before a paper entry." }, "riskLimits": { "title": "Paper risk limits", "description": "Limits are expressed per paper position and enforced by the deterministic server evaluator." } },
+        "errors": { "selectMarket": "Select at least one market.", "wholeNumber": "Use a whole number from {{min}} to {{max}}.", "slowAverage": "The slow average must be larger than the fast average.", "belowUpperThreshold": "Use a value below the upper threshold.", "aboveLowerThreshold": "Use a value above the lower threshold.", "valueRange": "Use a value from {{min}} to {{max}}.", "largerThanFastPeriod": "Use a value larger than the fast period.", "percentRange": "Use {{min}}% to {{max}}%.", "positiveBelowTakeProfit": "Use a positive value below take profit.", "leverageRange": "Use a value from 1x to 5x." },
+        "summary": { "title": "Live rules summary", "description": "Updates as you adjust the fixed-rule inputs.", "paperMarkets": "Paper markets", "noneSelected": "None selected", "timeframe": "Timeframe", "entry": "Entry", "entryValue": "MA {{fast}} crosses above MA {{slow}}", "confirmations": "Confirmations", "none": "None", "positionSize": "Position size", "positionSizeValue": "{{value}}% each", "exitLimits": "Exit limits", "exitLimitsValue": "{{takeProfit}}% take profit / {{stopLoss}}% stop loss", "exposureCap": "Exposure cap", "exposureCapValue": "{{positions}} positions at up to {{leverage}}x" },
+        "paperStrategy": { "title": "Paper strategy", "status": "{{name}} is {{status}}.", "valid": "Rules are valid and ready to save.", "resolve": "Resolve highlighted values before saving.", "help": "A saved strategy must be running before evaluation. No exchange connection, order submission, or real funds are available." },
+        "executionMode": { "title": "Strategy execution mode: paper evaluation", "description": "Starting a strategy only generates signals and paper logs; it never submits sandbox orders automatically. Sandbox orders must be explicitly submitted on the sandbox exchanges page.", "link": "Sandbox exchanges" },
+        "evaluate": { "title": "Evaluate supplied data", "description": "Paste JSON with candles and market from your own data source." },
+        "evaluation": { "title": "Server evaluation", "fundingImpact": "Funding impact", "fundingSummary": "{{direction}} · estimated {{payment}} quote at {{rate}}%" },
+        "actions": { "save": "Save paper rules", "saving": "Saving paper rules…", "stop": "Stop paper evaluation", "start": "Start paper evaluation", "runEvaluation": "Run paper evaluation" },
+        "toasts": { "saved": "Paper rules saved", "started": "Paper evaluation started", "stopped": "Paper evaluation stopped", "operationFailed": "The paper strategy operation failed. Try again.", "invalidEvaluation": "Provide a JSON object with explicit candles and market inputs before evaluating.", "evaluationComplete": "Paper evaluation completed" }
+      },
+      "trades": {
+        "paperOnly": "Paper-only", "noExecutionAccount": "No execution account", "title": "Trades", "subtitle": "Server-recorded paper recommendations are shown here. No entry is an order or a submitted fill.", "loading": "Loading paper trade records…", "unavailable": "Paper trade records are unavailable right now. No trades are assumed.",
+        "noStrategy": { "title": "No paper strategy selected", "description": "Save a rules strategy, start it, then evaluate explicit market inputs to create an explainable paper record." }, "recommendations": { "title": "Paper trade recommendations", "description": "Every record is marked not_submitted by the deterministic engine." }, "empty": { "title": "No paper trades recorded", "description": "The server has not recommended a paper buy or sell for this strategy. Evaluations that produce no action do not fabricate a trade." }, "table": { "evaluated": "Evaluated", "action": "Action", "reason": "Reason", "quantity": "Quantity", "execution": "Execution" }, "actions": { "configure": "Configure a rules strategy", "evaluate": "Evaluate supplied data" }, "ledger": { "title": "Evaluation ledger", "description": "Rows come only from completed server evaluations, with the deterministic reason and sizing preserved." }, "separation": { "title": "Clear separation", "description": "This workspace never routes, represents, or settles real-market activity." }
+      },
+      "funding": {
+        "pnl": { "title": "Cumulative PnL", "description": "Running paper profit/loss curve from journal evaluations.", "empty": "No evaluation data yet." }, "noStrategy": "Save and evaluate a paper rules strategy to see its server-reported funding estimates.", "loading": "Loading paper funding estimates…", "unavailable": "Paper funding estimates are unavailable right now. No funding entries are assumed.", "impact": { "title": "Paper funding impact", "description": "Each row is the exact impact reported for an evaluation; it does not move funds." }, "table": { "evaluated": "Evaluated", "direction": "Direction", "rate": "Rate", "currentNotional": "Current notional", "estimatedPayment": "Estimated payment" }, "empty": "No funding impact is recorded until the server completes an evaluation for this paper strategy.", "connections": { "title": "No account connections", "description": "Funding sources and execution accounts are deliberately absent from this paper-only workspace.", "empty": "Nothing is connected." }, "safety": { "title": "Safe by default", "description": "Rule evaluations cannot move money, authorize transfers, or expose account credentials.", "body": "Paper research remains isolated from real funds." }
+      }
+    }
   }
+}
 }

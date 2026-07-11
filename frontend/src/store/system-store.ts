@@ -9,12 +9,14 @@ const STORAGE_KEY = "valuecell-system-store";
 interface SystemStoreState extends SystemInfo {
   setSystemInfo: (info: Partial<SystemInfo>) => void;
   clearSystemInfo: () => void;
+  setSaaSSession: (session: { access_token: string; user_id: string; tenant_id: string; email: string }) => void;
 }
 
 const INITIAL_SYSTEM_INFO: SystemInfo = {
   access_token: "",
   refresh_token: "",
   id: "",
+  tenant_id: "",
   email: "",
   name: "",
   avatar: "",
@@ -32,6 +34,14 @@ export const useSystemStore = create<SystemStoreState>()(
         ...INITIAL_SYSTEM_INFO,
         setSystemInfo: (info) => set((state) => ({ ...state, ...info })),
         clearSystemInfo: () => set(INITIAL_SYSTEM_INFO),
+        setSaaSSession: ({ access_token, user_id, tenant_id, email }) =>
+          set((state) => ({
+            ...state,
+            access_token,
+            id: user_id,
+            tenant_id,
+            email,
+          })),
       }),
       {
         name: STORAGE_KEY,
@@ -59,3 +69,14 @@ export const useSystemAccessToken = () =>
 
 export const useIsLoggedIn = () =>
   useSystemStore(useShallow((state) => !!state.id && !!state.access_token));
+export const useSaaSSession = () =>
+  useSystemStore(
+    useShallow((state) => ({
+      isLoggedIn: !!state.id && !!state.access_token,
+      userId: state.id,
+      tenantId: state.tenant_id,
+      email: state.email,
+      setSaaSSession: state.setSaaSSession,
+      clearSystemInfo: state.clearSystemInfo,
+    })),
+  );

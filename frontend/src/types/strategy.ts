@@ -1,9 +1,80 @@
 // Strategy types
 
+export type StrategyType =
+  | "PromptBasedStrategy"
+  | "GridStrategy"
+  | "LongTermSpotRsiStrategy"
+  | "ShortTermSpotRsiStrategy";
+
+export interface StrategyConfigOption {
+  label: string;
+  value: string | number | boolean;
+}
+
+export interface StrategyConfigField {
+  key: string;
+  label: string;
+  field_type: "text" | "number" | "boolean" | "select" | "multi_select" | "number_list";
+  default?: unknown;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+  options: StrategyConfigOption[];
+  required: boolean;
+  group: string;
+  persistence_target: "trading_config" | "strategy_params";
+}
+
+export interface StrategyConfigSchema {
+  strategy_type: StrategyType;
+  label: string;
+  description: string;
+  defaults: Record<string, unknown>;
+  fields: StrategyConfigField[];
+}
+
+export interface StrategyConfigSchemaCatalog {
+  schemas: StrategyConfigSchema[];
+}
+
+export interface StrategyExperimentDiagnostic {
+  severity: "info" | "warning" | "error";
+  code: string;
+  message: string;
+  field?: string;
+}
+
+export interface StrategyExperimentCandidateSummary {
+  entry_steps: number;
+  exit_steps: number;
+  total_entry_allocation: number;
+  max_exposure_ratio: number;
+  risk_level: string;
+}
+
+export interface StrategyExperimentPreview {
+  mode: "paper";
+  strategy_type: Extract<
+    StrategyType,
+    "LongTermSpotRsiStrategy" | "ShortTermSpotRsiStrategy"
+  >;
+  parameters: Record<string, unknown>;
+  fingerprint: string;
+  diagnostics: StrategyExperimentDiagnostic[];
+  warnings: string[];
+  candidate_summary: StrategyExperimentCandidateSummary;
+}
+
+export interface StrategyExperimentPreviewRequest {
+  strategy_type: StrategyExperimentPreview["strategy_type"];
+  parameters: Record<string, unknown>;
+}
+
 export interface Strategy {
   strategy_id: number;
   strategy_name: string;
-  strategy_type: "PromptBasedStrategy" | "GridStrategy";
+  strategy_type: StrategyType;
   status: "running" | "stopped";
   stop_reason?: string;
   trading_mode: "live" | "virtual";
@@ -37,6 +108,12 @@ export interface StrategyMarketDataHealth {
   fetched_count: number;
   missing_count: number;
   missing_symbols: string[];
+  status?: "healthy" | "degraded" | "unavailable";
+  freshness_status?: "fresh" | "stale" | "unavailable";
+  coverage_status?: "complete" | "partial" | "unavailable";
+  stale_count?: number;
+  stale_symbols?: string[];
+  exposure_increase_allowed?: boolean;
 }
 
 export interface StrategyDiagnosticsCycle {
@@ -55,9 +132,18 @@ export interface StrategySymbolDecision {
   intervals_seen: string[];
   has_market_snapshot: boolean;
   latest_price?: number;
+  snapshot_ts_ms?: number;
+  freshness_age_ms?: number;
+  freshness_status?: "fresh" | "stale" | "unavailable";
+  coverage_status?: "complete" | "partial" | "unavailable";
+  exposure_increase_allowed?: boolean;
   action?: string;
   quantity?: number;
   reason?: string;
+  indicator_snapshot?: Record<string, unknown>;
+  conditions?: Array<Record<string, unknown>>;
+  decision_path?: string[];
+  fund_impact?: Record<string, unknown>;
 }
 
 export interface StrategyDiagnostics {
@@ -69,6 +155,7 @@ export interface StrategyDiagnostics {
   strategy_type?: Strategy["strategy_type"];
   runtime_health: Record<string, unknown>;
   config: Record<string, unknown>;
+  explanation: Record<string, unknown>;
   observed_symbol_count: number;
   expected_symbol_count: number;
   latest_cycle?: StrategyDiagnosticsCycle;
@@ -152,6 +239,9 @@ export interface CreateStrategy {
     template_id: string;
     decide_interval: number;
     strategy_type: Strategy["strategy_type"];
+    max_positions: number;
+    cap_factor: number;
+    strategy_params: Record<string, unknown>;
   };
 }
 

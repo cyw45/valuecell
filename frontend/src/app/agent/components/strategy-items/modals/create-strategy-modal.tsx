@@ -8,6 +8,7 @@ import {
   useCreateStrategy,
   useGetStrategyList,
   useGetStrategyPrompts,
+  useGetStrategySchemas,
 } from "@/api/strategy";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -70,6 +71,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
   const { data: strategies = [] } = useGetStrategyList();
   const { mutateAsync: createStrategy, isPending: isCreatingStrategy } =
     useCreateStrategy();
+  const { data: strategySchemaCatalog } = useGetStrategySchemas();
 
   // Step 1 Form: AI Models
   const form1 = useAppForm({
@@ -89,11 +91,11 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
   const provider = useStore(form1.store, (state) => state.values.provider);
   const { data: modelProviderDetail } = useGetModelProviderDetail(provider);
 
-  // Step 2 Form: Exchanges
+  // The research workstation never creates strategies with real-money execution.
   const form2 = useAppForm({
     defaultValues: {
-      trading_mode: "live" as "live" | "virtual",
-      exchange_id: "okx",
+      trading_mode: "virtual" as "live" | "virtual",
+      exchange_id: "",
       api_key: "",
       secret_key: "",
       passphrase: "",
@@ -109,14 +111,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
         modelProviderDetail?.models.find((m) => m.model_id === modelId)
           ?.model_name || modelId;
 
-      const { trading_mode, exchange_id } = form2.state.values;
-      const exchangeName =
-        trading_mode === "virtual"
-          ? "Virtual"
-          : EXCHANGE_OPTIONS.find((ex) => ex.value === exchange_id)?.label ||
-            exchange_id;
-
-      const baseName = `${modelName}-${exchangeName}`;
+      const baseName = `${modelName}-Paper`;
       let newName = baseName;
       let counter = 1;
 
@@ -140,6 +135,9 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
       decide_interval: 60,
       symbols: TRADING_SYMBOLS,
       template_id: prompts.length > 0 ? prompts[0].id : "",
+      max_positions: 5,
+      cap_factor: 1,
+      strategy_params: {} as Record<string, unknown>,
     },
     validators: {
       onSubmit: tradingStrategySchema,
@@ -147,7 +145,10 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
     onSubmit: async ({ value }) => {
       const payload = {
         llm_model_config: form1.state.values,
-        exchange_config: form2.state.values,
+        exchange_config: {
+          ...form2.state.values,
+          trading_mode: "virtual" as const,
+        },
         trading_config: value,
       };
 
@@ -181,7 +182,16 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
     open: (data) => {
       if (data) {
         form1.reset(data.llm_model_config);
-        form2.reset(data.exchange_config);
+        form2.reset({
+          ...data.exchange_config,
+          trading_mode: "virtual",
+          exchange_id: "",
+          api_key: "",
+          secret_key: "",
+          passphrase: "",
+          wallet_address: "",
+          private_key: "",
+        });
         form3.reset(data.trading_config);
       }
       setOpen(true);
@@ -213,8 +223,8 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
           {/* Step 1: AI Models */}
           {currentStep === 1 && <AIModelForm form={form1} />}
 
-          {/* Step 2: Exchanges */}
-          {currentStep === 2 && <ExchangeForm form={form2} />}
+          {/* Step 2: Paper-trading environment */}
+          {currentStep === 2 && <ExchangeForm form={form2} paperOnly />}
 
           {/* Step 3: Trading Strategy */}
           {currentStep === 3 && (
@@ -222,6 +232,7 @@ const CreateStrategyModal: FC<CreateStrategyModalProps> = ({
               form={form3}
               prompts={prompts}
               tradingMode={form2.state.values.trading_mode}
+              strategySchemas={strategySchemaCatalog?.schemas ?? []}
             />
           )}
         </div>

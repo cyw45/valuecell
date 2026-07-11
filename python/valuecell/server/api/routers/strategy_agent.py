@@ -69,6 +69,11 @@ def create_strategy_agent_router() -> APIRouter:
                     }
                 )
 
+            if request.exchange_config.trading_mode != TradingMode.VIRTUAL:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This deployment supports paper trading only.",
+                )
             # Assign initial_capital value to initial_free_cash.
             # Only used for paper tradings, the system would use account portfolio data for LIVE tradings.
             request.trading_config.initial_free_cash = (
@@ -240,6 +245,8 @@ def create_strategy_agent_router() -> APIRouter:
                     code=StatusCode.INTERNAL_ERROR, msg="Internal error"
                 )
 
+        except HTTPException:
+            raise
         except Exception:
             # As a last resort, log without sensitive details and return generic error.
             logger.exception("Failed to create strategy in API endpoint")

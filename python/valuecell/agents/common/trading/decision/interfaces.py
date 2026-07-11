@@ -18,6 +18,7 @@ from ..models import (
     UserRequest,
 )
 from ..utils import extract_price_map
+from ..features.market_snapshot import market_snapshot_status_by_symbol
 
 # Contracts for decision making (module-local abstract interfaces).
 # Composer hosts the LLM call and guardrails, producing executable instructions.
@@ -101,6 +102,16 @@ class BaseComposer(ABC):
                 projected_gross += abs(float(snap.quantity)) * px
 
         return equity, allowed_lev, constraints, projected_gross, price_map
+
+    @staticmethod
+    def _increases_absolute_exposure(
+        current_qty: float,
+        side: TradeSide,
+        quantity: float,
+    ) -> bool:
+        """Return whether an instruction would increase absolute position size."""
+        final_qty = current_qty + (quantity if side is TradeSide.BUY else -quantity)
+        return abs(final_qty) > abs(current_qty)
 
     def _normalize_quantity(
         self,
@@ -303,6 +314,7 @@ class BaseComposer(ABC):
         equity, allowed_lev, constraints, projected_gross, price_map = (
             self._init_buying_power_context(context)
         )
+        snapshot_statuses = market_snapshot_status_by_symbol(context.features)
 
         max_positions = constraints.max_positions
         max_position_qty = constraints.max_position_qty
@@ -372,6 +384,24 @@ class BaseComposer(ABC):
                 else:
                     final_leverage = max(1.0, min(requested_lev, allowed_lev_item))
                 quantity = abs(delta)
+
+                snapshot_status = snapshot_statuses.get(symbol, "missing")
+                if (
+                    snapshot_status != "fresh"
+                    and self._increases_absolute_exposure(
+                        local_current, side, quantity
+                    )
+                ):
+                    logger.warning(
+                        "Market snapshot status {} for {} blocks exposure increase "
+                        "(current_qty={}, side={}, requested_qty={})",
+                        snapshot_status,
+                        symbol,
+                        local_current,
+                        side,
+                        quantity,
+                    )
+                    continue
 
                 # Normalize quantity through all guardrails
                 logger.debug(f"Before normalize: {symbol} quantity={quantity}")

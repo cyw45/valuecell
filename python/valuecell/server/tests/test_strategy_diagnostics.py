@@ -6,6 +6,28 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from valuecell.agents.common.trading.constants import (
+    FEATURE_GROUP_BY_KEY,
+    FEATURE_GROUP_BY_MARKET_SNAPSHOT,
+)
+from valuecell.agents.common.trading.diagnostics import build_cycle_diagnostics
+from valuecell.agents.common.trading.models import (
+    DecisionCycleResult,
+    ExchangeConfig,
+    FeatureVector,
+    HistoryRecord,
+    InstrumentRef,
+    LLMModelConfig,
+    PortfolioView,
+    StrategySummary,
+    StrategyType as TradingStrategyType,
+    TradeDecisionAction,
+    TradeDigest,
+    TradeInstruction,
+    TradeSide,
+    TradingConfig,
+    UserRequest,
+)
 from valuecell.server.api.routers.strategy import create_strategy_router
 from valuecell.server.services.strategy_service import StrategyService
 
@@ -67,6 +89,7 @@ def _cycle(
     rationale: str,
     symbol_decisions: list[dict],
     market_data_health: dict,
+    explanation: dict | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         strategy_id=STRATEGY_ID,
@@ -88,6 +111,7 @@ def _cycle(
             ),
             "market_data_health": market_data_health,
             "symbol_decisions": symbol_decisions,
+            "explanation": explanation or {},
         },
     )
 
@@ -147,6 +171,27 @@ def _diagnostics_rows() -> list[SimpleNamespace]:
                 "missing_count": 1,
                 "missing_symbols": ["SOL-USDT"],
             },
+            explanation={
+                "action_reason": "RSI recovered above ladder entry threshold",
+                "triggered_conditions": [
+                    {
+                        "label": "strategy_decision",
+                        "status": "triggered",
+                        "detail": "RSI recovered above ladder entry threshold",
+                    }
+                ],
+                "blocked_conditions": [
+                    {
+                        "label": "strategy_decision",
+                        "status": "not_triggered",
+                        "detail": "No order: RSI is neutral and price is inside bands",
+                    }
+                ],
+                "fund_impact": {
+                    "portfolio_value_after_cycle": 10_000.0,
+                    "estimated_notional": 630.005,
+                },
+            },
         ),
         _cycle(
             compose_id="compose-previous",
@@ -163,6 +208,198 @@ def _diagnostics_rows() -> list[SimpleNamespace]:
             },
         ),
     ]
+
+
+def test_cycle_diagnostics_explanation_adds_conditions_and_fund_impact_without_breaking_symbol_decisions():
+    request = UserRequest(
+        llm_model_config=LLMModelConfig(provider="openrouter", model_id="test-model"),
+        exchange_config=ExchangeConfig(exchange_id="okx", market_type="spot"),
+        trading_config=TradingConfig(
+            strategy_name="Structured RSI",
+            strategy_type=TradingStrategyType.LONG_TERM_SPOT_RSI,
+            symbols=["BTC-USDT", "ETH-USDT"],
+            decide_interval=300,
+            initial_capital=10_000,
+            initial_free_cash=8_000,
+            max_leverage=1,
+            max_positions=2,
+            cap_factor=1.2,
+        ),
+    )
+    btc = InstrumentRef(symbol="BTC-USDT", exchange_id="okx")
+    eth = InstrumentRef(symbol="ETH-USDT", exchange_id="okx")
+    features = [
+        FeatureVector(
+            ts=1_000,
+            instrument=btc,
+            values={"price.last": 63_000.0, "rsi": 28.5},
+            meta={"interval": "5m"},
+        ),
+        FeatureVector(
+            ts=1_100,
+            instrument=btc,
+            values={"price.last": 63_100.0},
+            meta={FEATURE_GROUP_BY_KEY: FEATURE_GROUP_BY_MARKET_SNAPSHOT},
+        ),
+        FeatureVector(
+            ts=1_000,
+            instrument=eth,
+            values={"price.last": 3_100.0, "rsi": 54.0},
+            meta={"interval": "5m"},
+        ),
+    ]
+    instruction = TradeInstruction(
+        instruction_id="compose-1:BTC-USDT",
+        compose_id="compose-1",
+        instrument=btc,
+        action=TradeDecisionAction.OPEN_LONG,
+        side=TradeSide.BUY,
+        quantity=0.02,
+        meta={"rationale": "RSI crossed back above the entry threshold"},
+    )
+    result = DecisionCycleResult(
+        compose_id="compose-1",
+        timestamp_ms=1_200,
+        cycle_index=3,
+        rationale="BTC triggered while ETH remained neutral.",
+        strategy_summary=StrategySummary(strategy_id=STRATEGY_ID),
+        instructions=[instruction],
+        trades=[],
+        history_records=[
+            HistoryRecord(
+                ts=1_100,
+                kind="features",
+                reference_id="compose-1",
+                payload={
+                    "features": [feature.model_dump(mode="json") for feature in features]
+                },
+            )
+        ],
+        digest=TradeDigest(ts=1_200),
+        portfolio_view=PortfolioView(
+            strategy_id=STRATEGY_ID,
+            ts=1_200,
+            account_balance=8_000,
+            total_value=10_000,
+            free_cash=8_000,
+            buying_power=8_000,
+        ),
+    )
+
+    diagnostics = build_cycle_diagnostics(request=request, result=result)
+
+    decisions = {item["symbol"]: item for item in diagnostics["symbol_decisions"]}
+    assert decisions["BTC-USDT"]["action"] == "open_long"
+    assert decisions["BTC-USDT"]["quantity"] == 0.02
+    assert decisions["BTC-USDT"]["reason"] == "RSI crossed back above the entry threshold"
+    assert decisions["ETH-USDT"]["action"] == "noop"
+    assert decisions["ETH-USDT"]["reason"] == "BTC triggered while ETH remained neutral."
+
+    explanation = diagnostics["explanation"]
+    assert explanation["action_reason"] == "BTC triggered while ETH remained neutral."
+    assert {
+        (condition["label"], condition["status"], condition["detail"])
+        for condition in explanation["triggered_conditions"]
+    } >= {
+        (
+            "strategy_decision",
+            "triggered",
+            "RSI crossed back above the entry threshold",
+        )
+    }
+    assert {
+        (condition["label"], condition["status"], condition["detail"])
+        for condition in explanation["blocked_conditions"]
+    } >= {
+        (
+            "strategy_decision",
+            "not_triggered",
+            "BTC triggered while ETH remained neutral.",
+        )
+    }
+    assert explanation["fund_impact"] == {
+        "portfolio_value_after_cycle": 10_000.0,
+        "cash_after_cycle": 8_000.0,
+        "estimated_notional": 1_262.0,
+        "executed_notional": 0.0,
+        "fee_cost": 0.0,
+        "realized_pnl": 0.0,
+    }
+
+    btc_conditions = decisions["BTC-USDT"]["conditions"]
+    assert any(
+        condition["status"] in {"passed", "triggered"} for condition in btc_conditions
+    )
+    assert any(condition["status"] == "triggered" for condition in btc_conditions)
+    assert decisions["BTC-USDT"]["fund_impact"]["requested_quantity"] == 0.02
+    assert decisions["BTC-USDT"]["fund_impact"]["estimated_notional"] == 1_262.0
+    assert decisions["BTC-USDT"]["fund_impact"]["portfolio_value_after_cycle"] == 10_000.0
+
+
+def test_cycle_diagnostics_exposes_stale_data_as_exposure_gate_blocked():
+    request = UserRequest(
+        llm_model_config=LLMModelConfig(provider="openrouter", model_id="test-model"),
+        exchange_config=ExchangeConfig(exchange_id="okx", market_type="spot"),
+        trading_config=TradingConfig(
+            strategy_name="Structured RSI",
+            strategy_type=TradingStrategyType.LONG_TERM_SPOT_RSI,
+            symbols=["BTC-USDT"],
+            decide_interval=300,
+            initial_capital=10_000,
+            initial_free_cash=8_000,
+            max_leverage=1,
+            max_positions=1,
+        ),
+    )
+    feature = FeatureVector(
+        ts=1,
+        instrument=InstrumentRef(symbol="BTC-USDT", exchange_id="okx"),
+        values={"price.last": 63_000.0},
+        meta={
+            FEATURE_GROUP_BY_KEY: FEATURE_GROUP_BY_MARKET_SNAPSHOT,
+            "snapshot_ts_ms": 1,
+            "freshness_age_ms": 90_000,
+            "freshness_status": "stale",
+            "coverage_status": "complete",
+        },
+    )
+    result = DecisionCycleResult(
+        compose_id="compose-stale",
+        timestamp_ms=100_000,
+        cycle_index=1,
+        rationale=None,
+        instructions=[],
+        trades=[],
+        strategy_summary=StrategySummary(strategy_id=STRATEGY_ID),
+        history_records=[
+            HistoryRecord(
+                ts=1,
+                kind="features",
+                reference_id="compose-stale",
+                payload={"features": [feature.model_dump(mode="json")]},
+            )
+        ],
+        digest=TradeDigest(ts=100_000),
+        portfolio_view=PortfolioView(
+            strategy_id=STRATEGY_ID, ts=100_000, account_balance=8_000
+        ),
+    )
+
+    diagnostics = build_cycle_diagnostics(request=request, result=result)
+
+    health = diagnostics["market_data_health"]
+    assert health["status"] == "degraded"
+    assert health["freshness_status"] == "stale"
+    assert health["coverage_status"] == "complete"
+    assert health["stale_symbols"] == ["BTC-USDT"]
+    assert health["exposure_increase_allowed"] is False
+    decision = diagnostics["symbol_decisions"][0]
+    assert decision["freshness_status"] == "stale"
+    assert decision["exposure_increase_allowed"] is False
+    assert {
+        (condition["label"], condition["status"])
+        for condition in decision["conditions"]
+    } >= {("market_freshness", "blocked"), ("exposure_increase_gate", "blocked")}
 
 
 @pytest.mark.asyncio
@@ -198,6 +435,28 @@ async def test_strategy_diagnostics_service_serializes_config_cycle_health_and_r
         "max_leverage": 1.0,
         "cap_factor": 1.25,
         "initial_capital": 10_000,
+        "strategy_params": {},
+    }
+    assert data["explanation"] == {
+        "action_reason": "RSI recovered above ladder entry threshold",
+        "triggered_conditions": [
+            {
+                "label": "strategy_decision",
+                "status": "triggered",
+                "detail": "RSI recovered above ladder entry threshold",
+            }
+        ],
+        "blocked_conditions": [
+            {
+                "label": "strategy_decision",
+                "status": "not_triggered",
+                "detail": "No order: RSI is neutral and price is inside bands",
+            }
+        ],
+        "fund_impact": {
+            "portfolio_value_after_cycle": 10_000.0,
+            "estimated_notional": 630.005,
+        },
     }
 
     latest = data["latest_cycle"]
@@ -213,10 +472,21 @@ async def test_strategy_diagnostics_service_serializes_config_cycle_health_and_r
         "fetched_count": 2,
         "missing_count": 1,
         "missing_symbols": ["SOL-USDT"],
+        "status": "degraded",
+        "freshness_status": "fresh",
+        "coverage_status": "partial",
+        "stale_count": 0,
+        "stale_symbols": [],
+        "exposure_increase_allowed": False,
     }
 
     decisions = {item["symbol"]: item for item in data["symbol_decisions"]}
-    assert decisions["BTC-USDT"] == {
+    assert decisions["BTC-USDT"] | {
+        "indicator_snapshot": {},
+        "conditions": [],
+        "decision_path": [],
+        "fund_impact": {},
+    } == {
         "symbol": "BTC-USDT",
         "intervals_seen": ["1m", "5m"],
         "has_market_snapshot": True,
@@ -224,6 +494,15 @@ async def test_strategy_diagnostics_service_serializes_config_cycle_health_and_r
         "action": "open_long",
         "quantity": 0.01,
         "reason": "RSI recovered above ladder entry threshold",
+        "indicator_snapshot": {},
+        "snapshot_ts_ms": None,
+        "freshness_age_ms": None,
+        "freshness_status": "missing",
+        "coverage_status": "missing",
+        "exposure_increase_allowed": False,
+        "conditions": [],
+        "decision_path": [],
+        "fund_impact": {},
     }
     assert decisions["ETH-USDT"]["action"] == "noop"
     assert decisions["ETH-USDT"]["reason"].startswith("No order:")
@@ -249,7 +528,9 @@ async def test_strategy_diagnostics_service_returns_none_for_missing_strategy(
     assert await StrategyService.get_strategy_diagnostics(STRATEGY_ID) is None
 
 
-def test_strategy_diagnostics_api_returns_success_response(monkeypatch: pytest.MonkeyPatch):
+def test_strategy_diagnostics_api_preserves_structured_explanation(
+    monkeypatch: pytest.MonkeyPatch,
+):
     payload = {
         "strategy_id": STRATEGY_ID,
         "strategy_name": "Transparent RSI",
@@ -259,6 +540,27 @@ def test_strategy_diagnostics_api_returns_success_response(monkeypatch: pytest.M
         "strategy_type": "LongTermSpotRsiStrategy",
         "runtime_health": {"ok": True, "state": "running"},
         "config": {"symbols": ["BTC-USDT"]},
+        "explanation": {
+            "action_reason": "RSI recovered above the entry threshold",
+            "triggered_conditions": [
+                {
+                    "label": "strategy_decision",
+                    "status": "triggered",
+                    "detail": "RSI recovered above the entry threshold",
+                }
+            ],
+            "blocked_conditions": [
+                {
+                    "label": "market_snapshot",
+                    "status": "blocked",
+                    "detail": "Missing realtime market snapshot",
+                }
+            ],
+            "fund_impact": {
+                "portfolio_value_after_cycle": 10_000.0,
+                "estimated_notional": 630.005,
+            },
+        },
         "observed_symbol_count": 1,
         "expected_symbol_count": 1,
         "latest_cycle": {
@@ -285,7 +587,7 @@ def test_strategy_diagnostics_api_returns_success_response(monkeypatch: pytest.M
                 "latest_price": 63_000.5,
                 "action": "open_long",
                 "quantity": 0.01,
-                "reason": "RSI recovered above ladder entry threshold",
+                "reason": "RSI recovered above the entry threshold",
             }
         ],
         "recent_cycles": [],
@@ -304,11 +606,13 @@ def test_strategy_diagnostics_api_returns_success_response(monkeypatch: pytest.M
     assert response.status_code == 200
     body = response.json()
     assert body["code"] == 0
-    assert body["data"]["strategy_id"] == STRATEGY_ID
-    assert body["data"]["latest_cycle"]["market_data_health"]["fetched_count"] == 1
-    assert body["data"]["symbol_decisions"][0]["reason"] == (
-        "RSI recovered above ladder entry threshold"
+    data = body["data"]
+    assert data["strategy_id"] == STRATEGY_ID
+    assert data["latest_cycle"]["market_data_health"]["fetched_count"] == 1
+    assert data["symbol_decisions"][0]["reason"] == (
+        "RSI recovered above the entry threshold"
     )
+    assert data["explanation"] == payload["explanation"]
 
 
 def test_strategy_diagnostics_api_returns_404_for_missing_strategy(

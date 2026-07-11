@@ -1,0 +1,616 @@
+"""Crypto-only market data and indicator service for strategy dashboards."""
+
+from __future__ import annotations
+
+import asyncio
+import time
+import json
+from datetime import datetime, timezone
+from dataclasses import dataclass
+from typing import ClassVar
+from urllib.parse import urlencode
+from urllib.request import urlopen
+
+import ccxt.pro as ccxtpro
+import numpy as np
+import pandas as pd
+from loguru import logger
+from valuecell.server.config.settings import get_settings
+
+from valuecell.server.api.schemas.crypto_market import (
+    BollingerBandData,
+    CryptoCandleData,
+    CryptoIndicatorPointData,
+    CryptoMarketIndicatorsData,
+    CryptoSymbolCatalogData,
+    CryptoSymbolIndicatorsData,
+)
+
+DEFAULT_PROVIDERS: tuple[str, ...] = ("gate", "okx", "binance", "mexc")
+SUPPORTED_INTERVALS: set[str] = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"}
+DEFAULT_LOOKBACK = 240
+MAX_LOOKBACK = 500
+CACHE_TTL_S = 12.0
+FETCH_TIMEOUT_S = 8.0
+MAX_CONCURRENT_FETCHES = 6
+MA_WINDOWS: tuple[int, ...] = (5, 10, 20, 60)
+RSI_WINDOW = 14
+BOLLINGER_WINDOW = 20
+BOLLINGER_STD = 2.0
+MOMENTUM_WINDOW = 14
+CANDLE_FRESHNESS_MAX_AGE_S = 90
+
+SUPPORTED_CRYPTO_SYMBOLS: tuple[str, ...] = (
+    "BTC-USDT",
+    "ETH-USDT",
+    "BNB-USDT",
+    "SOL-USDT",
+    "XRP-USDT",
+    "ADA-USDT",
+    "DOGE-USDT",
+    "DOT-USDT",
+    "USDC-USDT",
+    "LTC-USDT",
+    "BCH-USDT",
+    "LINK-USDT",
+    "AVAX-USDT",
+    "MATIC-USDT",
+    "POL-USDT",
+    "UNI-USDT",
+    "ATOM-USDT",
+    "ETC-USDT",
+    "FIL-USDT",
+    "AAVE-USDT",
+    "SAND-USDT",
+    "MANA-USDT",
+    "ALGO-USDT",
+    "FTM-USDT",
+    "NEAR-USDT",
+    "GRT-USDT",
+    "CAKE-USDT",
+    "XLM-USDT",
+    "EOS-USDT",
+    "TRX-USDT",
+    "WBTC-USDT",
+    "ARB-USDT",
+    "OP-USDT",
+    "MKR-USDT",
+    "SNX-USDT",
+    "CRV-USDT",
+    "1INCH-USDT",
+    "KAVA-USDT",
+    "ZRX-USDT",
+    "BAT-USDT",
+    "OMG-USDT",
+    "QTUM-USDT",
+    "ICX-USDT",
+    "VET-USDT",
+    "THETA-USDT",
+    "NEO-USDT",
+    "ONT-USDT",
+    "ZIL-USDT",
+    "RVN-USDT",
+    "DASH-USDT",
+    "HBAR-USDT",
+    "IOTA-USDT",
+    "WAVES-USDT",
+    "KSM-USDT",
+    "RSR-USDT",
+    "CELR-USDT",
+    "FET-USDT",
+    "OCEAN-USDT",
+    "REQ-USDT",
+    "BNT-USDT",
+    "LRC-USDT",
+    "GNO-USDT",
+    "PAXG-USDT",
+    "UMA-USDT",
+    "BAL-USDT",
+    "SPELL-USDT",
+    "AUDIO-USDT",
+    "RAY-USDT",
+    "CELO-USDT",
+    "MASK-USDT",
+    "COTI-USDT",
+    "CHZ-USDT",
+    "ENJ-USDT",
+    "GAS-USDT",
+    "HOT-USDT",
+    "IOST-USDT",
+    "KEY-USDT",
+    "LOKA-USDT",
+    "MBL-USDT",
+    "NKN-USDT",
+    "OAX-USDT",
+    "RIF-USDT",
+    "SXP-USDT",
+)
+
+
+@dataclass(frozen=True)
+class CandleFetchResult:
+    symbol: str
+    exchange_symbol: str
+    provider: str
+    candles: list[CryptoCandleData]
+
+
+@dataclass
+class CacheEntry:
+    expires_at: float
+    result: CandleFetchResult
+
+
+@dataclass
+class ProviderHealth:
+    consecutive_failures: int = 0
+    cooldown_until: float = 0.0
+    last_success_at: str | None = None
+    last_error: str | None = None
+
+
+@dataclass(frozen=True)
+class DefaultMarketSnapshot:
+    data: CryptoMarketIndicatorsData
+    fetched_at: datetime
+
+
+class CryptoMarketService:
+    """Fetch crypto OHLCV data with provider fallback and compute indicators."""
+
+    _cache: ClassVar[dict[tuple[str, str, str, int], CacheEntry]] = {}
+    _inflight: ClassVar[dict[tuple[str, str, str, int], asyncio.Task[CandleFetchResult]]] = {}
+    _provider_health: ClassVar[dict[str, ProviderHealth]] = {}
+    _semaphore: ClassVar[asyncio.Semaphore | None] = None
+    _semaphore_limit: ClassVar[int | None] = None
+    _symbol_set: ClassVar[set[str]] = set(SUPPORTED_CRYPTO_SYMBOLS)
+
+    def __init__(self, providers: tuple[str, ...] | None = None) -> None:
+        settings = get_settings()
+        self.providers = providers or settings.MARKET_DATA_PROVIDERS
+        self._default_snapshot: DefaultMarketSnapshot | None = None
+        if self.__class__._semaphore_limit != settings.MARKET_DATA_MAX_CONCURRENT_FETCHES:
+            self.__class__._semaphore = asyncio.Semaphore(
+                settings.MARKET_DATA_MAX_CONCURRENT_FETCHES
+            )
+            self.__class__._semaphore_limit = settings.MARKET_DATA_MAX_CONCURRENT_FETCHES
+
+    async def refresh_default_snapshot(self) -> DefaultMarketSnapshot | None:
+        """Refresh the server-owned public market snapshot without strategy state."""
+        settings = get_settings()
+        try:
+            data = await self.get_indicators(
+                symbols=list(settings.MARKET_DEFAULT_SYMBOLS),
+                interval=settings.MARKET_DEFAULT_INTERVAL,
+                lookback=settings.MARKET_DEFAULT_LOOKBACK,
+            )
+            if data.failed_symbols or len(data.symbols) != len(settings.MARKET_DEFAULT_SYMBOLS):
+                raise RuntimeError(
+                    "default snapshot incomplete: "
+                    + "; ".join(
+                        f"{symbol}: {error}"
+                        for symbol, error in data.failed_symbols.items()
+                    )
+                )
+            snapshot = DefaultMarketSnapshot(
+                data=data,
+                fetched_at=datetime.now(timezone.utc),
+            )
+            self._default_snapshot = snapshot
+            return snapshot
+        except Exception as exc:
+            logger.warning("Crypto market default snapshot refresh failed err={}", str(exc))
+            return self._default_snapshot
+
+    def get_default_snapshot(self) -> DefaultMarketSnapshot | None:
+        """Return the latest successful server-owned public market snapshot."""
+        return self._default_snapshot
+
+    def get_health(self) -> dict[str, object]:
+        """Return non-sensitive public OHLCV provider state for diagnostics."""
+        now = time.monotonic()
+        return {
+            "providers": [
+                {
+                    "provider": provider,
+                    "status": "cooldown"
+                    if self._provider_health.get(provider, ProviderHealth()).cooldown_until > now
+                    else "ready",
+                    "consecutive_failures": self._provider_health.get(
+                        provider, ProviderHealth()
+                    ).consecutive_failures,
+                    "cooldown_remaining_s": max(
+                        0.0,
+                        self._provider_health.get(provider, ProviderHealth()).cooldown_until - now,
+                    ),
+                    "last_success_at": self._provider_health.get(
+                        provider, ProviderHealth()
+                    ).last_success_at,
+                    "last_error": self._provider_health.get(
+                        provider, ProviderHealth()
+                    ).last_error,
+                }
+                for provider in self.providers
+            ],
+            "cache_ttl_s": get_settings().MARKET_DATA_CACHE_TTL_S,
+            "max_concurrent_fetches": get_settings().MARKET_DATA_MAX_CONCURRENT_FETCHES,
+        }
+
+    def get_supported_symbols(self) -> CryptoSymbolCatalogData:
+        return CryptoSymbolCatalogData(symbols=list(SUPPORTED_CRYPTO_SYMBOLS))
+
+    async def get_indicators(
+        self,
+        *,
+        symbols: list[str],
+        interval: str,
+        lookback: int,
+        providers: list[str] | None = None,
+    ) -> CryptoMarketIndicatorsData:
+        normalized_symbols = self._normalize_symbols(symbols)
+        normalized_interval = self._normalize_interval(interval)
+        normalized_lookback = self._normalize_lookback(lookback)
+        provider_pool = self._normalize_providers(providers)
+
+        tasks = [
+            self._fetch_symbol_with_indicators(
+                symbol=symbol,
+                interval=normalized_interval,
+                lookback=normalized_lookback,
+                providers=provider_pool,
+            )
+            for symbol in normalized_symbols
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        symbol_results: list[CryptoSymbolIndicatorsData] = []
+        failed_symbols: dict[str, str] = {}
+        for symbol, result in zip(normalized_symbols, results):
+            if isinstance(result, Exception):
+                failed_symbols[symbol] = str(result)
+                continue
+            symbol_results.append(result)
+
+        return CryptoMarketIndicatorsData(
+            interval=normalized_interval,
+            lookback=normalized_lookback,
+            providers=provider_pool,
+            symbols=symbol_results,
+            failed_symbols=failed_symbols,
+        )
+
+    async def _fetch_symbol_with_indicators(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        providers: list[str],
+    ) -> CryptoSymbolIndicatorsData:
+        fetch_result = await self._fetch_with_fallback(
+            symbol=symbol,
+            interval=interval,
+            lookback=lookback,
+            providers=providers,
+        )
+        indicators = self._compute_indicators(fetch_result.candles)
+        latest_price = fetch_result.candles[-1].close if fetch_result.candles else None
+        latest_ts_ms = fetch_result.candles[-1].ts if fetch_result.candles else None
+        now_ts_ms = int(time.time() * 1000)
+        freshness_age_ms = (
+            max(0, now_ts_ms - latest_ts_ms) if latest_ts_ms is not None else None
+        )
+        freshness_status = (
+            "fresh"
+            if freshness_age_ms is not None and freshness_age_ms <= CANDLE_FRESHNESS_MAX_AGE_S * 1000
+            else "stale" if freshness_age_ms is not None else "unknown"
+        )
+
+        return CryptoSymbolIndicatorsData(
+            symbol=symbol,
+            exchange_symbol=fetch_result.exchange_symbol,
+            provider=fetch_result.provider,
+            interval=interval,
+            candles=fetch_result.candles,
+            indicators=indicators,
+            latest_price=latest_price,
+            snapshot_ts_ms=latest_ts_ms,
+            freshness_age_ms=freshness_age_ms,
+            freshness_status=freshness_status,
+        )
+
+    async def _fetch_with_fallback(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        providers: list[str],
+    ) -> CandleFetchResult:
+        errors: list[str] = []
+        now = time.monotonic()
+        for provider in providers:
+            health = self._provider_health.setdefault(provider, ProviderHealth())
+            if health.cooldown_until > now:
+                errors.append(f"{provider}: cooling down")
+                continue
+            try:
+                result = await self._fetch_from_provider(
+                    provider=provider,
+                    symbol=symbol,
+                    interval=interval,
+                    lookback=lookback,
+                )
+                health.consecutive_failures = 0
+                health.cooldown_until = 0.0
+                health.last_error = None
+                health.last_success_at = datetime.now(timezone.utc).isoformat()
+                return result
+            except Exception as exc:
+                self._record_provider_failure(provider, exc)
+                errors.append(f"{provider}: {exc}")
+                logger.warning(
+                    "Crypto OHLCV fetch failed provider={} symbol={} interval={} err={}",
+                    provider,
+                    symbol,
+                    interval,
+                    str(exc),
+                )
+        raise RuntimeError("; ".join(errors) or "No provider succeeded")
+
+    async def _fetch_from_provider(
+        self,
+        *,
+        provider: str,
+        symbol: str,
+        interval: str,
+        lookback: int,
+    ) -> CandleFetchResult:
+        cache_key = (provider, symbol, interval, lookback)
+        cached = self._cache.get(cache_key)
+        now = time.monotonic()
+        if cached and cached.expires_at > now:
+            return cached.result
+
+        inflight = self._inflight.get(cache_key)
+        if inflight is not None:
+            return await asyncio.shield(inflight)
+
+        task = asyncio.create_task(
+            self._fetch_with_limit(provider, symbol, interval, lookback)
+        )
+        self._inflight[cache_key] = task
+        try:
+            result = await asyncio.shield(task)
+            self._cache[cache_key] = CacheEntry(
+                expires_at=time.monotonic() + get_settings().MARKET_DATA_CACHE_TTL_S,
+                result=result,
+            )
+            return result
+        finally:
+            if self._inflight.get(cache_key) is task:
+                self._inflight.pop(cache_key, None)
+
+    async def _fetch_with_limit(
+        self, provider: str, symbol: str, interval: str, lookback: int
+    ) -> CandleFetchResult:
+        semaphore = self._semaphore
+        if semaphore is None:
+            raise RuntimeError("Market-data semaphore was not initialized")
+        async with semaphore:
+            return await asyncio.wait_for(
+                self._fetch_uncached(provider, symbol, interval, lookback),
+                timeout=FETCH_TIMEOUT_S,
+            )
+
+    def _record_provider_failure(self, provider: str, exc: Exception) -> None:
+        health = self._provider_health.setdefault(provider, ProviderHealth())
+        health.consecutive_failures += 1
+        settings = get_settings()
+        cooldown_s = min(
+            settings.MARKET_DATA_FAILURE_COOLDOWN_MAX_S,
+            settings.MARKET_DATA_FAILURE_COOLDOWN_BASE_S
+            * (2 ** (health.consecutive_failures - 1)),
+        )
+        health.cooldown_until = time.monotonic() + cooldown_s
+        health.last_error = str(exc)[:500]
+
+    async def _fetch_uncached(
+        self,
+        provider: str,
+        symbol: str,
+        interval: str,
+        lookback: int,
+    ) -> CandleFetchResult:
+        if provider == "gate":
+            return await asyncio.to_thread(
+                self._fetch_gate_public_candles, symbol, interval, lookback
+            )
+        exchange_cls = getattr(ccxtpro, provider, None)
+        if exchange_cls is None:
+            raise RuntimeError(f"Exchange provider '{provider}' is not available")
+
+        exchange = exchange_cls({"enableRateLimit": True, "newUpdates": False})
+        exchange_symbol = self._to_exchange_symbol(symbol)
+        try:
+            raw = await exchange.fetch_ohlcv(
+                exchange_symbol,
+                timeframe=interval,
+                since=None,
+                limit=lookback,
+            )
+        finally:
+            close = getattr(exchange, "close", None)
+            if close is not None:
+                await close()
+
+        candles = self._parse_ohlcv(raw)
+        if not candles:
+            raise RuntimeError("No candles returned")
+        return CandleFetchResult(
+            symbol=symbol,
+            exchange_symbol=exchange_symbol,
+            provider=provider,
+            candles=candles,
+        )
+
+    def _fetch_gate_public_candles(
+        self, symbol: str, interval: str, lookback: int
+    ) -> CandleFetchResult:
+        query = urlencode(
+            {
+                "currency_pair": symbol.replace("-", "_"),
+                "interval": interval,
+                "limit": lookback,
+            }
+        )
+        url = f"https://api.gateio.ws/api/v4/spot/candlesticks?{query}"
+        with urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+        candles = [
+            CryptoCandleData(
+                ts=int(row[0]) * 1000,
+                volume=float(row[1]),
+                close=float(row[2]),
+                high=float(row[3]),
+                low=float(row[4]),
+                open=float(row[5]),
+            )
+            for row in raw
+            if len(row) >= 6
+        ]
+        candles.sort(key=lambda item: item.ts)
+        if not candles:
+            raise RuntimeError("Gate returned no candles")
+        return CandleFetchResult(
+            symbol=symbol,
+            exchange_symbol=symbol.replace("-", "_"),
+            provider="gate",
+            candles=candles,
+        )
+
+    def _compute_indicators(
+        self,
+        candles: list[CryptoCandleData],
+    ) -> list[CryptoIndicatorPointData]:
+        if not candles:
+            return []
+
+        df = pd.DataFrame([item.model_dump() for item in candles])
+        close = df["close"]
+        for window in MA_WINDOWS:
+            df[f"ma{window}"] = close.rolling(window=window).mean()
+
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(window=RSI_WINDOW).mean()
+        loss = (-delta).clip(lower=0).rolling(window=RSI_WINDOW).mean()
+        rs = gain / loss.replace(0, np.nan)
+        df["rsi"] = 100 - (100 / (1 + rs))
+        df.loc[(loss == 0) & (gain > 0), "rsi"] = 100.0
+        df.loc[(loss == 0) & (gain == 0), "rsi"] = 50.0
+
+        df["bb_middle"] = close.rolling(window=BOLLINGER_WINDOW).mean()
+        bb_std = close.rolling(window=BOLLINGER_WINDOW).std()
+        df["bb_upper"] = df["bb_middle"] + (bb_std * BOLLINGER_STD)
+        df["bb_lower"] = df["bb_middle"] - (bb_std * BOLLINGER_STD)
+        df["momentum"] = close - close.shift(MOMENTUM_WINDOW)
+        df["ema12"] = close.ewm(span=12, adjust=False).mean()
+        df["ema26"] = close.ewm(span=26, adjust=False).mean()
+        df["macd"] = df["ema12"] - df["ema26"]
+        df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+        df["macd_histogram"] = df["macd"] - df["macd_signal"]
+
+        points: list[CryptoIndicatorPointData] = []
+        for row in df.to_dict("records"):
+            points.append(
+                CryptoIndicatorPointData(
+                    ts=int(row["ts"]),
+                    ma={f"ma{window}": self._finite(row.get(f"ma{window}")) for window in MA_WINDOWS},
+                    rsi=self._finite(row.get("rsi")),
+                    bollinger=BollingerBandData(
+                        upper=self._finite(row.get("bb_upper")),
+                        middle=self._finite(row.get("bb_middle")),
+                        lower=self._finite(row.get("bb_lower")),
+                    ),
+                    momentum=self._finite(row.get("momentum")),
+                    macd=self._finite(row.get("macd")),
+                    macd_signal=self._finite(row.get("macd_signal")),
+                    macd_histogram=self._finite(row.get("macd_histogram")),
+                )
+            )
+        return points
+
+    def _normalize_symbols(self, symbols: list[str]) -> list[str]:
+        if not symbols:
+            return ["BTC-USDT"]
+        normalized: list[str] = []
+        for raw_symbol in symbols:
+            symbol = raw_symbol.strip().upper().replace("/", "-")
+            if not symbol.endswith("-USDT"):
+                raise ValueError(f"Only USDT crypto symbols are supported: {raw_symbol}")
+            if symbol not in self._symbol_set:
+                raise ValueError(f"Unsupported crypto symbol: {symbol}")
+            if symbol not in normalized:
+                normalized.append(symbol)
+        return normalized
+
+    def _normalize_interval(self, interval: str) -> str:
+        normalized = interval.strip().lower()
+        if normalized not in SUPPORTED_INTERVALS:
+            raise ValueError(f"Unsupported interval: {interval}")
+        return normalized
+
+    def _normalize_lookback(self, lookback: int) -> int:
+        if lookback <= 0:
+            return DEFAULT_LOOKBACK
+        return min(lookback, MAX_LOOKBACK)
+
+    def _normalize_providers(self, providers: list[str] | None) -> list[str]:
+        raw_providers = providers or list(self.providers)
+        normalized: list[str] = []
+        for provider in raw_providers:
+            item = provider.strip().lower()
+            if item and item not in normalized:
+                normalized.append(item)
+        return normalized or list(DEFAULT_PROVIDERS)
+
+    def _parse_ohlcv(self, raw: list[list[float]]) -> list[CryptoCandleData]:
+        candles: list[CryptoCandleData] = []
+        for row in raw or []:
+            if len(row) < 6:
+                continue
+            ts, open_value, high, low, close, volume = row[:6]
+            candles.append(
+                CryptoCandleData(
+                    ts=int(ts),
+                    open=float(open_value),
+                    high=float(high),
+                    low=float(low),
+                    close=float(close),
+                    volume=float(volume),
+                )
+            )
+        candles.sort(key=lambda item: item.ts)
+        return candles
+
+    def _to_exchange_symbol(self, symbol: str) -> str:
+        return symbol.replace("-", "/")
+
+    def _finite(self, value: object) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not np.isfinite(number):
+            return None
+        return number
+
+
+_crypto_market_service: CryptoMarketService | None = None
+
+
+def get_crypto_market_service() -> CryptoMarketService:
+    global _crypto_market_service
+    if _crypto_market_service is None:
+        _crypto_market_service = CryptoMarketService()
+    return _crypto_market_service

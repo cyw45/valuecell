@@ -1,6 +1,7 @@
 """FastAPI application factory for ValueCell Server."""
 
 import os
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,9 +23,18 @@ from .exceptions import (
 from .routers.agent import create_agent_router
 from .routers.agent_stream import create_agent_stream_router
 from .routers.conversation import create_conversation_router
+from .routers.crypto_market import create_crypto_market_router
+from .routers.prediction_market import create_prediction_market_router
 from .routers.i18n import create_i18n_router
 from .routers.models import create_models_router
 from .routers.strategy_api import create_strategy_api_router
+from .routers.saas_auth import create_saas_auth_router
+from .routers.tenant_credential import create_tenant_credential_router
+from .routers.sandbox_exchange import create_sandbox_exchange_router
+from .routers.live_execution import create_live_execution_router
+from .routers.rule_strategy import create_rule_strategy_router
+from ..services.strategy_scheduler import StrategyScheduler
+from ..services.crypto_market_service import get_crypto_market_service
 from .routers.system import create_system_router
 from .routers.task import create_task_router
 from .routers.user_profile import create_user_profile_router
@@ -138,9 +148,50 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.info(f"Error configuring adapters: {e}")
 
+        # Start strategy auto-scheduler
+        async def _refresh_default_market_snapshot() -> None:
+            service = get_crypto_market_service()
+            while True:
+                await service.refresh_default_snapshot()
+                await asyncio.sleep(settings.MARKET_REFRESH_S)
+
+        market_refresh_task = asyncio.create_task(_refresh_default_market_snapshot())
+        _scheduler = StrategyScheduler()
+        try:
+            from apscheduler.triggers.interval import IntervalTrigger
+            from ..db.connection import get_database_manager
+
+            await _scheduler.start()
+
+            def _sync_job() -> None:
+                db = get_database_manager().get_session()
+                try:
+                    _scheduler.sync_running_strategies(db)
+                finally:
+                    db.close()
+
+            _scheduler._scheduler.add_job(
+                _sync_job,
+                trigger=IntervalTrigger(seconds=60),
+                id="_scheduler_sync_running",
+                replace_existing=True,
+                coalesce=True,
+            )
+            # Run once immediately so strategies running at boot are scheduled
+            _sync_job()
+            logger.info("✓ Strategy scheduler started")
+        except Exception as e:
+            logger.info(f"✗ Strategy scheduler failed to start: {e}")
+
         yield
         # Shutdown
         logger.info("ValueCell Server shutting down...")
+        await _scheduler.stop()
+        market_refresh_task.cancel()
+        try:
+            await market_refresh_task
+        except asyncio.CancelledError:
+            pass
 
     app = FastAPI(
         title="ValueCell Server API",
@@ -212,11 +263,19 @@ def _add_routes(app: FastAPI, settings) -> None:
     # Include system router
     app.include_router(create_system_router(), prefix=API_PREFIX)
 
+    app.include_router(create_saas_auth_router(), prefix=API_PREFIX)
     # Include models router
+    app.include_router(create_tenant_credential_router(), prefix=API_PREFIX)
+    app.include_router(create_sandbox_exchange_router(), prefix=API_PREFIX)
+    app.include_router(create_live_execution_router(), prefix=API_PREFIX)
     app.include_router(create_models_router(), prefix=API_PREFIX)
 
     # Include watchlist router
     app.include_router(create_watchlist_router(), prefix=API_PREFIX)
+
+    # Include crypto market router
+    app.include_router(create_crypto_market_router(), prefix=API_PREFIX)
+    app.include_router(create_prediction_market_router(), prefix=API_PREFIX)
 
     # Include conversation router
     app.include_router(create_conversation_router(), prefix=API_PREFIX)
@@ -229,6 +288,8 @@ def _add_routes(app: FastAPI, settings) -> None:
 
     # Include aggregated strategy API router (strategies + strategy agent)
     app.include_router(create_strategy_api_router(), prefix=API_PREFIX)
+    # Include standalone deterministic paper rule strategy API.
+    app.include_router(create_rule_strategy_router(), prefix=API_PREFIX)
 
     # Include agent router
     app.include_router(create_agent_router(), prefix=API_PREFIX)

@@ -1,0 +1,33 @@
+# Use a deny-by-default build context. The Dockerfile copies only these inputs.
+**
+
+# Python server runtime sources and locked dependency metadata.
+!python/
+!python/pyproject.toml
+!python/uv.lock
+!python/valuecell/
+!python/README.md
+!python/valuecell/**
+!python/configs/
+!python/configs/**
+
+# Docker build instructions.
+!docker/
+!docker/DockerFile
+!.dockerignore
+
+# Never send credentials, runtime environment files, local databases, or logs.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*secret*
+**/*credential*
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+logs/
+python/logs/

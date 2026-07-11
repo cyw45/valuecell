@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from valuecell.agents.common.trading.models import CandleConfig
 
@@ -191,6 +191,58 @@ class SpotRsiStrategyProfile:
     daily_overbought_rsi: float
     strong_entry_intervals: tuple[str, ...]
     strong_entry_min_confirmations: int
+
+
+PROFILE_OVERRIDE_FIELDS = {
+    "primary_interval",
+    "bear_cap_ratio",
+    "entry_rsi_thresholds",
+    "sell_rsi_thresholds",
+    "daily_overbought_rsi",
+    "max_additions",
+}
+
+
+def profile_with_overrides(
+    profile: SpotRsiStrategyProfile,
+    params: dict[str, object] | None,
+) -> SpotRsiStrategyProfile:
+    """Return a strategy profile with schema-approved runtime overrides."""
+    if not params:
+        return profile
+
+    updates: dict[str, object] = {}
+    for key in PROFILE_OVERRIDE_FIELDS:
+        if key not in params:
+            continue
+        value = params[key]
+        if key in {"entry_rsi_thresholds", "sell_rsi_thresholds"}:
+            if not isinstance(value, list):
+                continue
+            thresholds = tuple(int(item) for item in value if item is not None)
+            if thresholds:
+                updates[key] = thresholds
+                if key == "entry_rsi_thresholds":
+                    ratio = 1.0 / len(thresholds)
+                    updates["entry_buy_ratios"] = {
+                        threshold: ratio for threshold in thresholds
+                    }
+                else:
+                    step = 1.0 / len(thresholds)
+                    updates["sell_cumulative_ratios"] = {
+                        threshold: min(1.0, step * (index + 1))
+                        for index, threshold in enumerate(thresholds)
+                    }
+        elif key in {"bear_cap_ratio", "daily_overbought_rsi"}:
+            updates[key] = float(value)
+        elif key == "max_additions":
+            updates[key] = int(value)
+        elif key == "primary_interval":
+            updates[key] = str(value)
+
+    if not updates:
+        return profile
+    return replace(profile, **updates)
 
 
 LONG_TERM_PROFILE = SpotRsiStrategyProfile(

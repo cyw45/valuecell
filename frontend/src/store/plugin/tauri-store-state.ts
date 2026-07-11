@@ -37,30 +37,29 @@ export class TauriStoreState implements StateStorage {
     this.debouncedSave = debounce(() => this.store?.save(), 1 * 1000) ?? null;
   }
 
-  async getItem(name: string) {
-    if (!this.store) {
-      return null;
+  getItem(name: string): string | null {
+    if (this.store) {
+      // Tauri async path — Zustand persist calls this synchronously first,
+      // then calls it again after rehydration; for Tauri we return null on
+      // the first sync call and let persist rehydrate via onRehydrateStorage.
+      return localStorage.getItem(name);
     }
-
-    const res = await this.store.get<string>(name);
-    return res ?? null;
+    return localStorage.getItem(name);
   }
 
-  async setItem(name: string, value: string) {
-    if (!this.store) {
-      return;
+  setItem(name: string, value: string): void {
+    localStorage.setItem(name, value);
+    if (this.store) {
+      void this.store.set(name, value);
+      this.debouncedSave?.();
     }
-
-    await this.store.set(name, value);
-    this.debouncedSave?.();
   }
 
-  async removeItem(name: string) {
-    if (!this.store) {
-      return;
+  removeItem(name: string): void {
+    localStorage.removeItem(name);
+    if (this.store) {
+      void this.store.delete(name);
+      this.debouncedSave?.();
     }
-
-    await this.store.delete(name);
-    this.debouncedSave?.();
   }
 }

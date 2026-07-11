@@ -250,6 +250,11 @@ class TradingConfig(BaseModel):
         default=None, description="Custom prompt text to use alongside prompt_text"
     )
 
+    strategy_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Dynamic strategy-specific parameters from the schema-driven UI",
+    )
+
     cap_factor: float = Field(
         default=DEFAULT_CAP_FACTOR,
         description="Notional cap factor used by the composer to limit per-symbol exposure (e.g., 1.5)",

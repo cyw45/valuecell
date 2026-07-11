@@ -15,6 +15,17 @@ const STOCK_QUERY_KEYS = {
   stockHistory: queryKeyFn(["stock", "history"]),
 } as const;
 
+const CRYPTO_MARKET_QUERY_KEYS = {
+  symbols: ["crypto-market", "symbols"],
+  indicators: queryKeyFn(["crypto-market", "indicators"]),
+} as const;
+
+const PREDICTION_MARKET_QUERY_KEYS = {
+  catalog: queryKeyFn(["prediction-markets", "catalog"]),
+  snapshot: queryKeyFn(["prediction-markets", "snapshot"]),
+  signal: queryKeyFn(["prediction-markets", "signal"]),
+} as const;
+
 const AGENT_QUERY_KEYS = {
   agentList: queryKeyFn(["agent", "list"]),
   agentInfo: queryKeyFn(["agent", "info"]),
@@ -37,6 +48,7 @@ const STRATEGY_QUERY_KEYS = {
   strategyList: ["strategy", "list"],
   strategyApiKey: ["strategy", "api-key"],
   strategyTrades: queryKeyFn(["strategy", "trades"]),
+  strategySchemas: ["strategy", "schemas"],
   strategyHoldings: queryKeyFn(["strategy", "holdings"]),
   strategyPriceCurve: queryKeyFn(["strategy", "price-curve"]),
   strategyPrompts: ["strategy", "prompts"],
@@ -55,6 +67,8 @@ export const API_QUERY_KEYS = {
   CONVERSATION: CONVERSATION_QUERY_KEYS,
   SETTING: SETTING_QUERY_KEYS,
   STRATEGY: STRATEGY_QUERY_KEYS,
+  CRYPTO_MARKET: CRYPTO_MARKET_QUERY_KEYS,
+  PREDICTION_MARKET: PREDICTION_MARKET_QUERY_KEYS,
   SYSTEM: SYSTEM_QUERY_KEYS,
 } as const;
 

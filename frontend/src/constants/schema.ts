@@ -63,7 +63,12 @@ export const createExchangeSchema = (t: TFunction) =>
 // Step 3 Schema: Trading Strategy
 export const createTradingStrategySchema = (t: TFunction) =>
   z.object({
-    strategy_type: z.enum(["PromptBasedStrategy", "GridStrategy"]),
+    strategy_type: z.enum([
+      "PromptBasedStrategy",
+      "GridStrategy",
+      "LongTermSpotRsiStrategy",
+      "ShortTermSpotRsiStrategy",
+    ]),
     strategy_name: z
       .string()
       .min(1, t("validation.trading.strategyNameRequired")),
@@ -75,11 +80,14 @@ export const createTradingStrategySchema = (t: TFunction) =>
       .min(1, t("validation.trading.maxLeverageMin"))
       .max(5, t("validation.trading.maxLeverageMax")),
     symbols: z.array(z.string()).min(1, t("validation.trading.symbolsMin")),
-    template_id: z.string().min(1, t("validation.trading.templateRequired")),
+    max_positions: z.number().int().min(1),
+    cap_factor: z.number().positive(),
+    template_id: z.string(),
     decide_interval: z
       .number()
       .min(10, t("validation.trading.decideIntervalMin"))
       .max(3600, t("validation.trading.decideIntervalMax")),
+    strategy_params: z.record(z.string(), z.unknown()),
   });
 
 export const createCopyTradingStrategySchema = (t: TFunction) =>
@@ -99,7 +107,12 @@ export const createCopyTradingStrategySchema = (t: TFunction) =>
       .number()
       .min(10, t("validation.trading.decideIntervalMin"))
       .max(3600, t("validation.trading.decideIntervalMax")),
-    strategy_type: z.enum(["PromptBasedStrategy", "GridStrategy"]),
+    strategy_type: z.enum([
+      "PromptBasedStrategy",
+      "GridStrategy",
+      "LongTermSpotRsiStrategy",
+      "ShortTermSpotRsiStrategy",
+    ]),
     prompt_name: z.string().min(1, t("validation.copy.promptNameRequired")),
     prompt: z.string().min(1, t("validation.copy.promptRequired")),
   });

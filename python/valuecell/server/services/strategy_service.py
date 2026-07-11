@@ -185,6 +185,7 @@ class StrategyService:
             "max_leverage": trading_config.get("max_leverage"),
             "cap_factor": trading_config.get("cap_factor"),
             "initial_capital": trading_config.get("initial_capital"),
+            "strategy_params": trading_config.get("strategy_params") or {},
         }
 
     @staticmethod
@@ -207,20 +208,45 @@ class StrategyService:
     def _market_health(payload: dict, exchange_id: Optional[str]) -> StrategyMarketDataHealth:
         raw = dict(payload.get("market_data_health") or {})
         missing_symbols = raw.get("missing_symbols") or raw.get("missing") or []
+        stale_symbols = raw.get("stale_symbols") or []
         if not isinstance(missing_symbols, list):
             missing_symbols = []
+        if not isinstance(stale_symbols, list):
+            stale_symbols = []
         fetched_count = raw.get("fetched_count", raw.get("market_snapshot_count"))
         if fetched_count is None:
             fetched_count = len(raw.get("market_snapshot_symbols") or [])
         missing_count = raw.get("missing_count", raw.get("missing_symbol_count"))
         if missing_count is None:
             missing_count = len(missing_symbols)
+        stale_count = raw.get("stale_count", len(stale_symbols))
+        coverage_status = raw.get("coverage_status")
+        if coverage_status not in {"complete", "partial", "missing"}:
+            coverage_status = "missing" if not fetched_count else "partial" if missing_count else "complete"
+        freshness_status = raw.get("freshness_status")
+        if freshness_status not in {"fresh", "stale", "missing", "unknown"}:
+            freshness_status = "stale" if stale_count else "fresh" if fetched_count else "missing"
+        exposure_increase_allowed = bool(
+            raw.get(
+                "exposure_increase_allowed",
+                coverage_status == "complete" and freshness_status == "fresh",
+            )
+        )
+        status = raw.get("status")
+        if status not in {"healthy", "degraded", "missing"}:
+            status = "healthy" if exposure_increase_allowed else "degraded" if fetched_count else "missing"
         return StrategyMarketDataHealth(
-            ok=bool(raw.get("ok", missing_count == 0)),
+            ok=bool(raw.get("ok", exposure_increase_allowed)),
             provider=raw.get("provider") or exchange_id,
             fetched_count=int(fetched_count or 0),
             missing_count=int(missing_count or 0),
             missing_symbols=[str(symbol) for symbol in missing_symbols],
+            status=status,
+            freshness_status=freshness_status,
+            coverage_status=coverage_status,
+            stale_count=int(stale_count or 0),
+            stale_symbols=[str(symbol) for symbol in stale_symbols],
+            exposure_increase_allowed=exposure_increase_allowed,
         )
 
     @staticmethod
@@ -284,6 +310,7 @@ class StrategyService:
             strategy_type=StrategyService._normalize_strategy_type(meta, cfg),
             runtime_health=meta.get("runtime_health") or {},
             config=StrategyService._diagnostics_config(cfg),
+            explanation=dict(latest_payload.get("explanation") or {}),
             observed_symbol_count=observed_count,
             expected_symbol_count=expected_count,
             latest_cycle=recent_cycles[0] if recent_cycles else None,

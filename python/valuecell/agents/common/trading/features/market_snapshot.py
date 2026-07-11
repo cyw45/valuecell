@@ -13,6 +13,42 @@ from valuecell.agents.common.trading.models import (
 )
 from valuecell.utils.ts import get_current_timestamp_ms
 
+# A REST ticker older than one minute is unsuitable for increasing exposure.
+MARKET_SNAPSHOT_MAX_AGE_MS = 60_000
+
+
+def market_snapshot_status_by_symbol(
+    features: List[FeatureVector],
+    *,
+    now_ts_ms: int | None = None,
+) -> dict[str, str]:
+    """Return the best realtime snapshot status for each symbol.
+
+    Producers created before freshness metadata existed retain ``unknown`` so
+    historical replays remain readable. Current snapshot producers always emit
+    an explicit ``fresh`` or ``stale`` status.
+    """
+    now_ts = now_ts_ms if now_ts_ms is not None else get_current_timestamp_ms()
+    statuses: dict[str, str] = {}
+    for feature in features:
+        meta = feature.meta or {}
+        if meta.get(FEATURE_GROUP_BY_KEY) != FEATURE_GROUP_BY_MARKET_SNAPSHOT:
+            continue
+        snapshot_ts = meta.get("snapshot_ts_ms")
+        if snapshot_ts is not None:
+            try:
+                age_ms = max(0, now_ts - int(snapshot_ts))
+                status = "fresh" if age_ms <= MARKET_SNAPSHOT_MAX_AGE_MS else "stale"
+            except (TypeError, ValueError):
+                status = "unknown"
+        else:
+            raw_status = meta.get("freshness_status")
+            status = str(raw_status) if raw_status in {"fresh", "stale", "missing"} else "unknown"
+        existing = statuses.get(feature.instrument.symbol)
+        if existing != "fresh" or status == "fresh":
+            statuses[feature.instrument.symbol] = status
+    return statuses
+
 
 class MarketSnapshotFeatureComputer:
     """Convert exchange market_snapshot structures into FeatureVector items.
@@ -89,13 +125,28 @@ class MarketSnapshotFeatureComputer:
             if not values:
                 continue
 
-            fv_ts = int(timestamp) if timestamp is not None else now_ts
+            try:
+                snapshot_ts_ms = int(timestamp) if timestamp is not None else now_ts
+            except (TypeError, ValueError):
+                snapshot_ts_ms = now_ts
+            freshness_age_ms = max(0, now_ts - snapshot_ts_ms)
+            freshness_status = (
+                "fresh"
+                if freshness_age_ms <= MARKET_SNAPSHOT_MAX_AGE_MS
+                else "stale"
+            )
+
+            fv_ts = snapshot_ts_ms
             feature = FeatureVector(
-                ts=int(fv_ts),
+                ts=fv_ts,
                 instrument=InstrumentRef(symbol=symbol, exchange_id=exchange_id),
                 values=values,
                 meta={
                     FEATURE_GROUP_BY_KEY: FEATURE_GROUP_BY_MARKET_SNAPSHOT,
+                    "snapshot_ts_ms": snapshot_ts_ms,
+                    "freshness_age_ms": freshness_age_ms,
+                    "freshness_status": freshness_status,
+                    "coverage_status": "complete",
                 },
             )
             features.append(feature)

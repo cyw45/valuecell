@@ -4,6 +4,7 @@ export type SystemInfo = {
   access_token: string;
   refresh_token: string;
   id: string;
+  tenant_id: string;
   email: string;
   name: string;
   avatar: string;

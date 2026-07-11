@@ -1,264 +1,117 @@
 import {
-  type FC,
-  type HTMLAttributes,
-  memo,
-  type ReactNode,
-  useMemo,
-} from "react";
+  BarChart3,
+  CandlestickChart,
+  CircleDollarSign,
+  Landmark,
+  LayoutDashboard,
+  LogOut,
+  Settings,
+  SlidersHorizontal,
+} from "lucide-react";
+import { memo, type FC } from "react";
 import { useTranslation } from "react-i18next";
-import { NavLink, useLocation } from "react-router";
-import { useGetAgentList } from "@/api/agent";
-import {
-  Conversation,
-  Logo,
-  Market,
-  Setting,
-  StrategyAgent,
-} from "@/assets/svg";
-import { Separator } from "@/components/ui/separator";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import AppConversationSheet from "@/components/valuecell/app/app-conversation-sheet";
-import AgentAvatar from "@/components/valuecell/icon/agent-avatar";
-import SvgIcon from "@/components/valuecell/icon/svg-icon";
+import { NavLink, useLocation, useNavigate } from "react-router";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useSaaSSession } from "@/store/system-store";
 
-interface SidebarItemProps extends HTMLAttributes<HTMLButtonElement> {
-  children: ReactNode;
-  onClick?: () => void;
-  className?: string;
-  type?: "button" | "agent";
-}
-
-interface SidebarProps {
-  children: ReactNode;
-  className?: string;
-}
-
-interface SidebarHeaderProps {
-  children: ReactNode;
-  className?: string;
-}
-
-interface SidebarContentProps {
-  children: ReactNode;
-  className?: string;
-}
-
-interface SidebarFooterProps {
-  children: ReactNode;
-  className?: string;
-}
-
-interface SidebarMenuProps {
-  children: ReactNode;
-  className?: string;
-}
-
-const Sidebar: FC<SidebarProps> = ({ children, className }) => {
-  return (
-    <div className={cn("flex w-16 flex-col items-center bg-muted", className)}>
-      {children}
-    </div>
-  );
-};
-
-const SidebarHeader: FC<SidebarHeaderProps> = ({ children, className }) => {
-  return <div className={cn("px-4 pt-5 pb-3", className)}>{children}</div>;
-};
-
-const SidebarContent: FC<SidebarContentProps> = ({ children, className }) => {
-  return (
-    <div className={cn("flex w-full flex-1 flex-col gap-3", className)}>
-      {children}
-    </div>
-  );
-};
-
-const SidebarFooter: FC<SidebarFooterProps> = ({ children, className }) => {
-  return (
-    <div className={cn("flex flex-col gap-3 pb-4", className)}>{children}</div>
-  );
-};
-
-const SidebarMenu: FC<SidebarMenuProps> = ({ children, className }) => {
-  return (
-    <div className={cn("flex flex-col items-center gap-3", className)}>
-      {children}
-    </div>
-  );
-};
-
-const SidebarMenuItem: FC<SidebarItemProps> = ({
-  children,
-  onClick,
-  className,
-  type = "button",
-  ...props
-}) => {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "box-border flex size-10 items-center justify-center rounded-full",
-        "cursor-pointer transition-all",
-        type === "button" && [
-          "bg-muted p-3 text-muted-foreground",
-          "hover:data-[active=false]:bg-accent hover:data-[active=false]:text-accent-foreground",
-          "data-[active=true]:bg-primary data-[active=true]:text-primary-foreground",
-        ],
-        type === "agent" && [
-          "box-border border border-border bg-background",
-          "hover:data-[active=false]:border-ring/50",
-          "data-[active=true]:border-primary data-[active=true]:shadow-[0_4px_12px_0_rgba(0,0,0,0.25)]",
-        ],
-        className,
-      )}
-      {...props}
-    >
-      {children}
-    </button>
-  );
-};
+const PRIMARY_NAVIGATION = [
+  { labelKey: "saas.navigation.dashboard", to: "/dashboard", icon: LayoutDashboard },
+  { labelKey: "saas.navigation.charts", to: "/charts", icon: CandlestickChart },
+  { labelKey: "saas.navigation.strategies", to: "/strategies", icon: SlidersHorizontal },
+  { labelKey: "saas.navigation.trades", to: "/trades", icon: BarChart3 },
+  { labelKey: "saas.navigation.funding", to: "/funding", icon: Landmark },
+] as const;
 
 const AppSidebar: FC = () => {
   const { t } = useTranslation();
-  const pathArray = useLocation().pathname.split("/");
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { isLoggedIn, email, clearSystemInfo } = useSaaSSession();
 
-  const prefix = useMemo(() => {
-    const subPath = pathArray[1] ?? "";
-    switch (subPath) {
-      case "agent":
-        return `/${subPath}/${pathArray[2]}`;
-      default:
-        return `/${subPath}`;
-    }
-  }, [pathArray]);
-
-  const navItems = useMemo(() => {
-    return {
-      home: [
-        {
-          id: "home",
-          icon: Logo,
-          label: t("nav.home"),
-          to: "/home",
-        },
-        {
-          id: "strategy",
-          icon: StrategyAgent,
-          label: t("nav.strategy"),
-          to: "/agent/StrategyAgent",
-        },
-        // {
-        //   id: "ranking",
-        //   icon: Ranking,
-        //   label: t("nav.ranking"),
-        //   to: "/ranking",
-        // },
-        {
-          id: "market",
-          icon: Market,
-          label: t("nav.market"),
-          to: "/market",
-        },
-      ],
-      config: [
-        {
-          id: "setting",
-          icon: Setting,
-          label: t("nav.setting"),
-          to: "/setting",
-        },
-      ],
-    };
-  }, [t]);
-
-  const { data: agentList } = useGetAgentList({ enabled_only: "true" });
-  const agentItems = useMemo(() => {
-    return agentList?.map((agent) => ({
-      id: agent.agent_name,
-      label: agent.display_name,
-      to: `/agent/${agent.agent_name}`,
-    }));
-  }, [agentList]);
-
-  // verify the button is active
-  const verifyActive = (to: string) => prefix === to;
+  function handleSignOut() {
+    clearSystemInfo();
+    navigate("/login", { replace: true });
+  }
 
   return (
-    <Sidebar>
-      <SidebarHeader>
-        <SidebarMenu>
-          {navItems.home.map((item) => {
-            return (
-              <NavLink key={item.id} to={item.to}>
-                <SidebarMenuItem
-                  aria-label={item.label}
-                  data-active={verifyActive(item.to)}
-                  className="p-2"
-                >
-                  <SvgIcon name={item.icon} />
-                </SidebarMenuItem>
-              </NavLink>
-            );
-          })}
+    <aside className="flex w-16 shrink-0 flex-col border-r bg-card md:w-60" aria-label={t("saas.navigation.primary")}>
+      <div className="flex h-16 items-center justify-center border-b px-3 md:justify-start">
+        <NavLink
+          to="/dashboard"
+          className="flex items-center gap-2 rounded-md font-semibold text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label={t("saas.navigation.valueCellDashboard")}
+        >
+          <CircleDollarSign className="size-6 text-primary" aria-hidden="true" />
+          <span className="hidden text-base md:inline">{t("saas.brand")}</span>
+        </NavLink>
+      </div>
 
-          <AppConversationSheet>
-            <SidebarMenuItem className="cursor-pointer p-2">
-              <SvgIcon name={Conversation} className="size-6" />
-            </SidebarMenuItem>
-          </AppConversationSheet>
-        </SidebarMenu>
-      </SidebarHeader>
+      <nav className="flex flex-1 flex-col gap-1 p-2" aria-label={t("saas.navigation.workspace")}>
+        {PRIMARY_NAVIGATION.map(({ labelKey, to, icon: Icon }) => {
+          const label = t(labelKey);
+          const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`);
+          const navItem = (
+            <NavLink
+              key={to}
+              to={to}
+              aria-current={isActive ? "page" : undefined}
+              className={cn(
+                "flex h-10 items-center justify-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring md:justify-start",
+                isActive && "bg-accent text-accent-foreground",
+              )}
+            >
+              <Icon className="size-4 shrink-0" aria-hidden="true" />
+              <span className="hidden md:inline">{label}</span>
+            </NavLink>
+          );
 
-      <Separator className="w-10! bg-border" />
+          return (
+            <Tooltip key={to}>
+              <TooltipTrigger asChild>{navItem}</TooltipTrigger>
+              <TooltipContent side="right" className="md:hidden">{label}</TooltipContent>
+            </Tooltip>
+          );
+        })}
+      </nav>
 
-      <SidebarContent>
-        <SidebarMenu className="py-3">
-          {agentItems?.map((item) => {
-            return (
-              <NavLink key={item.id} to={item.to}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <SidebarMenuItem
-                      type="agent"
-                      aria-label={item.label}
-                      data-active={verifyActive(item.to)}
-                    >
-                      <AgentAvatar agentName={item.id} />
-                    </SidebarMenuItem>
-                  </TooltipTrigger>
-                  <TooltipContent side="right">{item.label}</TooltipContent>
-                </Tooltip>
-              </NavLink>
-            );
-          })}
-        </SidebarMenu>
-      </SidebarContent>
-
-      <SidebarFooter className="mt-auto pt-3">
-        <SidebarMenu>
-          {navItems.config.map((item) => {
-            return (
-              <NavLink key={item.id} to={item.to}>
-                <SidebarMenuItem
-                  aria-label={item.label}
-                  data-active={verifyActive(item.to)}
-                  className="p-2"
-                >
-                  <SvgIcon name={item.icon} />
-                </SidebarMenuItem>
-              </NavLink>
-            );
-          })}
-        </SidebarMenu>
-      </SidebarFooter>
-    </Sidebar>
+      <div className="border-t p-2">
+        <NavLink
+          to="/settings"
+          className={({ isActive }) =>
+            cn(
+              "flex h-10 items-center justify-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring md:justify-start",
+              isActive && "bg-accent text-accent-foreground",
+            )
+          }
+        >
+          <Settings className="size-4 shrink-0" aria-hidden="true" />
+          <span className="hidden md:inline">{t("saas.navigation.settings")}</span>
+        </NavLink>
+        <Badge variant="secondary" className="mt-3 hidden w-full justify-center text-[10px] font-medium md:flex">
+          {t("saas.navigation.paperWorkspace")}
+        </Badge>
+        {isLoggedIn && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-2 flex h-9 w-full items-center justify-center gap-3 px-3 text-sm font-medium text-muted-foreground md:justify-start"
+                onClick={handleSignOut}
+                aria-label={t("saas.navigation.signOut")}
+              >
+                <LogOut className="size-4 shrink-0" aria-hidden="true" />
+                <span className="hidden truncate md:inline" title={email}>{email || t("saas.navigation.signOut")}</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="md:hidden">{t("saas.navigation.signOut")}</TooltipContent>
+          </Tooltip>
+        )}
+      </div>
+    </aside>
   );
 };
 

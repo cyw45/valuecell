@@ -17,7 +17,7 @@ import type { StockChangeType } from "@/types/stock";
 
 export type StockColorMode = "GREEN_UP_RED_DOWN" | "RED_UP_GREEN_DOWN";
 export type LanguageCode = "en" | "zh_CN" | "zh_TW" | "ja";
-export const DEFAULT_LANGUAGE = "en";
+export const DEFAULT_LANGUAGE = "zh_CN";
 
 interface SettingsStoreState {
   stockColorMode: StockColorMode;
@@ -30,8 +30,10 @@ const getLanguage = () => {
   if (typeof navigator === "undefined") {
     return DEFAULT_LANGUAGE;
   }
-  const map: Record<string, string> = {
+  const map: Record<string, LanguageCode> = {
+    "zh-CN": "zh_CN",
     "zh-Hans": "zh_CN",
+    "zh-TW": "zh_TW",
     "zh-Hant": "zh_TW",
     "ja-JP": "ja",
   };

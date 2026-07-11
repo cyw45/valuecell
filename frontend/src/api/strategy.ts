@@ -3,6 +3,7 @@ import { API_QUERY_KEYS } from "@/constants/api";
 import { type ApiResponse, apiClient } from "@/lib/api-client";
 import type {
   CreateStrategy,
+  StrategyConfigSchemaCatalog,
   StrategyDiagnostics,
   PortfolioSummary,
   Position,
@@ -10,6 +11,8 @@ import type {
   StrategyCompose,
   StrategyPerformance,
   StrategyPrompt,
+  StrategyExperimentPreview,
+  StrategyExperimentPreviewRequest,
 } from "@/types/strategy";
 
 export const useGetStrategyList = () => {
@@ -90,6 +93,26 @@ export const useGetStrategyDiagnostics = (strategyId?: number) => {
     select: (data) => data.data,
     refetchInterval: 5 * 1000,
     enabled: !!strategyId,
+  });
+};
+
+export const useGetStrategySchemas = () => {
+  return useQuery({
+    queryKey: API_QUERY_KEYS.STRATEGY.strategySchemas,
+    queryFn: () =>
+      apiClient.get<ApiResponse<StrategyConfigSchemaCatalog>>("/strategies/schemas"),
+    select: (data) => data.data,
+    staleTime: 10 * 60 * 1000,
+  });
+};
+
+export const usePreviewStrategyExperiment = () => {
+  return useMutation({
+    mutationFn: (data: StrategyExperimentPreviewRequest) =>
+      apiClient.post<ApiResponse<StrategyExperimentPreview>>(
+        "/strategies/experiments/preview",
+        data,
+      ),
   });
 };
 

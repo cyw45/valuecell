@@ -1,24 +1,31 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# Install uv.
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-# Pre-cache the application dependencies.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project
+# Copy dependency metadata before application code so dependency installation is cached.
+COPY python/pyproject.toml python/uv.lock python/README.md ./
 
-# Copy the application into the container.
-COPY . /app
-
-# Install the application dependencies.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --locked
+    uv sync --locked --no-dev --no-install-project
+
+# The root .dockerignore restricts this copy to source and non-secret build inputs.
+COPY python/valuecell ./valuecell
+COPY python/configs ./configs
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-editable
+
+RUN useradd --create-home --uid 10001 valuecell \
+    && chown -R valuecell:valuecell /app
+
+USER valuecell
 
 EXPOSE 8000
 
-# Run the application.
-CMD ["uv", "run", "python", "main.py", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "valuecell.server.main"]

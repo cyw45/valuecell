@@ -4,7 +4,7 @@ Strategy API schemas for handling strategy-related requests and responses.
 
 from datetime import datetime
 from enum import Enum
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -258,15 +258,30 @@ class StrategyMarketDataHealth(BaseModel):
     missing_count: int = Field(0, description="Expected symbols missing market snapshot data")
     missing_symbols: List[str] = Field(default_factory=list, description="Expected symbols missing data")
 
+    status: str = Field("missing", description="Actionable health status: healthy, degraded, or missing")
+    freshness_status: str = Field("missing", description="Snapshot freshness: fresh, stale, missing, or unknown")
+    coverage_status: str = Field("missing", description="Symbol coverage: complete, partial, or missing")
+    stale_count: int = Field(0, description="Expected symbols with stale realtime snapshots")
+    stale_symbols: List[str] = Field(default_factory=list, description="Expected symbols with stale realtime snapshots")
+    exposure_increase_allowed: bool = Field(False, description="Whether current data health permits opening or increasing exposure")
 
 class StrategySymbolDecisionData(BaseModel):
     symbol: str = Field(..., description="Observed or expected symbol")
     intervals_seen: List[str] = Field(default_factory=list, description="Intervals observed in this scan")
     has_market_snapshot: bool = Field(False, description="Whether realtime market snapshot was fetched")
     latest_price: Optional[float] = Field(None, description="Latest observed price")
+    snapshot_ts_ms: Optional[int] = Field(None, description="Source timestamp for the realtime market snapshot")
+    freshness_age_ms: Optional[int] = Field(None, description="Snapshot age when the decision cycle was evaluated")
+    freshness_status: str = Field("missing", description="Snapshot freshness: fresh, stale, missing, or unknown")
+    coverage_status: str = Field("missing", description="Per-symbol snapshot coverage status")
+    exposure_increase_allowed: bool = Field(False, description="Whether this symbol can open or increase exposure")
     action: Optional[str] = Field(None, description="Action emitted by the strategy or noop")
     quantity: Optional[float] = Field(None, description="Order quantity if an order was emitted")
     reason: Optional[str] = Field(None, description="Human-readable order/no-order reason")
+    indicator_snapshot: dict[str, Any] = Field(default_factory=dict, description="Latest per-interval indicator values")
+    conditions: List[dict[str, Any]] = Field(default_factory=list, description="Structured condition checks")
+    decision_path: List[str] = Field(default_factory=list, description="Step-by-step decision path")
+    fund_impact: dict[str, Any] = Field(default_factory=dict, description="Estimated and executed fund impact")
 
 
 class StrategyDiagnosticsCycleData(BaseModel):
@@ -289,6 +304,7 @@ class StrategyDiagnosticsData(BaseModel):
     strategy_type: Optional[StrategyType] = Field(None, description="Strategy type")
     runtime_health: dict = Field(default_factory=dict, description="Runtime health summary")
     config: dict = Field(default_factory=dict, description="User-facing strategy configuration")
+    explanation: dict[str, Any] = Field(default_factory=dict, description="Structured latest cycle explanation")
     observed_symbol_count: int = Field(0, description="Symbols with market snapshot data")
     expected_symbol_count: int = Field(0, description="Configured symbol count")
     latest_cycle: Optional[StrategyDiagnosticsCycleData] = Field(None, description="Latest scan diagnostics")

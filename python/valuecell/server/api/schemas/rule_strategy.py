@@ -1,0 +1,247 @@
+"""Typed contracts for deterministic, paper-only crypto rule evaluation."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class RuleStrategyModel(BaseModel):
+    """Strict base contract that rejects unknown and non-finite inputs."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+
+class RuleStrategyCandle(RuleStrategyModel):
+    """One explicitly supplied OHLCV candle; the engine never fetches candles."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    timestamp_ms: int = Field(gt=0)
+    open: float = Field(gt=0)
+    high: float = Field(gt=0)
+    low: float = Field(gt=0)
+    close: float = Field(gt=0)
+    volume: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_price_range(self) -> RuleStrategyCandle:
+        if self.high < max(self.open, self.close, self.low):
+            raise ValueError("candle high must not be below open, close, or low")
+        if self.low > min(self.open, self.close, self.high):
+            raise ValueError("candle low must not exceed open, close, or high")
+        return self
+
+
+class RuleStrategyPosition(RuleStrategyModel):
+    """Current paper long position available to the deterministic evaluator."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    quantity: float = Field(default=0.0, ge=0)
+    entry_price: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_entry_price(self) -> RuleStrategyPosition:
+        if self.quantity > 0 and self.entry_price is None:
+            raise ValueError("entry_price is required when position quantity is positive")
+        if self.quantity == 0 and self.entry_price is not None:
+            raise ValueError("entry_price must be omitted when position quantity is zero")
+        return self
+
+
+class RuleStrategyMarketSnapshot(RuleStrategyModel):
+    """Explicit paper account and market facts used for sizing and funding."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    symbol: str = Field(min_length=1, max_length=64)
+    price: float = Field(gt=0)
+    equity_quote: float = Field(ge=0)
+    quote_balance: float = Field(ge=0)
+    open_position_count: int = Field(default=0, ge=0)
+    funding_rate: float = Field(default=0.0, ge=-1, le=1)
+    position: RuleStrategyPosition = Field(default_factory=RuleStrategyPosition)
+
+
+class MovingAverageRuleConfig(RuleStrategyModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    enabled: bool = False
+    short_window: int = Field(default=9, ge=1, le=500)
+    long_window: int = Field(default=21, ge=2, le=500)
+
+    @model_validator(mode="after")
+    def validate_windows(self) -> MovingAverageRuleConfig:
+        if self.short_window >= self.long_window:
+            raise ValueError("short_window must be smaller than long_window")
+        return self
+
+
+class RsiRuleConfig(RuleStrategyModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    enabled: bool = False
+    period: int = Field(default=14, ge=2, le=500)
+    oversold: float = Field(default=30.0, ge=0, le=100)
+    overbought: float = Field(default=70.0, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> RsiRuleConfig:
+        if self.oversold >= self.overbought:
+            raise ValueError("oversold must be lower than overbought")
+        return self
+
+
+class BollingerRuleConfig(RuleStrategyModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    enabled: bool = False
+    period: int = Field(default=20, ge=2, le=500)
+    standard_deviations: float = Field(default=2.0, gt=0, le=10)
+
+
+class MomentumMacdRuleConfig(RuleStrategyModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    enabled: bool = False
+    momentum_period: int = Field(default=14, ge=1, le=500)
+    macd_fast_window: int = Field(default=12, ge=1, le=500)
+    macd_slow_window: int = Field(default=26, ge=2, le=500)
+    macd_signal_window: int = Field(default=9, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def validate_windows(self) -> MomentumMacdRuleConfig:
+        if self.macd_fast_window >= self.macd_slow_window:
+            raise ValueError("macd_fast_window must be smaller than macd_slow_window")
+        return self
+
+
+class RuleStrategyRiskConfig(RuleStrategyModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    size_mode: Literal["fixed_quote", "equity_fraction"] = "fixed_quote"
+    size_value: float = Field(default=100.0, gt=0)
+    take_profit_pct: float | None = Field(default=None, gt=0, le=1)
+    stop_loss_pct: float | None = Field(default=None, gt=0, le=1)
+    max_positions: int = Field(default=1, ge=1, le=1_000)
+    leverage: float = Field(default=1.0, ge=1, le=100)
+    @model_validator(mode="after")
+    def validate_size_value(self) -> RuleStrategyRiskConfig:
+        if self.size_mode == "equity_fraction" and self.size_value > 1:
+            raise ValueError("equity_fraction size_value must be at most 1")
+        return self
+
+
+class RuleStrategyConfig(RuleStrategyModel):
+    """Paper-only rules and their normalized public-market evaluation scope."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+
+    mode: Literal["paper"] = "paper"
+    symbols: list[str] = Field(
+        default_factory=lambda: ["BTC-USDT"], min_length=1, max_length=10
+    )
+    interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "1h"
+    decide_interval_s: int | None = Field(default=None, ge=60)
+    confirmation_mode: Literal["all", "any"] = "all"
+    moving_average: MovingAverageRuleConfig = Field(default_factory=MovingAverageRuleConfig)
+    rsi: RsiRuleConfig = Field(default_factory=RsiRuleConfig)
+    bollinger: BollingerRuleConfig = Field(default_factory=BollingerRuleConfig)
+    momentum_macd: MomentumMacdRuleConfig = Field(default_factory=MomentumMacdRuleConfig)
+    risk: RuleStrategyRiskConfig = Field(default_factory=RuleStrategyRiskConfig)
+
+    @model_validator(mode="after")
+    def normalize_symbols(self) -> RuleStrategyConfig:
+        normalized: list[str] = []
+        for raw_symbol in self.symbols:
+            symbol = raw_symbol.strip().upper().replace("/", "-")
+            if not symbol.endswith("-USDT"):
+                raise ValueError("Only USDT crypto symbols are supported")
+            if symbol not in normalized:
+                normalized.append(symbol)
+        self.symbols = normalized
+        return self
+
+
+class RuleStrategyEvaluationRequest(BaseModel):
+    """Frozen inputs for one deterministic paper rule-engine evaluation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    config: RuleStrategyConfig
+    candles: list[RuleStrategyCandle] = Field(min_length=1, max_length=5_000)
+    market: RuleStrategyMarketSnapshot
+
+    @model_validator(mode="after")
+    def validate_candle_order(self) -> RuleStrategyEvaluationRequest:
+        timestamps = [candle.timestamp_ms for candle in self.candles]
+        if any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
+            raise ValueError("candle timestamps must be strictly increasing")
+        return self
+
+
+class RuleStrategyConditionCheck(BaseModel):
+    """A single evaluation fact, including unavailable and risk-blocked conditions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    category: Literal["indicator", "exit", "risk"]
+    state: Literal["triggered", "not_triggered", "blocked", "unavailable"]
+    detail: str
+    values: dict[str, float | int | str | bool | None] = Field(default_factory=dict)
+
+
+class RuleStrategyIndicatorValues(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    moving_average_short: float | None = None
+    moving_average_long: float | None = None
+    previous_moving_average_short: float | None = None
+    previous_moving_average_long: float | None = None
+    rsi: float | None = None
+    bollinger_upper: float | None = None
+    bollinger_middle: float | None = None
+    bollinger_lower: float | None = None
+    momentum: float | None = None
+    macd: float | None = None
+    macd_signal: float | None = None
+    previous_macd: float | None = None
+    previous_macd_signal: float | None = None
+
+
+class RuleStrategySizing(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["fixed_quote", "equity_fraction"]
+    requested_quote: float
+    max_allowed_quote: float
+    affordable_quote: float
+    quantity: float
+
+
+class RuleStrategyFundingImpact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    funding_rate: float
+    current_notional_quote: float
+    projected_notional_quote: float
+    estimated_payment_quote: float
+    direction: Literal["credit", "debit", "none"]
+
+
+class RuleStrategyEvaluationResult(BaseModel):
+    """Explainable recommendation only; it never creates or submits an order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["paper"] = "paper"
+    action: Literal["buy", "sell", "no_op"]
+    reason_code: str
+    reason: str
+    conditions: list[RuleStrategyConditionCheck]
+    indicators: RuleStrategyIndicatorValues
+    sizing: RuleStrategySizing
+    funding: RuleStrategyFundingImpact

@@ -100,6 +100,93 @@
       "loading": "加载中...",
       "noMemories": "暂无记忆",
       "delete": "删除"
+    },
+    "sandboxExchanges": {
+      "link": "沙盒交易所",
+      "title": "沙盒交易所管理",
+      "description": "仅连接和使用交易所测试环境。",
+      "back": "返回设置",
+      "warning": {
+        "title": "仅限测试环境",
+        "description": "仅支持币安测试网和 OKX 模拟盘凭据。不会使用真实资金，策略也无法自动提交订单。"
+      },
+      "providers": {
+        "binance": "币安测试网",
+        "okx": "OKX 模拟盘"
+      },
+      "connection": {
+        "title": "连接沙盒交易所",
+        "description": "凭据仅用于验证和保存此测试环境连接。",
+        "provider": "提供商",
+        "label": "连接名称",
+        "apiKey": "API 密钥",
+        "apiSecret": "API 密钥密文",
+        "passphrase": "口令",
+        "submit": "验证并保存"
+      },
+      "connections": {
+        "title": "连接列表",
+        "description": "已保存的连接元数据和测试余额。",
+        "empty": "尚未添加沙盒连接。",
+        "balance": "读取测试余额"
+      },
+      "balance": {
+        "asset": "资产",
+        "free": "可用",
+        "used": "占用",
+        "total": "总额"
+      },
+      "order": {
+        "title": "提交沙盒订单",
+        "description": "此明确操作只会在所选测试环境中创建订单。",
+        "connection": "连接",
+        "connectionPlaceholder": "选择连接",
+        "symbol": "交易对",
+        "side": "方向",
+        "type": "订单类型",
+        "quoteAmount": "计价金额",
+        "price": "限价",
+        "submit": "提交沙盒订单",
+        "sides": {
+          "buy": "买入",
+          "sell": "卖出"
+        },
+        "types": {
+          "market": "市价",
+          "limit": "限价"
+        },
+        "result": {
+          "title": "订单状态",
+          "description": "来自沙盒交易所的已脱敏状态元数据。",
+          "symbol": "交易对：",
+          "side": "方向：",
+          "status": "状态：",
+          "amount": "计价金额：",
+          "price": "价格：",
+          "filled": "已成交："
+        }
+      },
+      "messages": {
+        "connectionSaved": "沙盒连接已保存。",
+        "connectionFailed": "无法验证或保存沙盒连接。",
+        "invalidOrder": "请提供连接和有效的订单参数。",
+        "orderSubmitted": "沙盒订单已提交。",
+        "orderFailed": "无法提交沙盒订单。"
+      }
+    },
+    "liveExecution": {
+      "link": "实盘执行（受控）",
+      "title": "实盘执行控制",
+      "description": "实盘交易默认禁用，必须满足全部服务端强制门禁后才可能执行。",
+      "back": "返回设置",
+      "status": { "loading": "正在加载实盘状态", "enabled": "全局实盘执行已启用", "disabled": "全局实盘执行已禁用", "description": "该状态由服务端控制；启用本身绝不授权下单。" },
+      "gates": { "title": "当前执行门禁" },
+      "marketTypes": { "spot": "现货", "swap": "永续合约" },
+      "connection": { "title": "实盘交易所连接", "description": "凭据仅提交用于验证和创建此加密实盘连接。", "label": "连接名称", "provider": "交易所", "marketType": "市场类型", "apiKey": "API 密钥", "apiSecret": "API 密钥密文", "passphrase": "OKX 口令", "withdrawalDisabled": "我确认已为此 API 密钥禁用提现。", "ipAllowlist": "我确认已为此 API 密钥配置 IP 白名单。", "submit": "验证并保存实盘连接" },
+      "risk": { "title": "风险策略", "description": "每笔订单前均由服务端检查风险策略。", "maxNotional": "单笔最大名义金额", "maxPositions": "最大持仓数量", "maxLeverage": "最大杠杆", "allowedSymbols": "允许的交易对（逗号分隔）", "submit": "保存风险策略" },
+      "binding": { "title": "策略绑定", "description": "只有有效且未撤销的绑定才能将策略路由至实盘连接。", "strategyId": "策略 ID", "connection": "实盘连接", "connectionPlaceholder": "选择实盘连接", "submit": "创建绑定", "empty": "尚无实盘策略绑定。", "active": "有效", "revoked": "已撤销", "revoke": "撤销绑定" },
+      "authorization": { "title": "启动授权", "description": "授权会在进程重启或服务端设定的到期时间失效。", "request": "请求启动挑战码", "challenge": "挑战码", "manualEntry": "请复制或手动抄录此代码，再在下方重新输入。确认后不会保留。", "confirmation": "再次输入挑战码", "confirm": "确认运行时授权", "active": "运行时授权有效至 {{expiresAt}}", "revoke": "撤销授权" },
+      "order": { "title": "实盘订单测试", "description": "该操作在服务端完成全部预检和风险检查后，可能向交易所提交真实订单。", "connection": "实盘连接", "connectionPlaceholder": "选择实盘连接", "symbol": "交易对", "side": "方向", "type": "订单类型", "quoteAmount": "计价金额", "price": "限价", "submit": "提交实盘订单", "unavailable": "服务端同时报告全局门禁和运行时授权有效前，不能提交实盘订单。", "sides": { "buy": "买入", "sell": "卖出" }, "types": { "market": "市价", "limit": "限价" } }
     }
   },
   "common": {
@@ -428,6 +515,313 @@
       "news": {
         "title": "新闻推送",
         "description": "按自定义时间表推送个性化新闻更新。"
+      }
+    }
+  },
+  "saas": {
+    "brand": "Value Cell",
+    "login": {
+      "aria": {
+        "authentication": "身份验证"
+      },
+      "subtitle": "模拟交易研究平台",
+      "signIn": "登录",
+      "createAccount": "创建账户",
+      "signInDescription": "访问您的模拟交易工作区",
+      "createAccountDescription": "设置新的模拟交易工作区",
+      "email": "电子邮箱",
+      "password": "密码",
+      "workspaceName": "工作区名称",
+      "minimumPasswordLength": "（至少 12 个字符）",
+      "signingIn": "正在登录…",
+      "creating": "正在创建…",
+      "createWorkspace": "创建工作区",
+      "errors": {
+        "incompleteAuthentication": "身份验证响应不完整，请重试。",
+        "invalidCredentials": "电子邮箱或密码无效",
+        "incompleteRegistration": "注册响应不完整，请重试。",
+        "registrationFailed": "注册失败"
+      }
+    },
+    "navigation": {
+      "primary": "主导航",
+      "workspace": "工作区",
+      "valueCellDashboard": "Value Cell 仪表盘",
+      "dashboard": "仪表盘",
+      "charts": "图表",
+      "strategies": "策略",
+      "trades": "交易",
+      "funding": "资金",
+      "settings": "设置",
+      "paperWorkspace": "模拟工作区",
+      "signOut": "退出登录"
+    },
+    "dashboard": {
+      "paperWorkspace": "模拟工作区",
+      "researchOnly": "仅供研究",
+      "title": "仪表盘",
+      "subtitle": "市场背景与策略研究，未连接真实订单。",
+      "reviewStrategies": "查看策略",
+      "marketTicker": "市场行情",
+      "workspaceOverview": "工作区概览",
+      "workspaceStatus": "工作区状态",
+      "paperOnly": "仅模拟",
+      "workspaceStatusDescription": "此工作区用于研究和模拟工作流，暂不提供执行接入。",
+      "strategyWorkflow": "策略工作流",
+      "configureRules": "配置规则",
+      "strategyWorkflowDescription": "构建可重复使用的规则集，然后在进入下一平台步骤前评估其市场背景。",
+      "paperStrategyActivity": "模拟策略活动",
+      "evaluationActive": "评估进行中",
+      "evaluationStopped": "评估已停止",
+      "noStrategySaved": "尚未保存策略",
+      "showingRecords": "仅显示 {{name}} 的确定性服务器记录。",
+      "saveStrategyPrompt": "保存模拟规则策略以开始收集确定性评估记录。",
+      "cumulativePnl": "累计盈亏",
+      "cumulativePnlDescription": "来自日志评估的模拟累计盈亏。",
+      "noEvaluationData": "暂无评估数据。运行策略以收集盈亏记录。",
+      "latestRuleConditions": "最新规则条件",
+      "latestRuleConditionsDescription": "服务器会在评估后报告已触发、已阻止和不可用的条件。",
+      "noStrategySelected": "未选择模拟策略。",
+      "loadingSignals": "正在加载服务器信号记录…",
+      "signalsUnavailable": "信号记录不可用，未假定任何结果。",
+      "noConditions": "尚未记录条件。评估明确的市场输入以创建信号记录。",
+      "signalStates": {
+        "triggered": "已触发",
+        "blocked": "已阻止",
+        "unavailable": "不可用"
+      }
+    },
+    "charts": {
+      "researchChart": "研究图表",
+      "paperOnly": "仅模拟",
+      "title": "图表",
+      "subtitle": "探索参考市场数据。图表控件不会下单或连接执行账户。",
+      "marketChart": "市场图表",
+      "poweredByTradingView": "由 TradingView 市场数据驱动。",
+      "symbols": {
+        "bitcoin": "比特币 / 美元",
+        "ether": "以太坊 / 美元",
+        "solana": "Solana / 美元"
+      },
+      "intervals": {
+        "fifteenMinutes": "15 分钟",
+        "oneHour": "1 小时",
+        "fourHours": "4 小时",
+        "oneDay": "1 天"
+      },
+      "researchContext": "研究背景",
+      "researchContextDescription": "使用图表观察结果来辅助规则策略。在后端集成完成前，绩效和执行功能仍不可用。",
+      "openTradingView": "打开 TradingView"
+    },
+    "chart": {
+      "pnl": "盈亏"
+    },
+    "operations": {
+      "strategy": {
+        "title": "规则策略",
+        "paperOnly": "仅模拟",
+        "subtitle": "为模拟评估定义透明、固定规则的操作手册。",
+        "defaultName": "模拟规则策略",
+        "included": "已启用",
+        "off": "已关闭",
+        "ruleToggle": "{{title}} {{status}}",
+        "status": {
+          "active": "模拟评估进行中",
+          "ready": "模拟评估已就绪"
+        },
+        "explicitInputs": {
+          "title": "仅限明确的模拟输入",
+          "description": "保存固定规则后，提供结构化的 K 线数据和账户快照以进行确定性评估。此工作区不会获取市场数据或提交订单。"
+        },
+        "fields": {
+          "name": "策略名称",
+          "description": "描述",
+          "optional": "（可选）",
+          "markets": "市场",
+          "marketsHint": "最多选择 {{max}} 个市场以独立评估。",
+          "marketsLoading": "正在加载可用市场…",
+          "marketsError": "无法加载可用市场，请稍后重试。",
+          "paperMarkets": "模拟市场",
+          "candleTimeframe": "K 线周期",
+          "candleTimeframeHint": "评估在已收盘的 K 线上运行；此周期决定最大轮询频率。",
+          "fastMovingAverage": "快速移动平均线",
+          "slowMovingAverage": "慢速移动平均线",
+          "period": "周期",
+          "lowerThreshold": "下限",
+          "upperThreshold": "上限",
+          "standardDeviations": "标准差",
+          "macdFastPeriod": "MACD 快速周期",
+          "macdSlowPeriod": "MACD 慢速周期",
+          "macdSignalPeriod": "MACD 信号周期",
+          "positionSize": "仓位大小",
+          "takeProfit": "止盈",
+          "stopLoss": "止损",
+          "maximumOpenPositions": "最大未平仓仓位",
+          "maximumLeverage": "最大杠杆",
+          "paperEvaluationOnly": "仅限模拟评估"
+        },
+        "sections": {
+          "marketScope": {
+            "title": "市场范围",
+            "description": "选择此规则集使用的模拟市场和 K 线周期。"
+          },
+          "trendEntry": {
+            "title": "趋势入场",
+            "description": "当较快均线向上穿越较慢均线时建立多头仓位。"
+          },
+          "rsi": {
+            "title": "RSI 过滤器",
+            "description": "在动量已过度延伸时避免入场。"
+          },
+          "bollinger": {
+            "title": "布林带确认",
+            "description": "要求价格保持在波动区间内。"
+          },
+          "momentum": {
+            "title": "动量确认",
+            "description": "使用 MACD 方向在模拟入场前确认交叉。"
+          },
+          "riskLimits": {
+            "title": "模拟风险限额",
+            "description": "限额按每个模拟仓位表示，并由确定性服务器评估器执行。"
+          }
+        },
+        "errors": {
+          "selectMarket": "请至少选择一个市场。",
+          "wholeNumber": "请输入 {{min}} 到 {{max}} 之间的整数。",
+          "slowAverage": "慢速均线必须大于快速均线。",
+          "belowUpperThreshold": "请输入低于上限的值。",
+          "aboveLowerThreshold": "请输入高于下限的值。",
+          "valueRange": "请输入 {{min}} 到 {{max}} 之间的值。",
+          "largerThanFastPeriod": "请输入大于快速周期的值。",
+          "percentRange": "请输入 {{min}}% 到 {{max}}% 之间的值。",
+          "positiveBelowTakeProfit": "请输入低于止盈值的正数。",
+          "leverageRange": "请输入 1x 到 5x 之间的值。"
+        },
+        "summary": {
+          "title": "实时规则摘要",
+          "description": "会随您调整固定规则输入而更新。",
+          "paperMarkets": "模拟市场",
+          "noneSelected": "未选择",
+          "timeframe": "周期",
+          "entry": "入场",
+          "entryValue": "MA {{fast}} 上穿 MA {{slow}}",
+          "confirmations": "确认条件",
+          "none": "无",
+          "positionSize": "仓位大小",
+          "positionSizeValue": "每个 {{value}}%",
+          "exitLimits": "退出限额",
+          "exitLimitsValue": "止盈 {{takeProfit}}% / 止损 {{stopLoss}}%",
+          "exposureCap": "敞口上限",
+          "exposureCapValue": "最多 {{positions}} 个仓位，杠杆最高 {{leverage}}x"
+        },
+        "paperStrategy": {
+          "title": "模拟策略",
+          "status": "{{name}} 当前为 {{status}}。",
+          "valid": "规则有效，可以保存。",
+          "resolve": "请先解决高亮显示的值再保存。",
+          "help": "已保存的策略必须先运行才能评估。不提供交易所连接、订单提交或真实资金。"
+        },
+        "evaluate": {
+          "title": "评估提供的数据",
+          "description": "粘贴来自您自有数据源、包含 candles 和 market 的 JSON。"
+        },
+        "evaluation": {
+          "title": "服务器评估",
+          "fundingImpact": "资金费影响",
+          "fundingSummary": "{{direction}} · 以 {{rate}}% 估算 {{payment}} 计价货币"
+        },
+        "actions": {
+          "save": "保存模拟规则",
+          "saving": "正在保存模拟规则…",
+          "stop": "停止模拟评估",
+          "start": "开始模拟评估",
+          "runEvaluation": "运行模拟评估"
+        },
+        "toasts": {
+          "saved": "模拟规则已保存",
+          "started": "模拟评估已开始",
+          "stopped": "模拟评估已停止",
+          "operationFailed": "模拟策略操作失败，请重试。",
+          "invalidEvaluation": "请在评估前提供包含明确 K 线和市场输入的 JSON 对象。",
+          "evaluationComplete": "模拟评估已完成"
+        },
+        "executionMode": {
+          "title": "策略执行模式：纸面评估",
+          "description": "启动策略只会自动生成信号和纸面日志，不会自动提交测试网订单。测试网订单必须在测试网交易所页面明确手动提交。",
+          "link": "测试网交易所"
+        }
+      },
+      "trades": {
+        "paperOnly": "仅模拟",
+        "noExecutionAccount": "无执行账户",
+        "title": "交易",
+        "subtitle": "此处显示服务器记录的模拟建议。任何条目都不是订单或已提交成交。",
+        "loading": "正在加载模拟交易记录…",
+        "unavailable": "模拟交易记录当前不可用，未假定任何交易。",
+        "noStrategy": {
+          "title": "未选择模拟策略",
+          "description": "保存并启动规则策略，然后评估明确的市场输入以创建可解释的模拟记录。"
+        },
+        "recommendations": {
+          "title": "模拟交易建议",
+          "description": "每条记录均由确定性引擎标记为 not_submitted。"
+        },
+        "empty": {
+          "title": "未记录模拟交易",
+          "description": "服务器尚未为此策略建议模拟买入或卖出。未产生操作的评估不会伪造交易。"
+        },
+        "table": {
+          "evaluated": "评估时间",
+          "action": "操作",
+          "reason": "原因",
+          "quantity": "数量",
+          "execution": "执行"
+        },
+        "actions": {
+          "configure": "配置规则策略",
+          "evaluate": "评估提供的数据"
+        },
+        "ledger": {
+          "title": "评估台账",
+          "description": "行数据仅来自已完成的服务器评估，并保留确定性原因和仓位大小。"
+        },
+        "separation": {
+          "title": "明确分离",
+          "description": "此工作区绝不会路由、表示或结算真实市场活动。"
+        }
+      },
+      "funding": {
+        "pnl": {
+          "title": "累计盈亏",
+          "description": "来自日志评估的模拟盈亏曲线。",
+          "empty": "暂无评估数据。"
+        },
+        "noStrategy": "保存并评估模拟规则策略，以查看服务器报告的资金费估算。",
+        "loading": "正在加载模拟资金费估算…",
+        "unavailable": "模拟资金费估算当前不可用，未假定任何资金费条目。",
+        "impact": {
+          "title": "模拟资金费影响",
+          "description": "每行都是评估报告的准确影响，不会移动资金。"
+        },
+        "table": {
+          "evaluated": "评估时间",
+          "direction": "方向",
+          "rate": "费率",
+          "currentNotional": "当前名义价值",
+          "estimatedPayment": "预计付款"
+        },
+        "empty": "服务器完成对此模拟策略的评估前，不会记录资金费影响。",
+        "connections": {
+          "title": "无账户连接",
+          "description": "此仅模拟工作区特意不提供资金来源和执行账户。",
+          "empty": "未连接任何账户。"
+        },
+        "safety": {
+          "title": "默认安全",
+          "description": "规则评估无法转移资金、授权转账或暴露账户凭据。",
+          "body": "模拟研究与真实资金保持隔离。"
+        }
       }
     }
   }

@@ -10,6 +10,7 @@ from .strategy_repository import (
     get_strategy_repository,
     reset_strategy_repository,
 )
+from .rule_strategy_repository import RuleStrategyRepository
 from .user_profile_repository import UserProfileRepository
 from .watchlist_repository import (
     WatchlistRepository,
@@ -28,4 +29,5 @@ __all__ = [
     "StrategyRepository",
     "get_strategy_repository",
     "reset_strategy_repository",
+    "RuleStrategyRepository",
 ]

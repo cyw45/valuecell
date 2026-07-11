@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLocation, useNavigate } from "react-router";
+import { useEffect, useState } from "react";
 import "@/i18n";
 import AppSidebar from "@/components/valuecell/app/app-sidebar";
 import { useLanguage } from "@/store/settings-store";
+import { useSaaSSession } from "@/store/system-store";
 import { Toaster } from "./components/ui/sonner";
-
 import "./global.css";
 import { SidebarProvider } from "./components/ui/sidebar";
 
@@ -55,6 +56,38 @@ const queryClient = new QueryClient({
 import { AutoUpdateCheck } from "@/components/valuecell/app/auto-update-check";
 import { BackendHealthCheck } from "@/components/valuecell/app/backend-health-check";
 import { TrackerProvider } from "./provider/tracker-provider";
+// Routes that are accessible without a SaaS session.
+const PUBLIC_PATHS: readonly string[] = ["/login"];
+// Legacy route prefixes that bypass the SaaS auth guard entirely.
+const LEGACY_PREFIXES: readonly string[] = ["/home", "/market", "/agent", "/setting", "/research", "/test"];
+
+function SaaSGuard({ children }: { children: React.ReactNode }) {
+  const { isLoggedIn } = useSaaSSession();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Wait one tick for Zustand persist to rehydrate from localStorage before
+  // making any redirect decision — prevents the login-flash on hard refresh.
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    const path = location.pathname;
+    if (
+      isLoggedIn ||
+      PUBLIC_PATHS.includes(path) ||
+      LEGACY_PREFIXES.some((prefix) => path.startsWith(prefix))
+    ) {
+      return;
+    }
+    navigate("/login", { replace: true, state: { from: path } });
+  }, [hydrated, isLoggedIn, location.pathname, navigate]);
+
+  return <>{children}</>;
+}
 
 export default function Root() {
   return (
@@ -68,19 +101,20 @@ export default function Root() {
       >
         <BackendHealthCheck>
           <TrackerProvider>
-            <SidebarProvider>
-              <div className="fixed flex size-full overflow-hidden">
-                <AppSidebar />
-
-                <main
-                  className="relative flex flex-1 overflow-hidden"
-                  id="main-content"
-                >
-                  <Outlet />
-                </main>
-                <Toaster />
-              </div>
-            </SidebarProvider>
+            <SaaSGuard>
+              <SidebarProvider>
+                <div className="fixed flex size-full overflow-hidden">
+                  <AppSidebar />
+                  <main
+                    className="relative flex flex-1 overflow-hidden"
+                    id="main-content"
+                  >
+                    <Outlet />
+                  </main>
+                  <Toaster />
+                </div>
+              </SidebarProvider>
+            </SaaSGuard>
           </TrackerProvider>
           <AutoUpdateCheck />
         </BackendHealthCheck>

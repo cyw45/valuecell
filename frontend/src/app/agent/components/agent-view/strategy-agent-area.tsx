@@ -16,9 +16,7 @@ import { Button } from "@/components/ui/button";
 import type { AgentViewProps } from "@/types/agent";
 import type { Strategy } from "@/types/strategy";
 import {
-  PortfolioPositionsGroup,
-  StrategyDiagnosticsPanel,
-  StrategyComposeList,
+  StrategyWorkspace,
   TradeStrategyGroup,
 } from "../strategy-items";
 
@@ -78,6 +76,12 @@ const StrategyAgentArea: FC<AgentViewProps> = () => {
   const { mutateAsync: stopStrategy } = useStopStrategy();
   const { mutateAsync: deleteStrategy } = useDeleteStrategy();
 
+  const strategySymbols = Array.isArray(diagnostics?.config?.symbols)
+    ? diagnostics.config.symbols.filter(
+        (item): item is string => typeof item === "string",
+      )
+    : [];
+
   useEffect(() => {
     if (strategies.length === 0) {
       setSelectedStrategy(null);
@@ -136,28 +140,17 @@ const StrategyAgentArea: FC<AgentViewProps> = () => {
         )}
       </div>
 
-      {/* Right section: Trade History and Portfolio/Positions */}
-      <div className="flex flex-1 min-w-0">
+      <div className="flex min-w-0 flex-1">
         {selectedStrategy ? (
-          <div className="grid min-w-0 flex-1 grid-cols-[minmax(360px,0.9fr)_minmax(520px,1.3fr)_minmax(360px,0.9fr)] overflow-hidden">
-            <StrategyComposeList
-              composes={composes}
-              tradingMode={selectedStrategy.trading_mode}
-            />
-            <StrategyDiagnosticsPanel
-              diagnostics={diagnostics}
-              priceCurve={priceCurve}
-              positions={positions}
-              strategy={selectedStrategy}
-              summary={summary}
-            />
-            <PortfolioPositionsGroup
-              summary={summary}
-              priceCurve={priceCurve}
-              positions={positions}
-              strategy={selectedStrategy}
-            />
-          </div>
+          <StrategyWorkspace
+            composes={composes}
+            diagnostics={diagnostics}
+            positions={positions}
+            priceCurve={priceCurve}
+            strategy={selectedStrategy}
+            strategySymbols={strategySymbols}
+            summary={summary}
+          />
         ) : (
           <div className="flex size-full flex-col items-center justify-center gap-8">
             <EmptyIllustration />

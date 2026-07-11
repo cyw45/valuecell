@@ -128,7 +128,10 @@ export const ExchangeForm = withForm({
     wallet_address: "",
     private_key: "",
   },
-  render({ form }) {
+  props: {
+    paperOnly: false,
+  },
+  render({ form, paperOnly }) {
     const { t } = useTranslation();
     const { mutateAsync: testConnection, isPending } = useTestConnection();
     const [testStatus, setTestStatus] = useState<{
@@ -154,182 +157,196 @@ export const ExchangeForm = withForm({
 
     return (
       <FieldGroup className="gap-4">
-        <form.AppField
-          listeners={{
-            onChange: ({ value }) => {
-              form.reset({
-                trading_mode: value,
-                exchange_id: value === "live" ? "okx" : "",
-                api_key: "",
-                secret_key: "",
-                passphrase: "",
-                wallet_address: "",
-                private_key: "",
-              });
-            },
-          }}
-          name="trading_mode"
-        >
-          {(field) => (
-            <field.RadioField
-              label={t("strategy.form.exchanges.transactionType")}
-            >
-              <div className="flex items-center gap-2">
-                <RadioGroupItem value="live" id="live" />
-                <Label htmlFor="live" className="text-sm">
-                  {t("strategy.form.exchanges.liveTrading")}
-                </Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <RadioGroupItem value="virtual" id="virtual" />
-                <Label htmlFor="virtual" className="text-sm">
-                  {t("strategy.form.exchanges.virtualTrading")}
-                </Label>
-              </div>
-            </field.RadioField>
-          )}
-        </form.AppField>
+        {paperOnly ? (
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-4">
+            <div className="flex items-center gap-2 font-medium text-sm">
+              <Wallet className="size-4 text-emerald-600 dark:text-emerald-300" />
+              Paper trading only
+            </div>
+            <p className="mt-1 text-muted-foreground text-sm">
+              New strategies run with simulated funds. Exchange credentials are not collected and real-money execution is unavailable.
+            </p>
+          </div>
+        ) : (
+          <form.AppField
+            listeners={{
+              onChange: ({ value }) => {
+                form.reset({
+                  trading_mode: value,
+                  exchange_id: value === "live" ? "okx" : "",
+                  api_key: "",
+                  secret_key: "",
+                  passphrase: "",
+                  wallet_address: "",
+                  private_key: "",
+                });
+              },
+            }}
+            name="trading_mode"
+          >
+            {(field) => (
+              <field.RadioField
+                label={t("strategy.form.exchanges.transactionType")}
+              >
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="live" id="live" />
+                  <Label htmlFor="live" className="text-sm">
+                    {t("strategy.form.exchanges.liveTrading")}
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="virtual" id="virtual" />
+                  <Label htmlFor="virtual" className="text-sm">
+                    {t("strategy.form.exchanges.virtualTrading")}
+                  </Label>
+                </div>
+              </field.RadioField>
+            )}
+          </form.AppField>
+        )}
 
-        <form.Subscribe selector={(state) => state.values.trading_mode}>
-          {(tradingMode) => {
-            return (
-              tradingMode === "live" && (
-                <>
-                  <form.AppField name="exchange_id">
-                    {(field) => (
-                      <field.SelectField
-                        label={t("strategy.form.exchanges.selectExchange")}
-                      >
-                        {EXCHANGE_OPTIONS.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            <div className="flex items-center gap-2">
-                              <PngIcon
-                                src={
-                                  EXCHANGE_ICONS[
-                                    option.value as keyof typeof EXCHANGE_ICONS
-                                  ]
-                                }
-                              />
-                              {option.label}
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </field.SelectField>
-                    )}
-                  </form.AppField>
+        {!paperOnly && (
+          <form.Subscribe selector={(state) => state.values.trading_mode}>
+            {(tradingMode) => {
+              return (
+                tradingMode === "live" && (
+                  <>
+                    <form.AppField name="exchange_id">
+                      {(field) => (
+                        <field.SelectField
+                          label={t("strategy.form.exchanges.selectExchange")}
+                        >
+                          {EXCHANGE_OPTIONS.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              <div className="flex items-center gap-2">
+                                <PngIcon
+                                  src={
+                                    EXCHANGE_ICONS[
+                                      option.value as keyof typeof EXCHANGE_ICONS
+                                    ]
+                                  }
+                                />
+                                {option.label}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </field.SelectField>
+                      )}
+                    </form.AppField>
 
-                  <form.Subscribe
-                    selector={(state) => state.values.exchange_id}
-                  >
-                    {(exchangeId) => {
-                      return exchangeId === "hyperliquid" ? (
-                        <>
-                          <form.AppField name="wallet_address">
-                            {(field) => (
-                              <field.TextField
-                                label={t(
-                                  "strategy.form.exchanges.walletAddress",
-                                )}
-                                placeholder={getPlaceholder(
-                                  exchangeId || "",
-                                  "wallet_address",
-                                  t,
-                                )}
-                              />
-                            )}
-                          </form.AppField>
-                          <form.AppField name="private_key">
-                            {(field) => (
-                              <field.PasswordField
-                                label={t("strategy.form.exchanges.privateKey")}
-                                placeholder={getPlaceholder(
-                                  exchangeId || "",
-                                  "private_key",
-                                  t,
-                                )}
-                              />
-                            )}
-                          </form.AppField>
-                        </>
-                      ) : (
-                        <>
-                          <form.AppField name="api_key">
-                            {(field) => (
-                              <field.PasswordField
-                                label={t("strategy.form.exchanges.apiKey")}
-                                placeholder={getPlaceholder(
-                                  exchangeId || "",
-                                  "api_key",
-                                  t,
-                                )}
-                              />
-                            )}
-                          </form.AppField>
-                          <form.AppField name="secret_key">
-                            {(field) => (
-                              <field.PasswordField
-                                label={t("strategy.form.exchanges.secretKey")}
-                                placeholder={getPlaceholder(
-                                  exchangeId || "",
-                                  "secret_key",
-                                  t,
-                                )}
-                              />
-                            )}
-                          </form.AppField>
-
-                          {(exchangeId === "okx" ||
-                            exchangeId === "coinbaseexchange") && (
-                            <form.AppField name="passphrase">
+                    <form.Subscribe
+                      selector={(state) => state.values.exchange_id}
+                    >
+                      {(exchangeId) => {
+                        return exchangeId === "hyperliquid" ? (
+                          <>
+                            <form.AppField name="wallet_address">
                               {(field) => (
-                                <field.PasswordField
+                                <field.TextField
                                   label={t(
-                                    "strategy.form.exchanges.passphrase",
+                                    "strategy.form.exchanges.walletAddress",
                                   )}
                                   placeholder={getPlaceholder(
                                     exchangeId || "",
-                                    "passphrase",
+                                    "wallet_address",
                                     t,
                                   )}
                                 />
                               )}
                             </form.AppField>
-                          )}
-                        </>
-                      );
-                    }}
-                  </form.Subscribe>
+                            <form.AppField name="private_key">
+                              {(field) => (
+                                <field.PasswordField
+                                  label={t("strategy.form.exchanges.privateKey")}
+                                  placeholder={getPlaceholder(
+                                    exchangeId || "",
+                                    "private_key",
+                                    t,
+                                  )}
+                                />
+                              )}
+                            </form.AppField>
+                          </>
+                        ) : (
+                          <>
+                            <form.AppField name="api_key">
+                              {(field) => (
+                                <field.PasswordField
+                                  label={t("strategy.form.exchanges.apiKey")}
+                                  placeholder={getPlaceholder(
+                                    exchangeId || "",
+                                    "api_key",
+                                    t,
+                                  )}
+                                />
+                              )}
+                            </form.AppField>
+                            <form.AppField name="secret_key">
+                              {(field) => (
+                                <field.PasswordField
+                                  label={t("strategy.form.exchanges.secretKey")}
+                                  placeholder={getPlaceholder(
+                                    exchangeId || "",
+                                    "secret_key",
+                                    t,
+                                  )}
+                                />
+                              )}
+                            </form.AppField>
 
-                  <div className="-mt-2 flex flex-col gap-2">
-                    {testStatus && (
-                      <p
-                        className={`font-medium text-sm ${
-                          testStatus.success ? "text-green-600" : "text-red-600"
-                        }`}
-                      >
-                        {testStatus.message}
-                      </p>
-                    )}
-                    <Button
-                      variant="outline"
-                      className="w-full gap-2 py-4 font-medium text-base"
-                      onClick={handleTestConnection}
-                      disabled={isPending}
-                      type="button"
-                    >
-                      {isPending ? (
-                        <Spinner className="size-5 text-muted-foreground" />
-                      ) : (
-                        <Wallet className="size-5" />
+                            {(exchangeId === "okx" ||
+                              exchangeId === "coinbaseexchange") && (
+                              <form.AppField name="passphrase">
+                                {(field) => (
+                                  <field.PasswordField
+                                    label={t(
+                                      "strategy.form.exchanges.passphrase",
+                                    )}
+                                    placeholder={getPlaceholder(
+                                      exchangeId || "",
+                                      "passphrase",
+                                      t,
+                                    )}
+                                  />
+                                )}
+                              </form.AppField>
+                            )}
+                          </>
+                        );
+                      }}
+                    </form.Subscribe>
+
+                    <div className="-mt-2 flex flex-col gap-2">
+                      {testStatus && (
+                        <p
+                          className={`font-medium text-sm ${
+                            testStatus.success ? "text-green-600" : "text-red-600"
+                          }`}
+                        >
+                          {testStatus.message}
+                        </p>
                       )}
-                      {t("strategy.form.exchanges.testConnection")}
-                    </Button>
-                  </div>
-                </>
-              )
-            );
-          }}
-        </form.Subscribe>
+                      <Button
+                        variant="outline"
+                        className="w-full gap-2 py-4 font-medium text-base"
+                        onClick={handleTestConnection}
+                        disabled={isPending}
+                        type="button"
+                      >
+                        {isPending ? (
+                          <Spinner className="size-5 text-muted-foreground" />
+                        ) : (
+                          <Wallet className="size-5" />
+                        )}
+                        {t("strategy.form.exchanges.testConnection")}
+                      </Button>
+                    </div>
+                  </>
+                )
+              );
+            }}
+          </form.Subscribe>
+        )}
       </FieldGroup>
     );
   },
