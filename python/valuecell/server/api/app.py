@@ -33,7 +33,6 @@ from .routers.tenant_credential import create_tenant_credential_router
 from .routers.sandbox_exchange import create_sandbox_exchange_router
 from .routers.live_execution import create_live_execution_router
 from .routers.rule_strategy import create_rule_strategy_router
-from ..services.strategy_scheduler import StrategyScheduler
 from ..services.crypto_market_service import get_crypto_market_service
 from .routers.system import create_system_router
 from .routers.task import create_task_router
@@ -105,16 +104,20 @@ def create_app() -> FastAPI:
             f"ValueCell Server starting up on {settings.API_HOST}:{settings.API_PORT}..."
         )
 
-        # Initialize database tables
-        try:
-            logger.info("Initializing database tables...")
-            success = init_database(force=False)
-            if success:
-                logger.info("✓ Database initialized")
-            else:
-                logger.info("✗ Database initialization reported failure")
-        except Exception as e:
-            logger.info(f"✗ Database initialization error: {e}")
+        # Initialize database tables unless quant-only mode is enabled. Legacy
+        # conversation/task tables are intentionally excluded from quant-only deployments.
+        if settings.QUANT_ONLY_MODE:
+            logger.info("Skipping database initialization in quant-only mode")
+        else:
+            try:
+                logger.info("Initializing database tables...")
+                success = init_database(force=False)
+                if success:
+                    logger.info("✓ Database initialized")
+                else:
+                    logger.info("✗ Database initialization reported failure")
+            except Exception as e:
+                logger.info(f"✗ Database initialization error: {e}")
 
         # Initialize and configure adapters
         try:
@@ -156,11 +159,13 @@ def create_app() -> FastAPI:
                 await asyncio.sleep(settings.MARKET_REFRESH_S)
 
         market_refresh_task = asyncio.create_task(_refresh_default_market_snapshot())
-        _scheduler = StrategyScheduler()
+        _scheduler = None
         try:
             from apscheduler.triggers.interval import IntervalTrigger
             from ..db.connection import get_database_manager
+            from ..services.strategy_scheduler import StrategyScheduler
 
+            _scheduler = StrategyScheduler()
             await _scheduler.start()
 
             def _sync_job() -> None:
@@ -186,7 +191,8 @@ def create_app() -> FastAPI:
         yield
         # Shutdown
         logger.info("ValueCell Server shutting down...")
-        await _scheduler.stop()
+        if _scheduler is not None:
+            await _scheduler.stop()
         market_refresh_task.cancel()
         try:
             await market_refresh_task
@@ -264,11 +270,18 @@ def _add_routes(app: FastAPI, settings) -> None:
     app.include_router(create_system_router(), prefix=API_PREFIX)
 
     app.include_router(create_saas_auth_router(), prefix=API_PREFIX)
-    # Include models router
     app.include_router(create_tenant_credential_router(), prefix=API_PREFIX)
     app.include_router(create_sandbox_exchange_router(), prefix=API_PREFIX)
     app.include_router(create_live_execution_router(), prefix=API_PREFIX)
-    app.include_router(create_models_router(), prefix=API_PREFIX)
+
+    # Quant-only deployments should not expose AI agent, conversation,
+    # task, or LLM provider management APIs.
+    if not settings.QUANT_ONLY_MODE:
+        app.include_router(create_models_router(), prefix=API_PREFIX)
+        app.include_router(create_conversation_router(), prefix=API_PREFIX)
+        app.include_router(create_agent_stream_router(), prefix=API_PREFIX)
+        app.include_router(create_agent_router(), prefix=API_PREFIX)
+        app.include_router(create_task_router(), prefix=API_PREFIX)
 
     # Include watchlist router
     app.include_router(create_watchlist_router(), prefix=API_PREFIX)
@@ -277,25 +290,17 @@ def _add_routes(app: FastAPI, settings) -> None:
     app.include_router(create_crypto_market_router(), prefix=API_PREFIX)
     app.include_router(create_prediction_market_router(), prefix=API_PREFIX)
 
-    # Include conversation router
-    app.include_router(create_conversation_router(), prefix=API_PREFIX)
-
     # Include user profile router
     app.include_router(create_user_profile_router(), prefix=API_PREFIX)
 
-    # Include agent stream router
-    app.include_router(create_agent_stream_router(), prefix=API_PREFIX)
-
-    # Include aggregated strategy API router (strategies + strategy agent)
-    app.include_router(create_strategy_api_router(), prefix=API_PREFIX)
+    # Include aggregated strategy API router. In quant-only mode this excludes
+    # StrategyAgent/prompt endpoints and leaves deterministic quant APIs only.
+    app.include_router(
+        create_strategy_api_router(quant_only_mode=settings.QUANT_ONLY_MODE),
+        prefix=API_PREFIX,
+    )
     # Include standalone deterministic paper rule strategy API.
     app.include_router(create_rule_strategy_router(), prefix=API_PREFIX)
-
-    # Include agent router
-    app.include_router(create_agent_router(), prefix=API_PREFIX)
-
-    # Include task router
-    app.include_router(create_task_router(), prefix=API_PREFIX)
 
 
 # For uvicorn
