@@ -11,9 +11,29 @@
 !python/configs/
 !python/configs/**
 
+# Frontend build inputs.
+!frontend/
+!frontend/package.json
+!frontend/bun.lock
+!frontend/*.json
+!frontend/*.ts
+!frontend/*.tsx
+!frontend/*.js
+!frontend/*.cjs
+!frontend/*.mjs
+!frontend/src/
+!frontend/src/**
+!frontend/public/
+!frontend/public/**
+!frontend/scripts/
+!frontend/scripts/**
+
 # Docker build instructions.
 !docker/
 !docker/DockerFile
+!docker/frontend.Dockerfile
+!docker/frontend-nginx.conf
+!docker-compose.local.yml
 !.dockerignore
 
 # Never send credentials, runtime environment files, local databases, or logs.

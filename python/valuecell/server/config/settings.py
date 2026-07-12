@@ -183,6 +183,9 @@ class Settings:
         self.API_HOST = os.getenv("API_HOST", "0.0.0.0")
         self.API_PORT = int(os.getenv("API_PORT", "8000"))
         self.API_DEBUG = os.getenv("API_DEBUG", "false").lower() == "true"
+        self.QUANT_ONLY_MODE = (
+            os.getenv("VALUECELL_QUANT_ONLY_MODE", "false").lower() == "true"
+        )
 
         # CORS Configuration
         cors_origins = os.getenv("CORS_ORIGINS", "*")

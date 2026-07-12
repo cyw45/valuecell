@@ -1,7 +1,5 @@
 import {
   index,
-  layout,
-  prefix,
   type RouteConfig,
   route,
 } from "@react-router/dev/routes";
@@ -20,25 +18,7 @@ export default [
   route("/settings/sandbox-exchanges", "app/settings/sandbox-exchanges.tsx"),
   route("/settings/live-execution", "app/settings/live-execution.tsx"),
 
-  // Legacy routes remain reachable but are intentionally excluded from primary navigation.
-  ...prefix("/home", [
-    layout("app/home/_layout.tsx", [
-      index("app/home/home.tsx"),
-      route("/stock/:stockId", "app/home/stock.tsx"),
-    ]),
-  ]),
-  route("/market", "app/market/agents.tsx"),
+  // Quant-focused routes. Legacy AI Agent/LLM setup pages are intentionally
+  // not exposed in the deployed SaaS workspace.
   route("/research/polymarket", "app/research/polymarket.tsx"),
-  ...prefix("/agent", [
-    route("/:agentName", "app/agent/chat.tsx"),
-    route("/:agentName/config", "app/agent/config.tsx"),
-  ]),
-  ...prefix("/setting", [
-    layout("app/setting/_layout.tsx", [
-      index("app/setting/models.tsx"),
-      route("/general", "app/setting/general.tsx"),
-      route("/memory", "app/setting/memory.tsx"),
-    ]),
-  ]),
-  route("/test", "app/test.tsx"),
 ] satisfies RouteConfig;

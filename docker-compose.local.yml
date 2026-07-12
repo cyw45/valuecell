@@ -1,0 +1,40 @@
+services:
+  backend:
+    container_name: valuecell-backend
+    build:
+      context: .
+      dockerfile: docker/DockerFile
+      args:
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    image: valuecell-local-backend:latest
+    env_file:
+      - ./docker/runtime/.env
+    environment:
+      APP_ENVIRONMENT: development
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_DEBUG: "false"
+      CORS_ORIGINS: "*"
+      ENV: local_dev
+      PYTHONIOENCODING: utf-8
+      VALUECELL_QUANT_ONLY_MODE: "true"
+    command: >
+      sh -c "cd /app/python &&
+      exec /app/python/.venv/bin/python -m uvicorn valuecell.server.main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./python/valuecell:/app/python/valuecell:ro
+    ports:
+      - "127.0.0.1:${VALUECELL_BACKEND_PORT:-18000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    container_name: valuecell-frontend
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+    volumes:
+      - ./docker/frontend-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend/build/client:/usr/share/nginx/html:ro
+    ports:
+      - "127.0.0.1:${VALUECELL_FRONTEND_PORT:-18080}:80"
+    restart: unless-stopped
