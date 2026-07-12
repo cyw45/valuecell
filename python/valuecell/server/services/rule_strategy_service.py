@@ -7,7 +7,12 @@ from uuid import uuid4
 
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyConfig,
+    RuleStrategyEngineMarketSnapshot,
     RuleStrategyEvaluationRequest,
+    RuleStrategyMarketSnapshot,
+    RuleStrategyPaperAccount,
+    RuleStrategyPaperPosition,
+    RuleStrategyPosition,
 )
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
@@ -47,6 +52,7 @@ class RuleStrategyService:
     ) -> dict[str, Any]:
         strategy = self.repository.create(
             RuleStrategy(
+                strategy_id=f"rule_{uuid4().hex}",
                 tenant_id=tenant_id,
                 name=name,
                 description=description,
@@ -93,7 +99,7 @@ class RuleStrategyService:
         strategy_id: str,
         tenant_id: str,
         candles: list[Any],
-        market: Any,
+        market: RuleStrategyMarketSnapshot,
     ) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
         if strategy.status != "running":
@@ -101,13 +107,18 @@ class RuleStrategyService:
                 "Rule strategy must be running before evaluation"
             )
 
+        config = RuleStrategyConfig.model_validate(strategy.config)
+        account_before = self._account_from_history(strategy, tenant_id, config)
+        engine_market = self._engine_market(account_before, market, config.risk.leverage)
         request = RuleStrategyEvaluationRequest(
-            config=RuleStrategyConfig.model_validate(strategy.config),
+            config=config,
             candles=candles,
-            market=market,
+            market=engine_market,
         )
         result = self.engine.evaluate(request)
+        account_after, fill = self._apply_result(account_before, market, result.model_dump())
         result_data = result.model_dump(mode="json")
+        result_data["account"] = account_after.model_dump(mode="json")
         journal = self.repository.append_evaluation(
             RuleStrategyEvaluationJournal(
                 evaluation_id=f"evaluation_{uuid4().hex}",
@@ -117,7 +128,7 @@ class RuleStrategyService:
                 signals=[
                     condition.model_dump(mode="json") for condition in result.conditions
                 ],
-                trades=self._trade_entries(result_data),
+                trades=self._trade_entries(result_data, fill),
                 funding=[result.funding.model_dump(mode="json")],
             )
         )
@@ -127,6 +138,110 @@ class RuleStrategyService:
             "config": strategy.config,
             **result_data,
         }
+
+    def account(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
+        strategy = self._require_strategy(strategy_id, tenant_id)
+        config = RuleStrategyConfig.model_validate(strategy.config)
+        return self._account_from_history(strategy, tenant_id, config).model_dump(mode="json")
+
+    def _account_from_history(
+        self, strategy: RuleStrategy, tenant_id: str, config: RuleStrategyConfig
+    ) -> RuleStrategyPaperAccount:
+        journals = self.repository.get_evaluations(strategy.strategy_id, tenant_id, limit=1)
+        if journals:
+            raw_account = (journals[0].result or {}).get("account")
+            if raw_account is not None:
+                return RuleStrategyPaperAccount.model_validate(raw_account)
+        return RuleStrategyPaperAccount(
+            initial_capital_quote=config.initial_capital_quote,
+            quote_balance=config.initial_capital_quote,
+            equity_quote=config.initial_capital_quote,
+        )
+
+    @staticmethod
+    def _engine_market(
+        account: RuleStrategyPaperAccount,
+        market: RuleStrategyMarketSnapshot,
+        leverage: float,
+    ) -> RuleStrategyEngineMarketSnapshot:
+        position = account.positions.get(market.symbol)
+        marked_positions = {
+            symbol: item.model_copy(update={"mark_price": market.price})
+            if symbol == market.symbol
+            else item
+            for symbol, item in account.positions.items()
+        }
+        unrealized = sum(
+            item.quantity * (item.mark_price - item.entry_price)
+            for item in marked_positions.values()
+        )
+        equity = account.quote_balance + sum(
+            item.quantity * item.mark_price for item in marked_positions.values()
+        )
+        return RuleStrategyEngineMarketSnapshot(
+            symbol=market.symbol,
+            price=market.price,
+            funding_rate=market.funding_rate,
+            equity_quote=equity,
+            # The spot paper ledger never borrows. This keeps a leverage setting
+            # from creating an unaudited negative cash balance.
+            quote_balance=account.quote_balance / leverage,
+            open_position_count=len(marked_positions),
+            position=RuleStrategyPosition(
+                quantity=position.quantity if position else 0.0,
+                entry_price=position.entry_price if position else None,
+            ),
+        )
+
+    @staticmethod
+    def _apply_result(
+        account: RuleStrategyPaperAccount,
+        market: RuleStrategyMarketSnapshot,
+        result: dict[str, Any],
+    ) -> tuple[RuleStrategyPaperAccount, dict[str, Any] | None]:
+        positions = dict(account.positions)
+        realized = account.realized_pnl_quote
+        fill: dict[str, Any] | None = None
+        existing = positions.get(market.symbol)
+
+        if result["action"] == "buy":
+            quote_amount = min(float(result["sizing"]["requested_quote"]), account.quote_balance)
+            quantity = quote_amount / market.price
+            if quote_amount > 0 and existing is None:
+                positions[market.symbol] = RuleStrategyPaperPosition(
+                    quantity=quantity, entry_price=market.price, mark_price=market.price
+                )
+                fill = {"symbol": market.symbol, "price": market.price, "quantity": quantity,
+                        "quote_amount": quote_amount, "realized_pnl_quote": 0.0}
+                quote_balance = account.quote_balance - quote_amount
+            else:
+                quote_balance = account.quote_balance
+        elif result["action"] == "sell" and existing is not None:
+            quote_amount = existing.quantity * market.price
+            realized_trade = existing.quantity * (market.price - existing.entry_price)
+            realized += realized_trade
+            positions.pop(market.symbol)
+            quote_balance = account.quote_balance + quote_amount
+            fill = {"symbol": market.symbol, "price": market.price, "quantity": existing.quantity,
+                    "quote_amount": quote_amount, "realized_pnl_quote": realized_trade}
+        else:
+            quote_balance = account.quote_balance
+
+        positions = {
+            symbol: item.model_copy(update={"mark_price": market.price})
+            if symbol == market.symbol else item
+            for symbol, item in positions.items()
+        }
+        unrealized = sum(item.quantity * (item.mark_price - item.entry_price) for item in positions.values())
+        equity = quote_balance + sum(item.quantity * item.mark_price for item in positions.values())
+        return RuleStrategyPaperAccount(
+            initial_capital_quote=account.initial_capital_quote,
+            quote_balance=quote_balance,
+            positions=positions,
+            realized_pnl_quote=realized,
+            unrealized_pnl_quote=unrealized,
+            equity_quote=equity,
+        ), fill
 
     def logs(
         self, strategy_id: str, tenant_id: str, log_type: str, limit: int
@@ -162,8 +277,8 @@ class RuleStrategyService:
             )
         return strategy
 
-    @staticmethod
-    def _strategy_data(strategy: RuleStrategy) -> dict[str, Any]:
+    def _strategy_data(self, strategy: RuleStrategy) -> dict[str, Any]:
+        config = RuleStrategyConfig.model_validate(strategy.config)
         return {
             "strategy_id": strategy.strategy_id,
             "name": strategy.name,
@@ -171,13 +286,18 @@ class RuleStrategyService:
             "status": strategy.status,
             "mode": "paper",
             "config": strategy.config,
+            "account": self._account_from_history(strategy, strategy.tenant_id, config).model_dump(
+                mode="json"
+            ),
             "created_at": strategy.created_at,
             "updated_at": strategy.updated_at,
         }
 
     @staticmethod
-    def _trade_entries(result: dict[str, Any]) -> list[dict[str, Any]]:
-        if result["action"] == "no_op":
+    def _trade_entries(
+        result: dict[str, Any], fill: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
+        if fill is None:
             return []
         return [
             {
@@ -185,6 +305,7 @@ class RuleStrategyService:
                 "reason_code": result["reason_code"],
                 "reason": result["reason"],
                 "sizing": result["sizing"],
-                "execution": "not_submitted",
+                "execution": "paper_filled",
+                **fill,
             }
         ]

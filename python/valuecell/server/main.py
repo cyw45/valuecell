@@ -67,16 +67,10 @@ def main() -> None:
         server.should_exit = True
         logger.info("Shutdown signal propagated to uvicorn")
 
-    # In local development / IDE debug mode (ENV=local_dev) the interactive
-    # stdin wrapper (e.g. PyCharm debug) can cause attribute errors when
-    # iterating over `sys.stdin`. Skip creating the control thread in that
-    # environment to avoid crashing the background thread.
-    if os.getenv("ENV") == "local_dev":
-        logger.info(
-            "ENV=local_dev detected: skipping stdin control thread (IDE debug mode)"
-        )
-        control_thread = None
-    else:
+    # Containers, systemd and background shells commonly provide a closed stdin.
+    # Listening by default would immediately stop a healthy API process. The
+    # legacy control channel is therefore opt-in only.
+    if os.getenv("VALUECELL_STDIN_CONTROL", "false").lower() == "true":
         control_thread = threading.Thread(
             target=control_loop,
             name="stdin-control",
@@ -84,6 +78,8 @@ def main() -> None:
             daemon=True,
         )
         control_thread.start()
+    else:
+        control_thread = None
 
     try:
         server.run()

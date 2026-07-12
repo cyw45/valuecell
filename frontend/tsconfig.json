@@ -43,6 +43,10 @@
     "src",
     ".react-router/types/**/*"
   ],
+  "exclude": [
+    "src/app/agent/**",
+    "src/app/home/**"
+  ],
   "references": [
     {
       "path": "./tsconfig.node.json"

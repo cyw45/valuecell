@@ -6,7 +6,7 @@ from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .schemas import ErrorResponse, StatusCode
+from .schemas.base import ErrorResponse, StatusCode
 
 
 class APIException(Exception):

@@ -23,11 +23,22 @@ export interface RuleStrategyPosition {
 export interface RuleStrategyMarketSnapshot {
   symbol: string;
   price: number;
-  equity_quote: number;
-  quote_balance: number;
-  open_position_count?: number;
   funding_rate?: number;
-  position?: RuleStrategyPosition;
+}
+
+export interface RuleStrategyPaperPosition {
+  quantity: number;
+  entry_price: number;
+  mark_price: number;
+}
+
+export interface RuleStrategyPaperAccount {
+  initial_capital_quote: number;
+  quote_balance: number;
+  positions: Record<string, RuleStrategyPaperPosition>;
+  realized_pnl_quote: number;
+  unrealized_pnl_quote: number;
+  equity_quote: number;
 }
 
 export interface MovingAverageRuleConfig {
@@ -70,6 +81,7 @@ export type RuleStrategyInterval = "5m" | "15m" | "1h" | "4h" | "1d";
 
 export interface RuleStrategyConfig {
   mode: "paper";
+  initial_capital_quote: number;
   confirmation_mode: "all" | "any";
   symbols: string[];
   interval: RuleStrategyInterval;
@@ -88,6 +100,7 @@ export interface RuleStrategy {
   status: RuleStrategyStatus;
   mode: "paper";
   config: RuleStrategyConfig;
+  account: RuleStrategyPaperAccount;
   created_at?: string;
   updated_at?: string;
 }
@@ -143,6 +156,7 @@ export interface RuleStrategyEvaluation {
   indicators: RuleStrategyIndicators;
   sizing: RuleStrategySizing;
   funding: RuleStrategyFundingImpact;
+  account: RuleStrategyPaperAccount;
 }
 
 export interface RuleStrategyLogEntry extends RuleStrategyCondition {
@@ -157,7 +171,12 @@ export interface RuleStrategyTradeLogEntry {
   reason_code: string;
   reason: string;
   sizing: RuleStrategySizing;
-  execution: "not_submitted";
+  execution: "paper_filled";
+  symbol: string;
+  price: number;
+  quantity: number;
+  quote_amount: number;
+  realized_pnl_quote: number;
 }
 
 export interface RuleStrategyFundingLogEntry extends RuleStrategyFundingImpact {
@@ -174,6 +193,7 @@ export interface RuleStrategyLog<T> {
 export interface CreateRuleStrategyRequest {
   name: string;
   description?: string;
+  initial_capital_quote: number;
   config: RuleStrategyConfig;
 }
 

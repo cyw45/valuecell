@@ -589,7 +589,11 @@
         "triggered": "已触发",
         "blocked": "已阻止",
         "unavailable": "不可用"
-      }
+      },
+      "marketChart": "Gate 市场图表",
+      "marketSource": "由 Gate 数据提供方 K 线及计算均线驱动。",
+      "latestPrice": "最新价格：{{price}}",
+      "marketUnavailable": "数据提供方暂无法提供市场数据，未显示图表。"
     },
     "charts": {
       "researchChart": "研究图表",
@@ -597,7 +601,7 @@
       "title": "图表",
       "subtitle": "探索参考市场数据。图表控件不会下单或连接执行账户。",
       "marketChart": "市场图表",
-      "poweredByTradingView": "由 TradingView 市场数据驱动。",
+      "poweredByTradingView": "TradingView 仅作为外部参考。",
       "symbols": {
         "bitcoin": "比特币 / 美元",
         "ether": "以太坊 / 美元",
@@ -611,7 +615,10 @@
       },
       "researchContext": "研究背景",
       "researchContextDescription": "使用图表观察结果来辅助规则策略。在后端集成完成前，绩效和执行功能仍不可用。",
-      "openTradingView": "打开 TradingView"
+      "openTradingView": "打开 TradingView",
+      "marketSource": "由 Gate 数据提供方 K 线及计算均线驱动。",
+      "latestPrice": "最新价格：{{price}}",
+      "marketUnavailable": "数据提供方暂无法提供市场数据，未显示图表。"
     },
     "chart": {
       "pnl": "盈亏"

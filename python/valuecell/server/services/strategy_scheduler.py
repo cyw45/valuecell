@@ -133,7 +133,7 @@ class StrategyScheduler:
         symbols = config.symbols
         interval = config.interval
         lookback = 100
-        account_balance = float(config_dict.get("risk", {}).get("initial_capital", 10_000.0))
+        account_balance = config.initial_capital_quote
 
         if not symbols:
             logger.warning(
@@ -142,19 +142,43 @@ class StrategyScheduler:
             )
             return
 
-        try:
-            market_data = await get_crypto_market_service().get_indicators(
-                symbols=symbols,
-                interval=interval,
-                lookback=lookback,
+        market_service = get_crypto_market_service()
+        snapshot = market_service.get_default_snapshot()
+        if (
+            snapshot is not None
+            and snapshot.data.interval == interval
+        ):
+            by_symbol = {item.symbol: item for item in snapshot.data.symbols}
+            market_data = type(snapshot.data)(
+                interval=snapshot.data.interval,
+                lookback=min(lookback, snapshot.data.lookback),
+                providers=snapshot.data.providers,
+                symbols=[
+                    item.model_copy(update={"candles": item.candles[-lookback:]})
+                    for symbol in symbols
+                    if (item := by_symbol.get(symbol)) is not None
+                ],
+                failed_symbols={
+                    symbol: "market snapshot unavailable"
+                    for symbol in symbols
+                    if symbol not in by_symbol
+                },
+                snapshot_fetched_at=snapshot.fetched_at.isoformat(),
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "StrategyScheduler OHLCV fetch failed strategy_id={} err={}",
-                strategy_id,
-                exc,
-            )
-            return
+        else:
+            try:
+                market_data = await market_service.get_indicators(
+                    symbols=symbols,
+                    interval=interval,
+                    lookback=lookback,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "StrategyScheduler OHLCV fetch failed strategy_id={} err={}",
+                    strategy_id,
+                    exc,
+                )
+                return
 
         service = RuleStrategyService()
 
@@ -183,11 +207,7 @@ class StrategyScheduler:
                 market_snapshot = RuleStrategyMarketSnapshot(
                     symbol=symbol_result.symbol,
                     price=latest_price,
-                    equity_quote=account_balance,
-                    quote_balance=account_balance,
-                    open_position_count=0,
                     funding_rate=0.0,
-                    position=RuleStrategyPosition(),
                 )
 
                 result = service.evaluate(
@@ -200,21 +220,8 @@ class StrategyScheduler:
                     result.get("action"),
                     result.get("evaluation_id"),
                 )
-                if result.get("action") in {"buy", "sell"}:
-                    execution = await self._execute_live_signal(
-                        tenant_id=tenant_id,
-                        strategy_id=strategy_id,
-                        symbol=symbol_result.symbol,
-                        action=result["action"],
-                        quote_amount=Decimal(str(result["sizing"]["requested_quote"])),
-                        price=Decimal(str(latest_price)),
-                        candle_timestamp_ms=candles[-1].timestamp_ms,
-                        evaluation_id=result["evaluation_id"],
-                    )
-                    logger.info(
-                        "StrategyScheduler execution strategy_id={} symbol={} execution={}",
-                        strategy_id, symbol_result.symbol, execution["execution"],
-                    )
+                # RuleStrategyService applies paper fills to its server-owned
+                # account. No exchange execution is allowed on this scheduler path.
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "StrategyScheduler tick error strategy_id={} symbol={} err={}",

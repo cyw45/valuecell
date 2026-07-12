@@ -39,9 +39,16 @@ export interface CandlestickData {
   close: number;
   volume: number;
 }
+export interface CandlestickMovingAverage {
+  name: string;
+  values: Array<number | null>;
+  color?: string;
+}
+
 
 interface CandlestickChartProps {
   data: CandlestickData[];
+  movingAverages?: CandlestickMovingAverage[];
   width?: number | string;
   height?: number | string;
   className?: string;
@@ -52,6 +59,7 @@ interface CandlestickChartProps {
 
 function CandlestickChart({
   data,
+  movingAverages = [],
   width = "100%",
   height = 500,
   className,
@@ -98,6 +106,16 @@ function CandlestickChart({
         },
       },
     ];
+    for (const movingAverage of movingAverages) {
+      series.push({
+        name: movingAverage.name,
+        type: "line",
+        data: movingAverage.values,
+        showSymbol: false,
+        smooth: true,
+        lineStyle: { width: 1.5, color: movingAverage.color },
+      });
+    }
 
     if (showVolume) {
       series.push({
@@ -210,7 +228,7 @@ function CandlestickChart({
       ],
       series,
     };
-  }, [data, stockColors, showVolume, dateFormat]);
+  }, [data, movingAverages, stockColors, showVolume, dateFormat]);
 
   useChartResize(chartInstance);
 

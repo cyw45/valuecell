@@ -74,6 +74,7 @@ type StrategyFormValues = {
   macdFast: number;
   macdSlow: number;
   macdSignal: number;
+  initialCapital: number;
   positionSize: number;
   takeProfit: number;
   stopLoss: number;
@@ -97,6 +98,7 @@ const initialValues: StrategyFormValues = {
   macdFast: 12,
   macdSlow: 26,
   macdSignal: 9,
+  initialCapital: 10_000,
   positionSize: 5,
   takeProfit: 4,
   stopLoss: 2,
@@ -217,6 +219,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 function toRuleStrategyConfig(values: StrategyFormValues): RuleStrategyConfig {
   return {
     mode: "paper",
+    initial_capital_quote: values.initialCapital,
     confirmation_mode: "all",
     symbols: values.symbols.map((symbol) => symbol.replace("/", "-")),
     interval: values.timeframe,
@@ -266,10 +269,9 @@ export default function Strategies() {
 
   useEffect(() => {
     if (!strategyQuery.data) return;
-    setName(strategyQuery.data.name);
-    setDescription(strategyQuery.data.description ?? "");
     setValues((current) => ({
       ...current,
+      initialCapital: strategyQuery.data.config.initial_capital_quote,
       symbols: strategyQuery.data.config.symbols?.map((symbol) => symbol.replace("-", "/")) ?? initialValues.symbols,
       timeframe: strategyQuery.data.config.interval ?? initialValues.timeframe,
     }));
@@ -299,6 +301,7 @@ export default function Strategies() {
     if (values.takeProfit <= 0 || values.takeProfit > 100) next.takeProfit = t("saas.operations.strategy.errors.percentRange", { min: 0.1, max: 100 });
     if (values.stopLoss <= 0 || values.stopLoss >= values.takeProfit) next.stopLoss = t("saas.operations.strategy.errors.positiveBelowTakeProfit");
     if (!Number.isInteger(values.maximumPositions) || values.maximumPositions < 1 || values.maximumPositions > 10) next.maximumPositions = t("saas.operations.strategy.errors.wholeNumber", { min: 1, max: 10 });
+    if (!Number.isFinite(values.initialCapital) || values.initialCapital <= 0 || values.initialCapital > 100_000_000) next.initialCapital = "Enter a paper capital amount between 1 and 100,000,000 USDT.";
     if (values.leverage < 1 || values.leverage > 5) next.leverage = t("saas.operations.strategy.errors.leverageRange");
     return next;
   }, [t, values]);
@@ -321,9 +324,18 @@ export default function Strategies() {
 
   const saveStrategy = async () => {
     if (!isValid) return;
-    const request = { name: name.trim() || t("saas.operations.strategy.defaultName"), description: description.trim() || undefined, config: toRuleStrategyConfig(values) };
+    const request = {
+      name: name.trim() || t("saas.operations.strategy.defaultName"),
+      description: description.trim() || undefined,
+      config: toRuleStrategyConfig(values),
+    };
     try {
-      const response = strategyId ? await updateStrategy.mutateAsync(request) : await createStrategy.mutateAsync(request);
+      const response = strategyId
+        ? await updateStrategy.mutateAsync(request)
+        : await createStrategy.mutateAsync({
+            ...request,
+            initial_capital_quote: values.initialCapital,
+          });
       const saved = response.data;
       setStrategyId(saved.strategy_id);
       localStorage.setItem("valuecell.rule-strategy-id", saved.strategy_id);
@@ -332,7 +344,9 @@ export default function Strategies() {
       }
       toast.success(t("saas.operations.strategy.toasts.saved"));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("saas.operations.strategy.toasts.operationFailed"));
+      toast.error(
+        err instanceof Error ? err.message : t("saas.operations.strategy.toasts.operationFailed"),
+      );
     }
   };
 
@@ -465,6 +479,7 @@ export default function Strategies() {
           <Card className="gap-0 rounded-lg py-0 shadow-none">
             <RuleHeading icon={SlidersHorizontal} title={t("saas.operations.strategy.sections.riskLimits.title")} description={t("saas.operations.strategy.sections.riskLimits.description")} />
             <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 lg:grid-cols-3 sm:px-5">
+              <NumericField error={errors.initialCapital} id="initial-capital" label="Initial paper capital" min={1} max={100_000_000} onChange={(value) => update("initialCapital", value)} step={100} unit="USDT" value={values.initialCapital} />
               <NumericField error={errors.positionSize} id="position-size" label={t("saas.operations.strategy.fields.positionSize")} max={25} min={0.1} onChange={(value) => update("positionSize", value)} step={0.1} unit="%" value={values.positionSize} />
               <NumericField error={errors.takeProfit} id="take-profit" label={t("saas.operations.strategy.fields.takeProfit")} max={100} min={0.1} onChange={(value) => update("takeProfit", value)} step={0.1} unit="%" value={values.takeProfit} />
               <NumericField error={errors.stopLoss} id="stop-loss" label={t("saas.operations.strategy.fields.stopLoss")} max={99.9} min={0.1} onChange={(value) => update("stopLoss", value)} step={0.1} unit="%" value={values.stopLoss} />
@@ -485,6 +500,7 @@ export default function Strategies() {
               <SummaryRow label={t("saas.operations.strategy.summary.timeframe")} value={values.timeframe} />
               <SummaryRow label={t("saas.operations.strategy.summary.entry")} value={t("saas.operations.strategy.summary.entryValue", { fast: values.fastMa, slow: values.slowMa })} />
               <SummaryRow label={t("saas.operations.strategy.summary.confirmations")} value={activeFilters.join(" | ") || t("saas.operations.strategy.summary.none")} />
+              <SummaryRow label="Initial paper capital" value={`${values.initialCapital.toLocaleString()} USDT`} />
               <SummaryRow label={t("saas.operations.strategy.summary.positionSize")} value={t("saas.operations.strategy.summary.positionSizeValue", { value: values.positionSize })} />
               <SummaryRow label={t("saas.operations.strategy.summary.exitLimits")} value={t("saas.operations.strategy.summary.exitLimitsValue", { takeProfit: values.takeProfit, stopLoss: values.stopLoss })} />
               <SummaryRow label={t("saas.operations.strategy.summary.exposureCap")} value={t("saas.operations.strategy.summary.exposureCapValue", { positions: values.maximumPositions, leverage: values.leverage })} />
@@ -515,10 +531,24 @@ export default function Strategies() {
               </Alert>
             </CardContent>
           </Card>
+          {storedStrategy ? (
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <CardHeader className="border-b px-4 py-4">
+                <CardTitle className="text-base">Paper account</CardTitle>
+                <CardDescription>Server-recorded paper balance and marked equity.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-4 text-sm">
+                <SummaryRow label="Cash" value={`${storedStrategy.account.quote_balance.toFixed(2)} USDT`} />
+                <SummaryRow label="Equity" value={`${storedStrategy.account.equity_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="Realized PnL" value={`${storedStrategy.account.realized_pnl_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="Unrealized PnL" value={`${storedStrategy.account.unrealized_pnl_quote.toFixed(2)} USDT`} />
+              </CardContent>
+            </Card>
+          ) : null}
 
           <Card className="gap-0 rounded-lg py-0 shadow-none">
             <CardHeader className="border-b px-4 py-4"><CardTitle className="text-base">{t("saas.operations.strategy.evaluate.title")}</CardTitle><CardDescription>{t("saas.operations.strategy.evaluate.description")}</CardDescription></CardHeader>
-            <CardContent className="grid gap-3 px-4 py-4"><Textarea className="min-h-40 font-mono text-xs" onChange={(event) => setEvaluationInput(event.target.value)} placeholder={'{"candles":[{"timestamp_ms":...,"open":...,"high":...,"low":...,"close":...,"volume":...}],"market":{"symbol":"...","price":...,"equity_quote":...,"quote_balance":...}}'} value={evaluationInput} /><Button disabled={!strategyId || storedStrategy?.status !== "running" || isPending} onClick={runEvaluation} type="button" variant="outline"><Percent /> {t("saas.operations.strategy.actions.runEvaluation")}</Button></CardContent>
+            <CardContent className="grid gap-3 px-4 py-4"><Textarea className="min-h-40 font-mono text-xs" onChange={(event) => setEvaluationInput(event.target.value)} placeholder={'{"candles":[{"timestamp_ms":...,"open":...,"high":...,"low":...,"close":...,"volume":...}],"market":{"symbol":"BTC-USDT","price":...}}'} value={evaluationInput} /><Button disabled={!strategyId || storedStrategy?.status !== "running" || isPending} onClick={runEvaluation} type="button" variant="outline"><Percent /> {t("saas.operations.strategy.actions.runEvaluation")}</Button></CardContent>
           </Card>
 
           {evaluation ? <Card className="gap-0 rounded-lg py-0 shadow-none"><CardHeader className="border-b px-4 py-4"><CardTitle className="flex items-center gap-2 text-base">{t("saas.operations.strategy.evaluation.title")} <Badge className="capitalize" variant="outline">{evaluation.action.replace("_", " ")}</Badge></CardTitle><CardDescription>{evaluation.reason}</CardDescription></CardHeader><CardContent className="grid gap-4 px-4 py-4"><div className="grid gap-2">{evaluation.conditions.map((condition) => <div className="rounded-md border p-3" key={condition.code}><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-medium text-sm">{condition.code}</span><Badge className={conditionBadgeClass(condition.state)} variant="outline">{condition.state.replace("_", " ")}</Badge></div><p className="mt-1 text-muted-foreground text-xs">{condition.detail}</p></div>)}</div><div className="rounded-md bg-muted/50 p-3 text-sm"><p className="font-medium">{t("saas.operations.strategy.evaluation.fundingImpact")}</p><p className="mt-1 text-muted-foreground">{t("saas.operations.strategy.evaluation.fundingSummary", { direction: evaluation.funding.direction, payment: evaluation.funding.estimated_payment_quote.toFixed(4), rate: (evaluation.funding.funding_rate * 100).toFixed(4) })}</p></div></CardContent></Card> : null}

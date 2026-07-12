@@ -5,6 +5,7 @@ import pytest
 
 from valuecell.server.api.schemas.crypto_market import CryptoCandleData
 from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
+from valuecell.server.config.settings import get_settings
 from valuecell.server.services.crypto_market_service import (
     CandleFetchResult,
     CryptoMarketService,
@@ -15,7 +16,9 @@ BASE_TS = 1_700_000_000_000
 
 
 @pytest.fixture(autouse=True)
-def clear_crypto_market_service_state():
+def clear_crypto_market_service_state(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", raising=False)
+    get_settings.cache_clear()
     CryptoMarketService._cache.clear()
     CryptoMarketService._inflight.clear()
     CryptoMarketService._provider_health.clear()
@@ -23,6 +26,7 @@ def clear_crypto_market_service_state():
     CryptoMarketService._cache.clear()
     CryptoMarketService._inflight.clear()
     CryptoMarketService._provider_health.clear()
+    get_settings.cache_clear()
 
 
 def _fetch_result(
@@ -125,6 +129,41 @@ async def test_cached_provider_fetch_returns_result_without_a_second_network_req
     assert second == first
     assert second.exchange_symbol == "BTC/USDT"
 
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("configured_attempts", "expected_attempts"),
+    [(None, 1), ("2", 2)],
+    ids=["default_one_attempt", "environment_two_attempts"],
+)
+async def test_provider_attempts_use_default_or_environment_override(
+    monkeypatch: pytest.MonkeyPatch,
+    configured_attempts: str | None,
+    expected_attempts: int,
+) -> None:
+    with monkeypatch.context() as environment:
+        if configured_attempts is None:
+            environment.delenv(
+                "VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", raising=False
+            )
+        else:
+            environment.setenv(
+                "VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", configured_attempts
+            )
+        get_settings.cache_clear()
+        service = CryptoMarketService(providers=("okx",))
+        fetch = AsyncMock(side_effect=RuntimeError("temporary outage"))
+        monkeypatch.setattr(service, "_fetch_uncached", fetch)
+
+        with pytest.raises(RuntimeError, match=r"okx: temporary outage"):
+            await service._fetch_with_fallback(
+                symbol="BTC-USDT", interval="1h", lookback=1, providers=["okx"]
+            )
+
+        assert fetch.await_count == expected_attempts
+    get_settings.cache_clear()
 
 @pytest.mark.asyncio
 async def test_failed_provider_enters_cooldown_and_fallback_skips_it(

@@ -10,35 +10,26 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from ...adapters.assets import get_adapter_manager
 from ...utils.env import ensure_system_env_dir, get_system_env_path
 from ..config.settings import get_settings
-from ..db import init_database
 from .exceptions import (
     APIException,
     api_exception_handler,
     general_exception_handler,
     validation_exception_handler,
 )
-from .routers.agent import create_agent_router
-from .routers.agent_stream import create_agent_stream_router
-from .routers.conversation import create_conversation_router
 from .routers.crypto_market import create_crypto_market_router
 from .routers.prediction_market import create_prediction_market_router
 from .routers.i18n import create_i18n_router
-from .routers.models import create_models_router
-from .routers.strategy_api import create_strategy_api_router
 from .routers.saas_auth import create_saas_auth_router
 from .routers.tenant_credential import create_tenant_credential_router
 from .routers.sandbox_exchange import create_sandbox_exchange_router
 from .routers.live_execution import create_live_execution_router
 from .routers.rule_strategy import create_rule_strategy_router
+from .routers.strategy_api import create_strategy_api_router
 from ..services.crypto_market_service import get_crypto_market_service
 from .routers.system import create_system_router
-from .routers.task import create_task_router
-from .routers.user_profile import create_user_profile_router
-from .routers.watchlist import create_watchlist_router
-from .schemas import AppInfoData, SuccessResponse
+from .schemas.base import AppInfoData, SuccessResponse
 
 
 def _ensure_system_env_and_load() -> None:
@@ -63,14 +54,14 @@ def _ensure_system_env_and_load() -> None:
         except Exception:
             pass
 
-        # Load system .env into process environment
+        # Docker/service-unit environment is authoritative. The user-level file
+        # supplies only absent local-development values.
         if sys_env.exists():
             try:
                 from dotenv import load_dotenv
 
-                load_dotenv(sys_env, override=True)
+                load_dotenv(sys_env, override=False)
             except Exception:
-                # Fallback manual parsing
                 try:
                     with open(sys_env, "r", encoding="utf-8") as f:
                         for line in f:
@@ -83,7 +74,7 @@ def _ensure_system_env_and_load() -> None:
                                     value.startswith("'") and value.endswith("'")
                                 ):
                                     value = value[1:-1]
-                                os.environ[key] = value
+                                os.environ.setdefault(key, value)
                 except Exception:
                     pass
     except Exception:
@@ -104,58 +95,32 @@ def create_app() -> FastAPI:
             f"ValueCell Server starting up on {settings.API_HOST}:{settings.API_PORT}..."
         )
 
-        # Initialize database tables unless quant-only mode is enabled. Legacy
-        # conversation/task tables are intentionally excluded from quant-only deployments.
+        # Quant-only deployments must not import legacy Agent assets or their
+        # optional dependencies. Their SaaS tables are provisioned explicitly.
         if settings.QUANT_ONLY_MODE:
-            logger.info("Skipping database initialization in quant-only mode")
+            logger.info("Skipping legacy database and adapter initialization in quant-only mode")
         else:
             try:
+                from ...adapters.assets import get_adapter_manager
+                from ..db import init_database
+
                 logger.info("Initializing database tables...")
-                success = init_database(force=False)
-                if success:
-                    logger.info("✓ Database initialized")
-                else:
-                    logger.info("✗ Database initialization reported failure")
-            except Exception as e:
-                logger.info(f"✗ Database initialization error: {e}")
-
-        # Initialize and configure adapters
-        try:
-            logger.info("Configuring data adapters...")
-            manager = get_adapter_manager()
-
-            # Configure Yahoo Finance (free, no API key required)
-            try:
+                init_database(force=False)
+                logger.info("Configuring legacy data adapters...")
+                manager = get_adapter_manager()
                 manager.configure_yfinance()
-                logger.info("✓ Yahoo Finance adapter configured")
-            except Exception as e:
-                logger.info(f"✗ Yahoo Finance adapter failed: {e}")
-
-            # Configure AKShare (free, no API key required, optimized)
-            try:
                 manager.configure_akshare()
-                logger.info("✓ AKShare adapter configured (optimized)")
-            except Exception as e:
-                logger.info(f"✗ AKShare adapter failed: {e}")
-
-            # Configure BaoStock (free, no API key required)
-            try:
                 manager.configure_baostock()
-                print("✓ BaoStock adapter configured")
-            except Exception as e:
-                print(f"✗ BaoStock adapter failed: {e}")
+            except Exception as exc:
+                logger.warning("Legacy initialization unavailable: {}", exc)
 
-            print("Data adapters configuration completed")
-            logger.info("Data adapters configuration completed")
+        # Market data is a backend-owned dependency. Begin prewarming at startup
+        # without blocking the API while an upstream exchange is unavailable.
+        market_service = get_crypto_market_service()
 
-        except Exception as e:
-            logger.info(f"Error configuring adapters: {e}")
-
-        # Start strategy auto-scheduler
         async def _refresh_default_market_snapshot() -> None:
-            service = get_crypto_market_service()
             while True:
-                await service.refresh_default_snapshot()
+                await market_service.refresh_default_snapshot()
                 await asyncio.sleep(settings.MARKET_REFRESH_S)
 
         market_refresh_task = asyncio.create_task(_refresh_default_market_snapshot())
@@ -169,11 +134,17 @@ def create_app() -> FastAPI:
             await _scheduler.start()
 
             def _sync_job() -> None:
-                db = get_database_manager().get_session()
                 try:
-                    _scheduler.sync_running_strategies(db)
-                finally:
-                    db.close()
+                    db = get_database_manager().get_session()
+                    try:
+                        _scheduler.sync_running_strategies(db)
+                    finally:
+                        db.close()
+                except Exception as exc:
+                    logger.warning(
+                        "Strategy scheduler database sync deferred; retrying next cycle: {}",
+                        exc,
+                    )
 
             _scheduler._scheduler.add_job(
                 _sync_job,
@@ -182,11 +153,12 @@ def create_app() -> FastAPI:
                 replace_existing=True,
                 coalesce=True,
             )
-            # Run once immediately so strategies running at boot are scheduled
+            # Attempt immediately, but database outages must not disable the
+            # recurring job or prevent the API and market snapshot from starting.
             _sync_job()
-            logger.info("✓ Strategy scheduler started")
-        except Exception as e:
-            logger.info(f"✗ Strategy scheduler failed to start: {e}")
+            logger.info("Strategy scheduler started")
+        except Exception as exc:
+            logger.warning("Strategy scheduler initialization deferred: {}", exc)
 
         yield
         # Shutdown
@@ -274,26 +246,31 @@ def _add_routes(app: FastAPI, settings) -> None:
     app.include_router(create_sandbox_exchange_router(), prefix=API_PREFIX)
     app.include_router(create_live_execution_router(), prefix=API_PREFIX)
 
-    # Quant-only deployments should not expose AI agent, conversation,
-    # task, or LLM provider management APIs.
+    # Quant-only deployments expose only deterministic SaaS and market APIs.
+    # Legacy Agent, conversation, profile and watchlist APIs stay available in
+    # non-quant deployments without forcing their dependencies at startup.
     if not settings.QUANT_ONLY_MODE:
+        from .routers.agent import create_agent_router
+        from .routers.agent_stream import create_agent_stream_router
+        from .routers.conversation import create_conversation_router
+        from .routers.models import create_models_router
+        from .routers.task import create_task_router
+        from .routers.user_profile import create_user_profile_router
+        from .routers.watchlist import create_watchlist_router
+
         app.include_router(create_models_router(), prefix=API_PREFIX)
         app.include_router(create_conversation_router(), prefix=API_PREFIX)
         app.include_router(create_agent_stream_router(), prefix=API_PREFIX)
         app.include_router(create_agent_router(), prefix=API_PREFIX)
         app.include_router(create_task_router(), prefix=API_PREFIX)
+        app.include_router(create_watchlist_router(), prefix=API_PREFIX)
+        app.include_router(create_user_profile_router(), prefix=API_PREFIX)
 
-    # Include watchlist router
-    app.include_router(create_watchlist_router(), prefix=API_PREFIX)
-
-    # Include crypto market router
+    # Public quant market data and deterministic strategy APIs.
     app.include_router(create_crypto_market_router(), prefix=API_PREFIX)
     app.include_router(create_prediction_market_router(), prefix=API_PREFIX)
 
-    # Include user profile router
-    app.include_router(create_user_profile_router(), prefix=API_PREFIX)
-
-    # Include aggregated strategy API router. In quant-only mode this excludes
+    # Deterministic strategy surface; agent routes are excluded in quant mode.
     # StrategyAgent/prompt endpoints and leaves deterministic quant APIs only.
     app.include_router(
         create_strategy_api_router(quant_only_mode=settings.QUANT_ONLY_MODE),

@@ -1,4 +1,9 @@
-"""API schemas package."""
+"""Schemas exported by the quant-only API startup path.
+
+Legacy Agent/profile/watchlist routers import their concrete schema modules
+explicitly when enabled; they must not pull optional Agent dependencies into the
+SaaS crypto runtime.
+"""
 
 from .base import (
     AppInfoData,
@@ -7,11 +12,6 @@ from .base import (
     HealthCheckData,
     StatusCode,
     SuccessResponse,
-)
-from .conversation import (
-    ConversationListData,
-    ConversationListItem,
-    ConversationListResponse,
 )
 from .i18n import (
     AgentI18nContextData,
@@ -35,88 +35,32 @@ from .i18n import (
     UserI18nSettingsData,
     UserI18nSettingsRequest,
 )
-from .model import CheckModelRequest, CheckModelResponse, LLMModelConfigData
-from .task import TaskCancelData
-from .user_profile import (
-    CreateUserProfileRequest,
-    UpdateUserProfileRequest,
-    UserProfileData,
-    UserProfileListData,
-    UserProfileSummaryData,
-)
-from .watchlist import (
-    AddAssetRequest,
-    AssetDetailData,
-    AssetHistoricalPriceData,
-    AssetHistoricalPricesData,
-    AssetInfoData,
-    AssetPriceData,
-    AssetSearchQuery,
-    AssetSearchResultData,
-    CreateWatchlistRequest,
-    UpdateAssetNotesRequest,
-    WatchlistData,
-    WatchlistItemData,
-    WatchlistWithPricesData,
-)
 
 __all__ = [
-    # Base schemas
-    "StatusCode",
-    "BaseResponse",
-    "SuccessResponse",
-    "ErrorResponse",
+    "AgentI18nContextData",
     "AppInfoData",
+    "BaseResponse",
+    "CurrencyFormatData",
+    "CurrencyFormatRequest",
+    "DateTimeFormatData",
+    "DateTimeFormatRequest",
+    "ErrorResponse",
     "HealthCheckData",
-    # I18n schemas
     "I18nConfigData",
+    "LanguageDetectionData",
+    "LanguageDetectionRequest",
+    "LanguageRequest",
+    "NumberFormatData",
+    "NumberFormatRequest",
+    "StatusCode",
+    "SuccessResponse",
     "SupportedLanguage",
     "SupportedLanguagesData",
     "TimezoneInfo",
-    "TimezonesData",
-    "LanguageRequest",
     "TimezoneRequest",
-    "LanguageDetectionRequest",
+    "TimezonesData",
+    "TranslationData",
     "TranslationRequest",
-    "DateTimeFormatRequest",
-    "NumberFormatRequest",
-    "CurrencyFormatRequest",
     "UserI18nSettingsData",
     "UserI18nSettingsRequest",
-    "AgentI18nContextData",
-    "LanguageDetectionData",
-    "TranslationData",
-    "DateTimeFormatData",
-    "NumberFormatData",
-    "CurrencyFormatData",
-    # Conversation schemas
-    "ConversationListData",
-    "ConversationListItem",
-    "ConversationListResponse",
-    # Watchlist schemas
-    "WatchlistItemData",
-    "WatchlistData",
-    "CreateWatchlistRequest",
-    "AddAssetRequest",
-    "UpdateAssetNotesRequest",
-    "AssetSearchQuery",
-    "AssetInfoData",
-    "AssetSearchResultData",
-    "AssetDetailData",
-    "AssetPriceData",
-    "AssetHistoricalPriceData",
-    "AssetHistoricalPricesData",
-    "WatchlistWithPricesData",
-    # User Profile schemas
-    "UserProfileData",
-    "CreateUserProfileRequest",
-    "UpdateUserProfileRequest",
-    "UserProfileListData",
-    "UserProfileSummaryData",
-    # Task schemas
-    "TaskCancelData",
-    # Model schemas
-    "LLMModelConfigData",
-    "CheckModelRequest",
-    "CheckModelResponse",
 ]

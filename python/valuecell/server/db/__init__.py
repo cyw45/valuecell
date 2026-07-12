@@ -1,23 +1,9 @@
-"""Database package for ValueCell Server."""
+"""Database connection exports for the quant SaaS runtime.
 
-from .connection import (
-    DatabaseManager,
-    get_database_manager,
-    get_db,
-)
-from .init_db import DatabaseInitializer, init_database
-from .models import Agent, Asset, Base
+Legacy initialization imports Agent/asset services and is loaded explicitly only
+by non-quant startup paths.
+"""
 
-__all__ = [
-    # Connection management
-    "DatabaseManager",
-    "get_database_manager",
-    "get_db",
-    # Database initialization
-    "DatabaseInitializer",
-    "init_database",
-    # Models
-    "Base",
-    "Agent",
-    "Asset",
-]
+from .connection import DatabaseManager, get_database_manager, get_db
+
+__all__ = ["DatabaseManager", "get_database_manager", "get_db"]

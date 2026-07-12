@@ -83,6 +83,7 @@ export function useEvaluateRuleStrategy(strategyId?: string) {
       for (const logType of ["signals", "trades", "funding"] as const) {
         queryClient.invalidateQueries({ queryKey: ruleStrategyLogKey(strategyId, logType) });
       }
+      queryClient.invalidateQueries({ queryKey: [...ruleStrategyKey(strategyId), "pnl-curve"] });
     },
   });
 }
@@ -114,9 +115,26 @@ export function useRuleStrategyFunding(strategyId?: string) {
 
 export function useRuleStrategyPnlCurve(strategyId?: string) {
   return useQuery({
-    queryKey: [...ruleStrategyKey(strategyId ?? ''), 'pnl-curve'] as const,
-    queryFn: () => apiClient.get<ApiResponse<RuleStrategyPnlPoint[]>>(`/rule-strategies/${strategyId}/pnl-curve`, { requiresAuth: true }),
-    select: (r) => r.data,
+    queryKey: [...ruleStrategyKey(strategyId ?? ""), "pnl-curve"] as const,
+    queryFn: () =>
+      apiClient.get<ApiResponse<RuleStrategyPnlPoint[]>>(
+        `/rule-strategies/${strategyId}/pnl-curve`,
+        { requiresAuth: true },
+      ),
+    select: (response) => response.data,
+    enabled: Boolean(strategyId),
+  });
+}
+
+export function useRuleStrategyAccount(strategyId?: string) {
+  return useQuery({
+    queryKey: [...ruleStrategyKey(strategyId ?? ""), "account"] as const,
+    queryFn: () =>
+      apiClient.get<ApiResponse<RuleStrategy["account"]>>(
+        `/rule-strategies/${strategyId}/account`,
+        { requiresAuth: true },
+      ),
+    select: (response) => response.data,
     enabled: Boolean(strategyId),
   });
 }

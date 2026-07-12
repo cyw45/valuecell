@@ -31,8 +31,8 @@ class RuleStrategyCreateRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
+    initial_capital_quote: float = Field(gt=0, le=100_000_000)
     config: RuleStrategyConfig
-
 
 class RuleStrategyUpdateRequest(BaseModel):
     """Update only explicitly provided strategy metadata or configuration."""
@@ -51,13 +51,12 @@ class RuleStrategyUpdateRequest(BaseModel):
 
 
 class RuleStrategyEvaluateRequest(BaseModel):
-    """Explicit deterministic inputs; market data is never fetched by this API."""
+    """Frozen candles and market price; paper-account facts are server-owned."""
 
     model_config = ConfigDict(extra="forbid")
 
     candles: list[RuleStrategyCandle] = Field(min_length=1, max_length=5_000)
     market: RuleStrategyMarketSnapshot
-
 
 def create_rule_strategy_router(
     service: RuleStrategyService | None = None,
@@ -74,7 +73,12 @@ def create_rule_strategy_router(
     ) -> SuccessResponse[dict[str, Any]]:
         return SuccessResponse.create(
             data=rule_service.create(
-                principal.tenant_id, request.name, request.description, request.config
+                principal.tenant_id,
+                request.name,
+                request.description,
+                request.config.model_copy(
+                    update={"initial_capital_quote": request.initial_capital_quote}
+                ),
             ),
             msg="Paper rule strategy created",
         )
@@ -172,28 +176,19 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         repository = RuleStrategyRepository()
-        journals = repository.get_evaluations(
-            strategy_id, principal.tenant_id, limit=500
+        journals = list(
+            reversed(
+                repository.get_evaluations(strategy_id, principal.tenant_id, limit=500)
+            )
         )
-        # Journals are returned newest-first; reverse to chronological order
-        journals = list(reversed(journals))
-
-        cumulative_pnl = 0.0
         points: list[dict[str, Any]] = []
         for journal in journals:
-            funding_entries: list[dict[str, Any]] = journal.funding or []
-            if funding_entries:
-                entry = funding_entries[0]
-                cost: float = float(entry.get("estimated_payment_quote", 0.0) or 0.0)
-                direction: str = entry.get("direction", "none")
-                # credit = positive PnL contribution; debit = negative
-                if direction == "credit":
-                    cumulative_pnl += abs(cost)
-                elif direction == "debit":
-                    cumulative_pnl -= abs(cost)
-            # Determine action from result
             result: dict[str, Any] = journal.result or {}
-            action: str = result.get("action", "no_op")
+            raw_account = result.get("account")
+            if raw_account is None:
+                continue
+            initial_capital = float(raw_account["initial_capital_quote"])
+            equity = float(raw_account["equity_quote"])
             ts_val = journal.created_at
             ts_str = (
                 ts_val.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -203,14 +198,26 @@ def create_rule_strategy_router(
             points.append(
                 {
                     "ts": ts_str,
-                    "cumulative_pnl": cumulative_pnl,
-                    "action": action,
+                    "cumulative_pnl": equity - initial_capital,
+                    "equity_quote": equity,
+                    "action": result.get("action", "no_op"),
                 }
             )
-        return SuccessResponse.create(
-            data=points, msg="PnL curve retrieved"
-        )
+        return SuccessResponse.create(data=points, msg="PnL curve retrieved")
 
+
+    @router.get(
+        "/{strategy_id}/account", response_model=SuccessResponse[dict[str, Any]]
+    )
+    async def get_rule_strategy_account(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        try:
+            data = rule_service.account(strategy_id, principal.tenant_id)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Paper account retrieved")
     @router.get(
         "/{strategy_id}/{log_type}", response_model=SuccessResponse[dict[str, Any]]
     )

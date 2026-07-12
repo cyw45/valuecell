@@ -1,8 +1,9 @@
 import { useTheme } from "next-themes";
 import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, CircleAlert } from "lucide-react";
+import { ArrowUpRight, CircleAlert, RadioTower } from "lucide-react";
 import { useRuleStrategy, useRuleStrategyPnlCurve, useRuleStrategySignals } from "@/api/rule-strategy";
+import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,12 +13,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import TradingViewTickerTape from "@/components/tradingview/tradingview-ticker-tape";
-import TradingViewAdvancedChart from "@/components/tradingview/tradingview-advanced-chart";
+import CandlestickChart, { type CandlestickData, type CandlestickMovingAverage } from "@/components/valuecell/charts/candlestick-chart";
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
-
-const MARKET_SYMBOLS = ["BINANCE:BTCUSDT", "BINANCE:ETHUSDT", "BINANCE:SOLUSDT"];
-
 export default function DashboardPage() {
   const { t } = useTranslation();
   const { resolvedTheme } = useTheme();
@@ -25,6 +22,28 @@ export default function DashboardPage() {
   const { data: ruleStrategy } = useRuleStrategy(strategyId);
   const { data: signals, isLoading: signalsLoading, isError: signalsError } = useRuleStrategySignals(strategyId);
   const { data: pnlCurve } = useRuleStrategyPnlCurve(strategyId || undefined);
+  const { data: marketData, isFetching: marketLoading, isError: marketError } = useGetCryptoMarketIndicators({
+    symbols: ["BTC-USDT"],
+    interval: "1h",
+    lookback: 240,
+  });
+  const market = marketData?.symbols[0];
+  const marketFailure = marketData?.failed_symbols["BTC-USDT"];
+  const candles: CandlestickData[] = market?.candles.map((candle) => ({
+    time: new Date(candle.ts).toISOString(),
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume,
+  })) ?? [];
+  const movingAverages: CandlestickMovingAverage[] = market?.indicators.length
+    ? ["ma5", "ma20", "ma60"].map((key, index) => ({
+      name: key.toUpperCase(),
+      values: market.indicators.map((indicator) => indicator.ma[key] ?? null),
+      color: ["#f59e0b", "#3b82f6", "#a855f7"][index],
+    }))
+    : [];
   const pnlPoints = pnlCurve ?? [];
 
   return (
@@ -46,27 +65,34 @@ export default function DashboardPage() {
           </Button>
         </header>
 
-        <section aria-label={t("saas.dashboard.marketTicker")} className="overflow-hidden rounded-lg border bg-card">
-          <TradingViewTickerTape symbols={MARKET_SYMBOLS} theme={resolvedTheme === "dark" ? "dark" : "light"} />
-        </section>
 
         <section className="grid gap-4 md:grid-cols-3" aria-label={t("saas.dashboard.workspaceOverview")}>
           <Card className="gap-3 py-5">
             <CardHeader className="px-5">
-              <CardDescription>{t("saas.dashboard.workspaceStatus")}</CardDescription>
-              <CardTitle className="text-xl">{t("saas.dashboard.paperOnly")}</CardTitle>
+              <CardDescription>Paper account equity</CardDescription>
+              <CardTitle className="text-xl">
+                {ruleStrategy ? `${ruleStrategy.account.equity_quote.toFixed(2)} USDT` : "No paper account"}
+              </CardTitle>
             </CardHeader>
             <CardContent className="px-5 text-sm text-muted-foreground">
-              {t("saas.dashboard.workspaceStatusDescription")}
+              {ruleStrategy
+                ? `Initial ${ruleStrategy.account.initial_capital_quote.toFixed(2)} | Cash ${ruleStrategy.account.quote_balance.toFixed(2)}`
+                : t("saas.dashboard.saveStrategyPrompt")}
             </CardContent>
           </Card>
           <Card className="gap-3 py-5">
             <CardHeader className="px-5">
-              <CardDescription>{t("saas.dashboard.strategyWorkflow")}</CardDescription>
-              <CardTitle className="text-xl">{t("saas.dashboard.configureRules")}</CardTitle>
+              <CardDescription>Paper profit and loss</CardDescription>
+              <CardTitle className="text-xl">
+                {ruleStrategy
+                  ? `${(ruleStrategy.account.realized_pnl_quote + ruleStrategy.account.unrealized_pnl_quote).toFixed(2)} USDT`
+                  : "--"}
+              </CardTitle>
             </CardHeader>
             <CardContent className="px-5 text-sm text-muted-foreground">
-              {t("saas.dashboard.strategyWorkflowDescription")}
+              {ruleStrategy
+                ? `Realized ${ruleStrategy.account.realized_pnl_quote.toFixed(2)} | Unrealized ${ruleStrategy.account.unrealized_pnl_quote.toFixed(2)}`
+                : t("saas.dashboard.noStrategySelected")}
             </CardContent>
           </Card>
           <Card className="gap-3 py-5">
@@ -81,12 +107,31 @@ export default function DashboardPage() {
         </section>
 
         <Card>
+          <CardHeader className="gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle>{t("saas.dashboard.marketChart")}</CardTitle>
+              <div className="flex items-center gap-2">
+                <Badge variant={marketFailure || marketError ? "destructive" : marketLoading ? "outline" : "secondary"} className="gap-1">
+                  <RadioTower className="size-3" />
+                  {market?.provider ?? "market"}
+                </Badge>
+                {market?.freshness_status === "stale" ? <Badge variant="outline">Data delayed</Badge> : null}
+              </div>
+            </div>
+            <CardDescription>
+              {market?.latest_price != null
+                ? t("saas.dashboard.latestPrice", { price: market.latest_price.toLocaleString() })
+                : t("saas.dashboard.marketSource")}
+            </CardDescription>
+          </CardHeader>
           <CardContent className="p-0 overflow-hidden">
-            <TradingViewAdvancedChart
-              ticker="BTCUSDT"
-              theme={resolvedTheme === "dark" ? "dark" : "light"}
-              minHeight={420}
-            />
+            {marketError || marketFailure ? (
+              <p className="py-20 text-center text-sm text-destructive">{t("saas.dashboard.marketUnavailable")}</p>
+            ) : !market && !marketLoading ? (
+              <p className="py-20 text-center text-sm text-muted-foreground">{t("saas.dashboard.marketUnavailable")}</p>
+            ) : (
+              <CandlestickChart data={candles} movingAverages={movingAverages} loading={marketLoading} height={420} />
+            )}
           </CardContent>
         </Card>
 

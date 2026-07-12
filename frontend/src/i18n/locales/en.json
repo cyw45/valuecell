@@ -576,7 +576,11 @@
       "loadingSignals": "Loading server signal records…",
       "signalsUnavailable": "Signal records are unavailable. No result is assumed.",
       "noConditions": "No conditions have been recorded. Evaluate explicit market inputs to create a signal record.",
-      "signalStates": { "triggered": "Triggered", "blocked": "Blocked", "unavailable": "Unavailable" }
+      "signalStates": { "triggered": "Triggered", "blocked": "Blocked", "unavailable": "Unavailable" },
+      "marketChart": "Gate market chart",
+      "marketSource": "Gate provider candles and calculated moving averages.",
+      "latestPrice": "Latest price: {{price}}",
+      "marketUnavailable": "Market data is unavailable from the provider. No chart data is shown."
     },
     "charts": {
       "researchChart": "Research chart",
@@ -584,12 +588,15 @@
       "title": "Charts",
       "subtitle": "Explore reference market data. Chart controls do not place orders or connect an execution account.",
       "marketChart": "Market chart",
-      "poweredByTradingView": "Powered by TradingView market data.",
+      "poweredByTradingView": "TradingView is available as an external reference.",
       "symbols": { "bitcoin": "Bitcoin / US Dollar", "ether": "Ether / US Dollar", "solana": "Solana / US Dollar" },
       "intervals": { "fifteenMinutes": "15 minutes", "oneHour": "1 hour", "fourHours": "4 hours", "oneDay": "1 day" },
       "researchContext": "Research context",
       "researchContextDescription": "Use chart observations to inform a rules strategy. Performance and execution remain unavailable until the backend integration step.",
-      "openTradingView": "Open TradingView"
+      "openTradingView": "Open TradingView",
+      "marketSource": "Gate provider candles and calculated moving averages.",
+      "latestPrice": "Latest price: {{price}}",
+      "marketUnavailable": "Market data is unavailable from the provider. No chart data is shown."
     },
     "chart": { "pnl": "PnL" },
     "operations": {

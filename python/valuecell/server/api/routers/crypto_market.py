@@ -69,19 +69,45 @@ def create_crypto_market_router() -> APIRouter:
             else None
         )
         service = get_crypto_market_service()
-        if (
+        is_default_snapshot_query = (
             providers is None
-            and tuple(symbol_list) == settings.MARKET_DEFAULT_SYMBOLS
             and interval.strip().lower() == settings.MARKET_DEFAULT_INTERVAL
-            and lookback == settings.MARKET_DEFAULT_LOOKBACK
-        ):
+            and lookback <= settings.MARKET_DEFAULT_LOOKBACK
+            and set(symbol_list).issubset(set(settings.MARKET_DEFAULT_SYMBOLS))
+        )
+        if is_default_snapshot_query:
             snapshot = service.get_default_snapshot()
             if snapshot is not None:
-                response.headers["X-ValueCell-Market-Cache"] = "default-snapshot"
-                return SuccessResponse.create(
-                    data=snapshot.data,
-                    msg="Crypto indicators retrieved from default market snapshot",
-                )
+                snapshot_symbols = {item.symbol: item for item in snapshot.data.symbols}
+                selected = [
+                    snapshot_symbols[symbol].model_copy(
+                        update={"candles": snapshot_symbols[symbol].candles[-lookback:]}
+                    )
+                    for symbol in symbol_list
+                    if symbol in snapshot_symbols
+                ]
+                if selected:
+                    response.headers["X-ValueCell-Market-Cache"] = "default-snapshot"
+                    return SuccessResponse.create(
+                        data=CryptoMarketIndicatorsData(
+                            interval=settings.MARKET_DEFAULT_INTERVAL,
+                            lookback=lookback,
+                            providers=snapshot.data.providers,
+                            symbols=selected,
+                            failed_symbols={
+                                symbol: "market snapshot unavailable"
+                                for symbol in symbol_list
+                                if symbol not in snapshot_symbols
+                            },
+                            snapshot_fetched_at=snapshot.fetched_at.isoformat(),
+                        ),
+                        msg="Crypto indicators retrieved from shared market snapshot",
+                    )
+        if is_default_snapshot_query:
+            raise HTTPException(
+                status_code=503,
+                detail="Shared market snapshot is warming; retry shortly",
+            )
         try:
             data = await service.get_indicators(
                 symbols=symbol_list,

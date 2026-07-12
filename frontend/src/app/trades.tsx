@@ -61,8 +61,11 @@ export default function TradesPage() {
                   <TableRow>
                     <TableHead>{t("saas.operations.trades.table.evaluated")}</TableHead>
                     <TableHead>{t("saas.operations.trades.table.action")}</TableHead>
+                    <TableHead>Market</TableHead>
+                    <TableHead className="text-right">Fill price</TableHead>
+                    <TableHead className="text-right">Notional</TableHead>
+                    <TableHead className="text-right">Realized PnL</TableHead>
                     <TableHead>{t("saas.operations.trades.table.reason")}</TableHead>
-                    <TableHead className="text-right">{t("saas.operations.trades.table.quantity")}</TableHead>
                     <TableHead>{t("saas.operations.trades.table.execution")}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -71,8 +74,11 @@ export default function TradesPage() {
                     <TableRow key={`${trade.evaluation_id}-${trade.action}`}>
                       <TableCell className="whitespace-nowrap">{formatDate(trade.evaluated_at)}</TableCell>
                       <TableCell className="capitalize">{trade.action}</TableCell>
+                      <TableCell>{trade.symbol}</TableCell>
+                      <TableCell className="text-right tabular-nums">{trade.price.toFixed(4)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{trade.quote_amount.toFixed(2)} USDT</TableCell>
+                      <TableCell className="text-right tabular-nums">{trade.realized_pnl_quote.toFixed(2)} USDT</TableCell>
                       <TableCell className="whitespace-normal break-words">{trade.reason}</TableCell>
-                      <TableCell className="text-right tabular-nums">{trade.sizing.quantity}</TableCell>
                       <TableCell><Badge variant="outline">{trade.execution.replace("_", " ")}</Badge></TableCell>
                     </TableRow>
                   ))}

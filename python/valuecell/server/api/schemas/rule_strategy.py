@@ -52,17 +52,41 @@ class RuleStrategyPosition(RuleStrategyModel):
 
 
 class RuleStrategyMarketSnapshot(RuleStrategyModel):
-    """Explicit paper account and market facts used for sizing and funding."""
+    """Market facts supplied by the caller for one deterministic paper tick."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     symbol: str = Field(min_length=1, max_length=64)
     price: float = Field(gt=0)
+    funding_rate: float = Field(default=0.0, ge=-1, le=1)
+
+
+class RuleStrategyEngineMarketSnapshot(RuleStrategyMarketSnapshot):
+    """Server-derived account facts consumed by the pure rule engine."""
+
     equity_quote: float = Field(ge=0)
     quote_balance: float = Field(ge=0)
     open_position_count: int = Field(default=0, ge=0)
-    funding_rate: float = Field(default=0.0, ge=-1, le=1)
     position: RuleStrategyPosition = Field(default_factory=RuleStrategyPosition)
+
+
+class RuleStrategyPaperPosition(RuleStrategyModel):
+    """One server-owned long position in the paper account."""
+
+    quantity: float = Field(gt=0)
+    entry_price: float = Field(gt=0)
+    mark_price: float = Field(gt=0)
+
+
+class RuleStrategyPaperAccount(RuleStrategyModel):
+    """Immutable paper-account balance snapshot persisted with each evaluation."""
+
+    initial_capital_quote: float = Field(gt=0)
+    quote_balance: float = Field(ge=0)
+    positions: dict[str, RuleStrategyPaperPosition] = Field(default_factory=dict)
+    realized_pnl_quote: float = 0.0
+    unrealized_pnl_quote: float = 0.0
+    equity_quote: float = Field(ge=0)
 
 
 class MovingAverageRuleConfig(RuleStrategyModel):
@@ -140,6 +164,7 @@ class RuleStrategyConfig(RuleStrategyModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
     mode: Literal["paper"] = "paper"
+    initial_capital_quote: float = Field(default=10_000.0, gt=0, le=100_000_000)
     symbols: list[str] = Field(
         default_factory=lambda: ["BTC-USDT"], min_length=1, max_length=10
     )
@@ -172,7 +197,7 @@ class RuleStrategyEvaluationRequest(BaseModel):
 
     config: RuleStrategyConfig
     candles: list[RuleStrategyCandle] = Field(min_length=1, max_length=5_000)
-    market: RuleStrategyMarketSnapshot
+    market: RuleStrategyEngineMarketSnapshot
 
     @model_validator(mode="after")
     def validate_candle_order(self) -> RuleStrategyEvaluationRequest:

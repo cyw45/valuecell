@@ -24,20 +24,20 @@ class DatabaseManager:
         """Initialize database engine."""
         database_config = self.settings.get_database_config()
 
-        # SQLite specific configuration
-        connect_args = {}
+        # SQLite needs a local locking timeout; PostgreSQL needs bounded network
+        # and statement waits so a request cannot leave the UI saving forever.
+        connect_args: dict[str, int] = {}
+        engine_options: dict[str, object] = {"pool_pre_ping": True}
         if database_config["url"].startswith("sqlite"):
-            connect_args = {
-                "check_same_thread": False,
-                "timeout": 20,
-            }
+            connect_args = {"check_same_thread": False, "timeout": 20}
+            engine_options["poolclass"] = StaticPool
+        elif database_config["url"].startswith("postgresql"):
+            connect_args = {"connect_timeout": 10, "options": "-c statement_timeout=15000"}
 
         self.engine = create_engine(
             database_config["url"],
             connect_args=connect_args,
-            poolclass=StaticPool
-            if database_config["url"].startswith("sqlite")
-            else None,
+            **engine_options,
         )
 
         self.SessionLocal = sessionmaker(

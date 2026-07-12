@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import time
 import json
+import os
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import ClassVar
+from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
@@ -16,6 +18,7 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 from valuecell.server.config.settings import get_settings
+from valuecell.utils.env import ensure_system_env_dir
 
 from valuecell.server.api.schemas.crypto_market import (
     BollingerBandData,
@@ -40,7 +43,15 @@ BOLLINGER_STD = 2.0
 MOMENTUM_WINDOW = 14
 CANDLE_FRESHNESS_MAX_AGE_S = 90
 
+INTERVAL_SECONDS: dict[str, int] = {
+    "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1_800,
+    "1h": 3_600, "4h": 14_400, "1d": 86_400,
+}
+
+MARKET_SNAPSHOT_FILENAME = "market_snapshot.json"
+
 SUPPORTED_CRYPTO_SYMBOLS: tuple[str, ...] = (
+
     "BTC-USDT",
     "ETH-USDT",
     "BNB-USDT",
@@ -168,7 +179,7 @@ class CryptoMarketService:
     def __init__(self, providers: tuple[str, ...] | None = None) -> None:
         settings = get_settings()
         self.providers = providers or settings.MARKET_DATA_PROVIDERS
-        self._default_snapshot: DefaultMarketSnapshot | None = None
+        self._default_snapshot = self._load_default_snapshot()
         if self.__class__._semaphore_limit != settings.MARKET_DATA_MAX_CONCURRENT_FETCHES:
             self.__class__._semaphore = asyncio.Semaphore(
                 settings.MARKET_DATA_MAX_CONCURRENT_FETCHES
@@ -176,7 +187,7 @@ class CryptoMarketService:
             self.__class__._semaphore_limit = settings.MARKET_DATA_MAX_CONCURRENT_FETCHES
 
     async def refresh_default_snapshot(self) -> DefaultMarketSnapshot | None:
-        """Refresh the server-owned public market snapshot without strategy state."""
+        """Refresh each default symbol without discarding prior real candles."""
         settings = get_settings()
         try:
             data = await self.get_indicators(
@@ -184,23 +195,78 @@ class CryptoMarketService:
                 interval=settings.MARKET_DEFAULT_INTERVAL,
                 lookback=settings.MARKET_DEFAULT_LOOKBACK,
             )
-            if data.failed_symbols or len(data.symbols) != len(settings.MARKET_DEFAULT_SYMBOLS):
-                raise RuntimeError(
-                    "default snapshot incomplete: "
-                    + "; ".join(
-                        f"{symbol}: {error}"
-                        for symbol, error in data.failed_symbols.items()
-                    )
-                )
-            snapshot = DefaultMarketSnapshot(
-                data=data,
-                fetched_at=datetime.now(timezone.utc),
-            )
-            self._default_snapshot = snapshot
-            return snapshot
         except Exception as exc:
-            logger.warning("Crypto market default snapshot refresh failed err={}", str(exc))
+            logger.warning("Crypto market snapshot refresh failed err={}", exc)
             return self._default_snapshot
+
+        previous_symbols = (
+            {item.symbol: item for item in self._default_snapshot.data.symbols}
+            if self._default_snapshot is not None
+            else {}
+        )
+        refreshed_symbols = {item.symbol: item for item in data.symbols}
+        merged_symbols = [
+            refreshed_symbols.get(symbol) or previous_symbols[symbol]
+            for symbol in settings.MARKET_DEFAULT_SYMBOLS
+            if symbol in refreshed_symbols or symbol in previous_symbols
+        ]
+        if not merged_symbols:
+            logger.warning(
+                "Crypto market snapshot refresh has no usable candles failures={}",
+                data.failed_symbols,
+            )
+            return self._default_snapshot
+
+        snapshot = DefaultMarketSnapshot(
+            data=CryptoMarketIndicatorsData(
+                interval=data.interval,
+                lookback=data.lookback,
+                providers=data.providers,
+                symbols=merged_symbols,
+                failed_symbols=data.failed_symbols,
+                snapshot_fetched_at=datetime.now(timezone.utc).isoformat(),
+            ),
+            fetched_at=datetime.now(timezone.utc),
+        )
+        self._default_snapshot = snapshot
+        self._persist_default_snapshot(snapshot)
+        if data.failed_symbols:
+            logger.warning(
+                "Crypto market snapshot refreshed with retained symbols failures={}",
+                data.failed_symbols,
+            )
+        return snapshot
+
+    @staticmethod
+    def _snapshot_path() -> Path:
+        return ensure_system_env_dir() / MARKET_SNAPSHOT_FILENAME
+
+    def _load_default_snapshot(self) -> DefaultMarketSnapshot | None:
+        path = self._snapshot_path()
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            data = CryptoMarketIndicatorsData.model_validate(raw["data"])
+            fetched_at = datetime.fromisoformat(raw["fetched_at"])
+            logger.info("Loaded persisted public market snapshot from {}", path)
+            return DefaultMarketSnapshot(data=data, fetched_at=fetched_at)
+        except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Ignoring unreadable public market snapshot {}: {}", path, exc)
+            return None
+
+    def _persist_default_snapshot(self, snapshot: DefaultMarketSnapshot) -> None:
+        path = self._snapshot_path()
+        temporary_path = path.with_suffix(".tmp")
+        payload = {
+            "fetched_at": snapshot.fetched_at.isoformat(),
+            "data": snapshot.data.model_dump(mode="json"),
+        }
+        try:
+            temporary_path.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(temporary_path, path)
+        except OSError as exc:
+            logger.warning("Could not persist public market snapshot {}: {}", path, exc)
 
     def get_default_snapshot(self) -> DefaultMarketSnapshot | None:
         """Return the latest successful server-owned public market snapshot."""
@@ -300,9 +366,10 @@ class CryptoMarketService:
         freshness_age_ms = (
             max(0, now_ts_ms - latest_ts_ms) if latest_ts_ms is not None else None
         )
+        max_age_ms = INTERVAL_SECONDS[interval] * 2 * 1000
         freshness_status = (
             "fresh"
-            if freshness_age_ms is not None and freshness_age_ms <= CANDLE_FRESHNESS_MAX_AGE_S * 1000
+            if freshness_age_ms is not None and freshness_age_ms <= max_age_ms
             else "stale" if freshness_age_ms is not None else "unknown"
         )
 
@@ -328,34 +395,52 @@ class CryptoMarketService:
         providers: list[str],
     ) -> CandleFetchResult:
         errors: list[str] = []
-        now = time.monotonic()
+        stale_result: CandleFetchResult | None = None
+        settings = get_settings()
         for provider in providers:
             health = self._provider_health.setdefault(provider, ProviderHealth())
-            if health.cooldown_until > now:
+            cache_key = (provider, symbol, interval, lookback)
+            cached = self._cache.get(cache_key)
+            if health.cooldown_until > time.monotonic():
                 errors.append(f"{provider}: cooling down")
+                if stale_result is None and cached is not None:
+                    stale_result = cached.result
                 continue
-            try:
-                result = await self._fetch_from_provider(
-                    provider=provider,
-                    symbol=symbol,
-                    interval=interval,
-                    lookback=lookback,
-                )
-                health.consecutive_failures = 0
-                health.cooldown_until = 0.0
-                health.last_error = None
-                health.last_success_at = datetime.now(timezone.utc).isoformat()
-                return result
-            except Exception as exc:
-                self._record_provider_failure(provider, exc)
-                errors.append(f"{provider}: {exc}")
-                logger.warning(
-                    "Crypto OHLCV fetch failed provider={} symbol={} interval={} err={}",
-                    provider,
-                    symbol,
-                    interval,
-                    str(exc),
-                )
+            for attempt in range(settings.MARKET_DATA_PROVIDER_ATTEMPTS):
+                try:
+                    result = await self._fetch_from_provider(
+                        provider=provider,
+                        symbol=symbol,
+                        interval=interval,
+                        lookback=lookback,
+                    )
+                    health.consecutive_failures = 0
+                    health.cooldown_until = 0.0
+                    health.last_error = None
+                    health.last_success_at = datetime.now(timezone.utc).isoformat()
+                    return result
+                except Exception as exc:
+                    errors.append(f"{provider}: {exc}")
+                    if stale_result is None and cached is not None:
+                        stale_result = cached.result
+                    if attempt + 1 < settings.MARKET_DATA_PROVIDER_ATTEMPTS:
+                        await asyncio.sleep(0.25 * (attempt + 1))
+                        continue
+                    self._record_provider_failure(provider, exc)
+                    logger.warning(
+                        "Crypto OHLCV fetch failed provider={} symbol={} interval={} err={}",
+                        provider,
+                        symbol,
+                        interval,
+                        str(exc),
+                    )
+        if stale_result is not None:
+            logger.warning(
+                "Serving last successful candles during provider outage symbol={} interval={}",
+                symbol,
+                interval,
+            )
+            return stale_result
         raise RuntimeError("; ".join(errors) or "No provider succeeded")
 
     async def _fetch_from_provider(

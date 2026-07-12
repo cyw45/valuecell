@@ -244,11 +244,14 @@ class Settings:
         )
         if self.MARKET_DEFAULT_LOOKBACK > 500:
             raise ValueError("VALUECELL_MARKET_DEFAULT_LOOKBACK must be at most 500")
-        self.MARKET_REFRESH_S = _positive_int_env("VALUECELL_MARKET_REFRESH_S", 3600)
-        if self.MARKET_REFRESH_S < 60:
-            raise ValueError("VALUECELL_MARKET_REFRESH_S must be at least 60")
+        self.MARKET_REFRESH_S = _positive_int_env("VALUECELL_MARKET_REFRESH_S", 60)
+        if self.MARKET_REFRESH_S < 30:
+            raise ValueError("VALUECELL_MARKET_REFRESH_S must be at least 30")
         self.MARKET_DATA_MAX_CONCURRENT_FETCHES = _positive_int_env(
-            "VALUECELL_MARKET_DATA_MAX_CONCURRENT_FETCHES", 3
+            "VALUECELL_MARKET_DATA_MAX_CONCURRENT_FETCHES", 1
+        )
+        self.MARKET_DATA_PROVIDER_ATTEMPTS = _positive_int_env(
+            "VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", 1
         )
         self.MARKET_DATA_CACHE_TTL_S = _positive_float_env(
             "VALUECELL_MARKET_DATA_CACHE_TTL_S", 30.0

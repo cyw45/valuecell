@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from valuecell.server.api.routers.crypto_market import create_crypto_market_router
+from valuecell.server.config.settings import get_settings
 from valuecell.server.api.schemas.crypto_market import (
     BollingerBandData,
     CryptoCandleData,
@@ -20,6 +21,14 @@ from valuecell.server.services.crypto_market_service import (
     CryptoMarketService,
     DefaultMarketSnapshot,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_market_provider_attempts(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", raising=False)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 BASE_TS = 1_700_000_000_000
@@ -309,20 +318,9 @@ def test_crypto_market_router_returns_success_response(
     )
 
 
-@pytest.mark.parametrize(
-    "refresh_failure",
-    [
-        RuntimeError("public market unavailable"),
-        _sample_market_data().model_copy(
-            update={"failed_symbols": {"SOL-USDT": "provider unavailable"}}
-        ),
-    ],
-    ids=["fetch_error", "incomplete_symbol_coverage"],
-)
 @pytest.mark.asyncio
-async def test_default_snapshot_refresh_preserves_last_complete_snapshot_on_failure(
+async def test_default_snapshot_refresh_preserves_previous_snapshot_on_exception(
     monkeypatch: pytest.MonkeyPatch,
-    refresh_failure: Exception | CryptoMarketIndicatorsData,
 ) -> None:
     service = CryptoMarketService(providers=("okx",))
     sample = _sample_market_data()
@@ -334,15 +332,17 @@ async def test_default_snapshot_refresh_preserves_last_complete_snapshot_on_fail
             ]
         }
     )
-    get_indicators = AsyncMock(side_effect=[complete_snapshot_data, refresh_failure])
+    get_indicators = AsyncMock(
+        side_effect=[complete_snapshot_data, RuntimeError("public market unavailable")]
+    )
     monkeypatch.setattr(service, "get_indicators", get_indicators)
 
     first_snapshot = await service.refresh_default_snapshot()
     retained_snapshot = await service.refresh_default_snapshot()
 
-    assert first_snapshot is not None
-    assert retained_snapshot == first_snapshot
-    assert retained_snapshot.data == complete_snapshot_data
+    assert retained_snapshot is first_snapshot
+    assert retained_snapshot.data.symbols == complete_snapshot_data.symbols
+    assert retained_snapshot.data.failed_symbols == complete_snapshot_data.failed_symbols
     assert get_indicators.await_args_list == [
         call(
             symbols=["BTC-USDT", "ETH-USDT", "SOL-USDT"],
@@ -357,7 +357,66 @@ async def test_default_snapshot_refresh_preserves_last_complete_snapshot_on_fail
     ]
 
 
-def test_crypto_market_router_serves_default_snapshot_without_fetching(
+@pytest.mark.asyncio
+async def test_default_snapshot_refresh_merges_partial_refresh_with_previous_candles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = CryptoMarketService(providers=("okx",))
+    sample = _sample_market_data()
+    initial_symbols = [
+        sample.symbols[0].model_copy(
+            update={
+                "symbol": symbol,
+                "candles": _candles(start=start, count=2),
+                "latest_price": start + 1,
+            }
+        )
+        for symbol, start in (
+            ("BTC-USDT", 100.0),
+            ("ETH-USDT", 200.0),
+            ("SOL-USDT", 300.0),
+        )
+    ]
+    initial_data = sample.model_copy(update={"symbols": initial_symbols})
+    fresh_btc = sample.symbols[0].model_copy(
+        update={
+            "symbol": "BTC-USDT",
+            "candles": _candles(start=400.0, count=2),
+            "latest_price": 401.0,
+        }
+    )
+    partial_data = sample.model_copy(
+        update={
+            "symbols": [fresh_btc],
+            "failed_symbols": {
+                "ETH-USDT": "okx: provider unavailable",
+                "SOL-USDT": "okx: provider unavailable",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        service,
+        "get_indicators",
+        AsyncMock(side_effect=[initial_data, partial_data]),
+    )
+
+    await service.refresh_default_snapshot()
+    refreshed_snapshot = await service.refresh_default_snapshot()
+
+    assert refreshed_snapshot is not None
+    symbols = {item.symbol: item for item in refreshed_snapshot.data.symbols}
+    assert [item.symbol for item in refreshed_snapshot.data.symbols] == [
+        "BTC-USDT",
+        "ETH-USDT",
+        "SOL-USDT",
+    ]
+    assert symbols["BTC-USDT"] == fresh_btc
+    assert symbols["ETH-USDT"].candles == initial_symbols[1].candles
+    assert symbols["SOL-USDT"].candles == initial_symbols[2].candles
+    assert refreshed_snapshot.data.failed_symbols == partial_data.failed_symbols
+
+
+def test_crypto_market_router_serves_default_symbol_subset_from_shared_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = CryptoMarketService(providers=("okx",))
@@ -377,18 +436,60 @@ def test_crypto_market_router_serves_default_snapshot_without_fetching(
     response = TestClient(app).get(
         "/crypto-market/indicators",
         params={
-            "symbols": "BTC-USDT,ETH-USDT,SOL-USDT",
+            "symbols": "BTC-USDT",
             "interval": "1h",
-            "lookback": 240,
+            "lookback": 2,
         },
     )
 
     assert response.status_code == 200
     assert response.headers["X-ValueCell-Market-Cache"] == "default-snapshot"
-    assert response.json()["msg"] == "Crypto indicators retrieved from default market snapshot"
-    assert response.json()["data"]["symbols"][0]["symbol"] == "BTC-USDT"
+    body = response.json()
+    assert body["msg"] == "Crypto indicators retrieved from shared market snapshot"
+    assert [item["symbol"] for item in body["data"]["symbols"]] == ["BTC-USDT"]
+    assert body["data"]["failed_symbols"] == {}
     service.get_indicators.assert_not_awaited()
 
+
+
+@pytest.mark.asyncio
+async def test_default_snapshot_persists_and_restores_after_service_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    snapshot_path = tmp_path / "market_snapshot.json"
+    monkeypatch.setattr(
+        CryptoMarketService,
+        "_snapshot_path",
+        staticmethod(lambda: snapshot_path),
+    )
+    sample = _sample_market_data()
+    service = CryptoMarketService(providers=("okx",))
+    monkeypatch.setattr(service, "get_indicators", AsyncMock(return_value=sample))
+
+    persisted_snapshot = await service.refresh_default_snapshot()
+    restored_snapshot = CryptoMarketService(providers=("okx",)).get_default_snapshot()
+
+    assert persisted_snapshot is not None
+    assert snapshot_path.is_file()
+    assert restored_snapshot == persisted_snapshot
+
+
+def test_default_snapshot_ignores_corrupt_persisted_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    snapshot_path = tmp_path / "market_snapshot.json"
+    snapshot_path.write_text("not valid json", encoding="utf-8")
+    monkeypatch.setattr(
+        CryptoMarketService,
+        "_snapshot_path",
+        staticmethod(lambda: snapshot_path),
+    )
+
+    service = CryptoMarketService(providers=("okx",))
+
+    assert service.get_default_snapshot() is None
 
 def test_crypto_market_router_returns_400_for_invalid_symbol(
     monkeypatch: pytest.MonkeyPatch,

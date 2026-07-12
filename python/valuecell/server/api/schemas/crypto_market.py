@@ -53,6 +53,9 @@ class CryptoMarketIndicatorsData(BaseModel):
     lookback: int
     providers: List[str]
     symbols: List[CryptoSymbolIndicatorsData]
+    snapshot_fetched_at: Optional[str] = Field(
+        None, description="Backend snapshot refresh time in UTC"
+    )
     failed_symbols: Dict[str, str] = Field(default_factory=dict)
 
 

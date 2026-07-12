@@ -10,6 +10,8 @@ import type {
   CryptoSymbolCatalog,
 } from "@/types/crypto-market";
 
+const DEFAULT_SNAPSHOT_SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
+
 interface CryptoMarketIndicatorQueryParams {
   symbols: string[];
   interval: string;
@@ -34,6 +36,12 @@ export const useGetCryptoMarketIndicators = (
   const marketDataRefreshMode = useMarketDataRefreshMode();
   const symbols = params.symbols.filter(Boolean);
   const providers = params.providers?.filter(Boolean) ?? [];
+  const usesDefaultSnapshot =
+    providers.length === 0
+    && params.interval === "1h"
+    && (params.lookback ?? 240) <= 240
+    && symbols.every((symbol) => DEFAULT_SNAPSHOT_SYMBOLS.includes(symbol));
+  const querySymbols = usesDefaultSnapshot ? DEFAULT_SNAPSHOT_SYMBOLS : symbols;
   const refetchInterval = getMarketDataRefreshIntervalMs(
     marketDataRefreshMode,
     params.refreshIntervalSeconds,
@@ -41,14 +49,14 @@ export const useGetCryptoMarketIndicators = (
 
   return useQuery({
     queryKey: API_QUERY_KEYS.CRYPTO_MARKET.indicators([
-      symbols.join(","),
+      querySymbols.join(","),
       params.interval,
       params.lookback ?? 240,
       providers.join(","),
     ]),
     queryFn: () => {
       const searchParams = new URLSearchParams({
-        symbols: symbols.join(","),
+        symbols: querySymbols.join(","),
         interval: params.interval,
         lookback: String(params.lookback ?? 240),
       });
@@ -65,3 +73,4 @@ export const useGetCryptoMarketIndicators = (
     staleTime: 10_000,
   });
 };
+

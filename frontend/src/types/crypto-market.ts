@@ -33,6 +33,10 @@ export interface CryptoSymbolIndicators {
   indicators: CryptoIndicatorPoint[];
   latest_price?: number | null;
   warning?: string | null;
+  snapshot_ts_ms?: number | null;
+  freshness_age_ms?: number | null;
+  freshness_status: "fresh" | "stale" | "unknown";
+  coverage_status: "complete" | "partial";
 }
 
 export interface CryptoMarketIndicators {
