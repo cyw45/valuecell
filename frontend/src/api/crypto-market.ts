@@ -1,10 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { API_QUERY_KEYS } from "@/constants/api";
 import { type ApiResponse, apiClient } from "@/lib/api-client";
+import {
+  getMarketDataRefreshIntervalMs,
+  useMarketDataRefreshMode,
+} from "@/store/settings-store";
 import type {
   CryptoMarketIndicators,
   CryptoSymbolCatalog,
 } from "@/types/crypto-market";
+
+interface CryptoMarketIndicatorQueryParams {
+  symbols: string[];
+  interval: string;
+  lookback?: number;
+  providers?: string[];
+  enabled?: boolean;
+  refreshIntervalSeconds?: number;
+}
 
 export const useGetCryptoSymbols = () =>
   useQuery({
@@ -15,15 +28,17 @@ export const useGetCryptoSymbols = () =>
     staleTime: 10 * 60 * 1000,
   });
 
-export const useGetCryptoMarketIndicators = (params: {
-  symbols: string[];
-  interval: string;
-  lookback?: number;
-  providers?: string[];
-  enabled?: boolean;
-}) => {
+export const useGetCryptoMarketIndicators = (
+  params: CryptoMarketIndicatorQueryParams,
+) => {
+  const marketDataRefreshMode = useMarketDataRefreshMode();
   const symbols = params.symbols.filter(Boolean);
   const providers = params.providers?.filter(Boolean) ?? [];
+  const refetchInterval = getMarketDataRefreshIntervalMs(
+    marketDataRefreshMode,
+    params.refreshIntervalSeconds,
+  );
+
   return useQuery({
     queryKey: API_QUERY_KEYS.CRYPTO_MARKET.indicators([
       symbols.join(","),
@@ -46,7 +61,7 @@ export const useGetCryptoMarketIndicators = (params: {
     },
     select: (data) => data.data,
     enabled: (params.enabled ?? true) && symbols.length > 0,
-    refetchInterval: 15_000,
+    refetchInterval,
     staleTime: 10_000,
   });
 };

@@ -207,7 +207,10 @@ const StrategyWorkspace: FC<StrategyWorkspaceProps> = ({
           </div>
         </TabsContent>
         <TabsContent value="market" className="scroll-container min-h-0 overflow-y-auto p-4 lg:p-6">
-          <CryptoMarketIndicatorPanel strategySymbols={strategySymbols} />
+          <CryptoMarketIndicatorPanel
+            strategyRefreshIntervalSeconds={strategy.decide_interval}
+            strategySymbols={strategySymbols}
+          />
         </TabsContent>
         <TabsContent value="portfolio" className="scroll-container min-h-0 overflow-y-auto">
           <PortfolioPositionsGroup summary={summary} priceCurve={priceCurve} positions={positions} strategy={strategy} />

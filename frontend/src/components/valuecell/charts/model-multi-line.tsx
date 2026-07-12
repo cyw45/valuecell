@@ -147,7 +147,7 @@ function ModelMultiLine({
     };
   }, [data, showLegend]);
 
-  useChartResize(chartInstance);
+  useChartResize(chartInstance, chartRef, [option]);
 
   useEffect(() => {
     if (!chartRef.current) return;

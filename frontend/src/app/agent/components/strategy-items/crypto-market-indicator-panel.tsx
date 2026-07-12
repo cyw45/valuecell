@@ -21,9 +21,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useChartResize } from "@/hooks/use-chart-resize";
 import { TIME_FORMATS, TimeUtils } from "@/lib/time";
 import { cn, numberFixed } from "@/lib/utils";
+import {
+  getMarketDataRefreshIntervalMs,
+  type MarketDataRefreshMode,
+  useMarketDataRefreshMode,
+  useSettingsActions,
+} from "@/store/settings-store";
 import type { CryptoSymbolIndicators } from "@/types/crypto-market";
 
 echarts.use([
@@ -37,10 +50,19 @@ echarts.use([
 ]);
 
 const INTERVALS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+const REFRESH_OPTIONS: Array<{ value: MarketDataRefreshMode; label: string }> = [
+  { value: "manual", label: "手动" },
+  { value: "5s", label: "5秒" },
+  { value: "15s", label: "15秒" },
+  { value: "30s", label: "30秒" },
+  { value: "1m", label: "1分钟" },
+  { value: "5m", label: "5分钟" },
+];
 const DEFAULT_SYMBOL = "BTC-USDT";
 
 interface CryptoMarketIndicatorPanelProps {
   strategySymbols?: string[];
+  strategyRefreshIntervalSeconds?: number;
 }
 
 const buildChartOption = (data?: CryptoSymbolIndicators): EChartsOption => {
@@ -127,7 +149,7 @@ const IndicatorChart: FC<{ data?: CryptoSymbolIndicators }> = ({ data }) => {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<ECharts | null>(null);
   const option = useMemo(() => buildChartOption(data), [data]);
-  useChartResize(chartInstance);
+  useChartResize(chartInstance, chartRef, [option]);
 
   useEffect(() => {
     if (!chartRef.current) return;
@@ -151,7 +173,10 @@ const normalizeSymbols = (symbols?: string[]) =>
 
 const CryptoMarketIndicatorPanel: FC<CryptoMarketIndicatorPanelProps> = ({
   strategySymbols,
+  strategyRefreshIntervalSeconds,
 }) => {
+  const marketDataRefreshMode = useMarketDataRefreshMode();
+  const { setMarketDataRefreshMode } = useSettingsActions();
   const normalizedStrategySymbols = useMemo(
     () => normalizeSymbols(strategySymbols),
     [strategySymbols],
@@ -175,10 +200,15 @@ const CryptoMarketIndicatorPanel: FC<CryptoMarketIndicatorPanelProps> = ({
     interval,
     lookback: 240,
     enabled: Boolean(symbol),
+    refreshIntervalSeconds: strategyRefreshIntervalSeconds,
   });
   const current = data?.symbols[0];
   const latestIndicator = current?.indicators[current.indicators.length - 1];
   const failedReason = data?.failed_symbols?.[symbol];
+  const effectiveRefreshInterval = getMarketDataRefreshIntervalMs(
+    marketDataRefreshMode,
+    strategyRefreshIntervalSeconds,
+  );
 
   return (
     <div className="scroll-container flex min-w-0 flex-col gap-4 overflow-y-auto p-4">
@@ -232,6 +262,39 @@ const CryptoMarketIndicatorPanel: FC<CryptoMarketIndicatorPanelProps> = ({
                 {item}
               </Button>
             ))}
+            <div className="ml-auto flex items-center gap-2">
+              {strategyRefreshIntervalSeconds ? (
+                <Badge variant="outline">
+                  按策略 {Math.max(strategyRefreshIntervalSeconds, 5)}秒刷新
+                </Badge>
+              ) : (
+                <>
+                  <span className="text-muted-foreground text-xs">刷新</span>
+                  <Select
+                    value={marketDataRefreshMode}
+                    onValueChange={(value) =>
+                      setMarketDataRefreshMode(value as MarketDataRefreshMode)
+                    }
+                  >
+                    <SelectTrigger className="h-8 w-24 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {REFRESH_OPTIONS.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </>
+              )}
+              <Badge variant="secondary">
+                {effectiveRefreshInterval === false
+                  ? "手动更新"
+                  : `${Math.round(effectiveRefreshInterval / 1000)}秒`}
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
