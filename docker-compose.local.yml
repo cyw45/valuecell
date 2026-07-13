@@ -16,7 +16,10 @@ services:
       API_PORT: 8000
       PYTHONIOENCODING: utf-8
       VALUECELL_QUANT_ONLY_MODE: "true"
-    command: ["python", "-m", "valuecell.server.main"]
+    command: ["/app/python/.venv/bin/python", "-m", "uvicorn", "valuecell.server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      - ./python/valuecell:/app/python/valuecell:ro
+      - ./python/configs:/app/python/configs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

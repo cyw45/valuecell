@@ -3,7 +3,7 @@ FROM node:22-alpine AS build
 ENV BUN_INSTALL=/root/.bun \
     PATH=/root/.bun/bin:$PATH
 
-RUN corepack enable && corepack prepare bun@1.3.3 --activate
+RUN npm install -g bun@1.3.3
 
 WORKDIR /app/frontend
 
