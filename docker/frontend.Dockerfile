@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM mirror.gcr.io/library/node:22-alpine AS build
 
 ENV BUN_INSTALL=/root/.bun \
     PATH=/root/.bun/bin:$PATH

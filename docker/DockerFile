@@ -8,10 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_DEFAULT_INDEX=${UV_DEFAULT_INDEX} \
     UV_INDEX_URL=${UV_DEFAULT_INDEX} \
     UV_HTTP_TIMEOUT=300 \
-    PATH="/app/.venv/bin:$PATH" \
-    PYTHONPATH=/app
+    PATH="/app/python/.venv/bin:$PATH" \
+    PYTHONPATH=/app/python
 
-WORKDIR /app
+WORKDIR /app/python
 
 # Copy dependency metadata before application code so dependency installation is cached.
 COPY python/pyproject.toml python/uv.lock python/README.md ./
