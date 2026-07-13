@@ -145,7 +145,7 @@ class MomentumMacdRuleConfig(RuleStrategyModel):
 class RuleStrategyRiskConfig(RuleStrategyModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    size_mode: Literal["fixed_quote", "equity_fraction"] = "fixed_quote"
+    size_mode: Literal["fixed_quote", "equity_fraction", "equal_split"] = "fixed_quote"
     size_value: float = Field(default=100.0, gt=0)
     take_profit_pct: float | None = Field(default=None, gt=0, le=1)
     stop_loss_pct: float | None = Field(default=None, gt=0, le=1)
@@ -166,7 +166,7 @@ class RuleStrategyConfig(RuleStrategyModel):
     mode: Literal["paper"] = "paper"
     initial_capital_quote: float = Field(default=10_000.0, gt=0, le=100_000_000)
     symbols: list[str] = Field(
-        default_factory=lambda: ["BTC-USDT"], min_length=1, max_length=10
+        default_factory=lambda: ["BTC-USDT"], min_length=1, max_length=100
     )
     interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "1h"
     decide_interval_s: int | None = Field(default=None, ge=60)
@@ -240,7 +240,7 @@ class RuleStrategyIndicatorValues(BaseModel):
 class RuleStrategySizing(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["fixed_quote", "equity_fraction"]
+    mode: Literal["fixed_quote", "equity_fraction", "equal_split"]
     requested_quote: float
     max_allowed_quote: float
     affordable_quote: float

@@ -55,6 +55,7 @@ interface CandlestickChartProps {
   loading?: boolean;
   showVolume?: boolean;
   dateFormat?: string;
+  theme?: "light" | "dark";
 }
 
 function CandlestickChart({
@@ -66,6 +67,7 @@ function CandlestickChart({
   loading,
   showVolume = true,
   dateFormat = TIME_FORMATS.DATETIME_SHORT,
+  theme = "light",
 }: CandlestickChartProps) {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<ECharts | null>(null);
@@ -197,19 +199,22 @@ function CandlestickChart({
       });
     }
 
+    const textColor = theme === "dark" ? "#a8b3cf" : "#566075";
+    const gridColor = theme === "dark" ? "rgba(137, 160, 205, 0.12)" : "rgba(71, 85, 105, 0.12)";
     return {
       animation: false,
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
         borderWidth: 1,
-        borderColor: "#ccc",
+        borderColor: gridColor,
         padding: 10,
-        textStyle: { color: "#000" },
+        backgroundColor: theme === "dark" ? "#101828" : "#ffffff",
+        textStyle: { color: textColor },
       },
       axisPointer: {
         link: [{ xAxisIndex: "all" }],
-        label: { backgroundColor: "#777" },
+        label: { backgroundColor: theme === "dark" ? "#34405c" : "#64748b" },
       },
       grid: grids,
       xAxis: xAxes,
@@ -228,7 +233,7 @@ function CandlestickChart({
       ],
       series,
     };
-  }, [data, movingAverages, stockColors, showVolume, dateFormat]);
+  }, [data, movingAverages, stockColors, showVolume, dateFormat, theme]);
 
   useChartResize(chartInstance);
 

@@ -5,6 +5,10 @@ from fastapi.testclient import TestClient
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
+from valuecell.server.api.schemas.rule_strategy import (
+    RuleStrategyConfig,
+    RuleStrategyMarketSnapshot,
+)
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
 
@@ -115,14 +119,15 @@ def _create_strategy(client: TestClient, name: str = "Paper ledger") -> str:
     return response.json()["data"]["strategy_id"]
 
 
-def test_rule_strategy_requires_and_persists_initial_paper_capital():
+def test_rule_strategy_defaults_and_persists_initial_paper_capital():
     client, _ = _client()
 
-    missing_capital = client.post(
+    default_capital = client.post(
         "/rule-strategies",
         json={"name": "Capital required", "config": _config()},
     )
-    assert missing_capital.status_code == 422
+    assert default_capital.status_code == 201
+    assert default_capital.json()["data"]["account"]["initial_capital_quote"] == 10_000.0
 
     created = client.post(
         "/rule-strategies",
@@ -234,3 +239,37 @@ def test_paper_account_endpoint_is_tenant_scoped():
     account = client.get(f"/rule-strategies/{strategy_id}/account")
     assert account.status_code == 200
     assert account.json()["data"]["initial_capital_quote"] == 1_000.0
+
+
+def test_batch_cycle_equally_splits_capital_between_qualified_entries():
+    repository = PaperAccountRepository()
+    service = RuleStrategyService(repository=repository)
+    config = RuleStrategyConfig.model_validate(
+        {
+            **_config(),
+            "symbols": ["BTC-USDT", "ETH-USDT", "SOL-USDT"],
+            "risk": {
+                "size_mode": "equal_split",
+                "size_value": 0.1,
+                "max_positions": 3,
+                "leverage": 1,
+            },
+        }
+    )
+    created = service.create("tenant-a", "Equal split", None, config)
+    service.start(created["strategy_id"], "tenant-a")
+
+    results = service.evaluate_batch(
+        created["strategy_id"],
+        "tenant-a",
+        [
+            (_candles(100, 90, 80), RuleStrategyMarketSnapshot(symbol=symbol, price=80))
+            for symbol in config.symbols
+        ],
+    )
+
+    assert [result["action"] for result in results] == ["buy", "buy", "buy"]
+    assert [result["sizing"]["requested_quote"] for result in results] == [3333, 3333, 3333]
+    account = results[-1]["account"]
+    assert account["quote_balance"] == 1.0
+    assert set(account["positions"]) == {"BTC-USDT", "ETH-USDT", "SOL-USDT"}

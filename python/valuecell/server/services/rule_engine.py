@@ -265,7 +265,14 @@ class RuleEngine:
 
     def _sizing(self, request: RuleStrategyEvaluationRequest) -> RuleStrategySizing:
         market, risk = request.market, request.config.risk
-        requested = risk.size_value if risk.size_mode == "fixed_quote" else market.equity_quote * risk.size_value
+        if risk.size_mode == "fixed_quote":
+            requested = risk.size_value
+        elif risk.size_mode == "equal_split":
+            # The scheduler replaces this provisional request with the equal
+            # share after it has identified all qualifying symbols this cycle.
+            requested = market.quote_balance * risk.size_value
+        else:
+            requested = market.equity_quote * risk.size_value
         return RuleStrategySizing(
             mode=risk.size_mode,
             requested_quote=requested,

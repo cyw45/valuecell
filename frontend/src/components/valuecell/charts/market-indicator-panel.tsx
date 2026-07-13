@@ -1,5 +1,11 @@
 import { BarChart, LineChart } from "echarts/charts";
-import { DataZoomComponent, GridComponent, MarkLineComponent, TooltipComponent } from "echarts/components";
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  MarkLineComponent,
+  TooltipComponent,
+} from "echarts/components";
 import type { ECharts } from "echarts/core";
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
@@ -15,6 +21,7 @@ echarts.use([
   LineChart,
   DataZoomComponent,
   GridComponent,
+  LegendComponent,
   MarkLineComponent,
   TooltipComponent,
   CanvasRenderer,
@@ -27,6 +34,7 @@ interface MarketIndicatorPanelProps {
   panel: MarketIndicatorPanel;
   height?: number;
   className?: string;
+  theme?: "light" | "dark";
 }
 
 const PANEL_LABELS: Record<MarketIndicatorPanel, string> = {
@@ -43,6 +51,7 @@ export function MarketIndicatorPanelChart({
   panel,
   height = 220,
   className,
+  theme = "light",
 }: MarketIndicatorPanelProps) {
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<ECharts | null>(null);
@@ -51,8 +60,8 @@ export function MarketIndicatorPanelChart({
     const dates = data.map((point) =>
       TimeUtils.formatUTC(new Date(point.ts).toISOString(), TIME_FORMATS.DATETIME_SHORT),
     );
-    const textColor = "#71717a";
-    const gridColor = "#e4e4e7";
+    const textColor = theme === "dark" ? "#a8b3cf" : "#64748b";
+    const gridColor = theme === "dark" ? "rgba(137, 160, 205, 0.16)" : "#e2e8f0";
     const values = data.map((point) => {
       if (panel === "rsi") return finiteValue(point.rsi);
       if (panel === "momentum") return finiteValue(point.momentum);
@@ -138,7 +147,7 @@ export function MarketIndicatorPanelChart({
       ],
       series,
     };
-  }, [data, panel]);
+  }, [data, panel, theme]);
 
   useChartResize(chartInstance);
 

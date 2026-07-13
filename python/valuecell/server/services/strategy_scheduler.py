@@ -182,6 +182,7 @@ class StrategyScheduler:
 
         service = RuleStrategyService()
 
+        market_inputs: list[tuple[list[RuleStrategyCandle], RuleStrategyMarketSnapshot]] = []
         for symbol_result in market_data.symbols:
             try:
                 candles = [
@@ -210,18 +211,7 @@ class StrategyScheduler:
                     funding_rate=0.0,
                 )
 
-                result = service.evaluate(
-                    strategy_id, tenant_id, candles, market_snapshot
-                )
-                logger.info(
-                    "StrategyScheduler tick strategy_id={} symbol={} action={} evaluation_id={}",
-                    strategy_id,
-                    symbol_result.symbol,
-                    result.get("action"),
-                    result.get("evaluation_id"),
-                )
-                # RuleStrategyService applies paper fills to its server-owned
-                # account. No exchange execution is allowed on this scheduler path.
+                market_inputs.append((candles, market_snapshot))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "StrategyScheduler tick error strategy_id={} symbol={} err={}",
@@ -230,6 +220,26 @@ class StrategyScheduler:
                     exc,
                 )
                 continue
+
+        if not market_inputs:
+            return
+        try:
+            results = service.evaluate_batch(strategy_id, tenant_id, market_inputs)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "StrategyScheduler batch tick failed strategy_id={} err={}",
+                strategy_id,
+                exc,
+            )
+            return
+        for result in results:
+            logger.info(
+                "StrategyScheduler tick strategy_id={} symbol={} action={} evaluation_id={}",
+                strategy_id,
+                result.get("symbol"),
+                result.get("action"),
+                result.get("evaluation_id"),
+            )
 
     @staticmethod
     async def _execute_live_signal(

@@ -78,25 +78,25 @@
   --scrollbar-color-thumb: oklch(0.4 0 0);
   --scrollbar-color-thumb-hover: oklch(0.5 0 0);
 
-  --background: oklch(0.145 0 0);
+  --background: #07111f;
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: #0b1728;
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
+  --popover: #0b1728;
   --popover-foreground: oklch(0.985 0 0);
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
+  --secondary: #14243a;
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
+  --muted: #14243a;
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
+  --accent: #14243a;
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  --sidebar: hsl(240 5.9% 10%);
+  --sidebar: #091525;
   --sidebar-foreground: hsl(240 4.8% 95.9%);
   --sidebar-primary: hsl(224.3 76.3% 48%);
   --sidebar-primary-foreground: hsl(0 0% 100%);
@@ -127,6 +127,36 @@
 }
 
 @layer utilities {
+  .dashboard-shell {
+    background-color: var(--background);
+    background-image: linear-gradient(rgba(56, 189, 248, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(56, 189, 248, 0.035) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  .dashboard-header {
+    background: linear-gradient(100deg, rgba(14, 116, 144, 0.11), rgba(30, 41, 59, 0.15));
+  }
+
+  .dashboard-title, .dashboard-amount {
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 24px rgba(56, 189, 248, 0.12);
+  }
+
+  .dashboard-kpi {
+    transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  }
+
+  .dashboard-kpi:hover {
+    transform: translateY(-2px);
+    border-color: rgba(56, 189, 248, 0.34);
+    box-shadow: 0 12px 30px rgba(2, 8, 23, 0.16);
+  }
+
+  .live-pulse { animation: live-pulse 1.8s ease-in-out infinite; }
+
+  @keyframes live-pulse {
+    50% { box-shadow: 0 0 0 5px rgba(52, 211, 153, 0.08), 0 0 12px rgba(52, 211, 153, 0.8); }
+  }
   .main-chat-area {
     @apply w-4/5 max-w-[1024px];
   }

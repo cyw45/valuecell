@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 from uuid import uuid4
 
@@ -139,6 +140,92 @@ class RuleStrategyService:
             **result_data,
         }
 
+    def evaluate_batch(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        market_inputs: list[tuple[list[Any], RuleStrategyMarketSnapshot]],
+    ) -> list[dict[str, Any]]:
+        """Evaluate one market cycle and split paper capital across buy candidates.
+
+        All markets are assessed against the same opening account state. This
+        prevents a symbol's position in the configured watchlist from changing
+        which other symbols qualify during the same scheduler cycle.
+        """
+        strategy = self._require_strategy(strategy_id, tenant_id)
+        if strategy.status != "running":
+            raise RuleStrategyNotRunningError(
+                "Rule strategy must be running before evaluation"
+            )
+
+        config = RuleStrategyConfig.model_validate(strategy.config)
+        account = self._account_from_history(strategy, tenant_id, config)
+        evaluated: list[tuple[RuleStrategyMarketSnapshot, dict[str, Any]]] = []
+        for candles, market in market_inputs:
+            engine_market = self._engine_market(account, market, config.risk.leverage)
+            result = self.engine.evaluate(
+                RuleStrategyEvaluationRequest(
+                    config=config,
+                    candles=candles,
+                    market=engine_market,
+                )
+            )
+            evaluated.append((market, result.model_dump(mode="json")))
+
+        sell_items = [item for item in evaluated if item[1]["action"] == "sell"]
+        buy_items = [item for item in evaluated if item[1]["action"] == "buy"]
+        other_items = [
+            item for item in evaluated if item[1]["action"] not in {"buy", "sell"}
+        ]
+        output: list[dict[str, Any]] = []
+
+        for market, result_data in sell_items:
+            account, fill = self._apply_result(account, market, result_data)
+            output.append(
+                self._record_evaluation(
+                    strategy_id, tenant_id, strategy.config, market, result_data, account, fill
+                )
+            )
+
+        available_slots = max(config.risk.max_positions - len(account.positions), 0)
+        selected_buys = buy_items[:available_slots]
+        unselected_buys = buy_items[available_slots:]
+        # Each qualifying symbol receives an equal whole-USDT share of the
+        # available strategy capital. The total is never scaled by a per-trade
+        # setting: the candidate count is the only divisor.
+        equal_share = math.floor(account.quote_balance / len(selected_buys)) if selected_buys else 0
+
+        for market, result_data in selected_buys:
+            result_data["sizing"] = {
+                **result_data["sizing"],
+                "requested_quote": equal_share,
+                "affordable_quote": account.quote_balance,
+                "quantity": equal_share / market.price,
+            }
+            account, fill = self._apply_result(account, market, result_data)
+            output.append(
+                self._record_evaluation(
+                    strategy_id, tenant_id, strategy.config, market, result_data, account, fill
+                )
+            )
+
+        for market, result_data in unselected_buys:
+            result_data.update(
+                action="no_op",
+                reason_code="max_positions",
+                reason="qualified entry skipped because the position limit was reached",
+            )
+            other_items.append((market, result_data))
+
+        for market, result_data in other_items:
+            account, fill = self._apply_result(account, market, result_data)
+            output.append(
+                self._record_evaluation(
+                    strategy_id, tenant_id, strategy.config, market, result_data, account, fill
+                )
+            )
+        return output
+
     def evaluations(
         self, strategy_id: str, tenant_id: str, limit: int
     ) -> list[dict[str, Any]]:
@@ -183,6 +270,36 @@ class RuleStrategyService:
             quote_balance=config.initial_capital_quote,
             equity_quote=config.initial_capital_quote,
         )
+
+    def _record_evaluation(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        config: dict[str, Any],
+        market: RuleStrategyMarketSnapshot,
+        result_data: dict[str, Any],
+        account: RuleStrategyPaperAccount,
+        fill: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        result_data["account"] = account.model_dump(mode="json")
+        journal = self.repository.append_evaluation(
+            RuleStrategyEvaluationJournal(
+                evaluation_id=f"evaluation_{uuid4().hex}",
+                tenant_id=tenant_id,
+                strategy_id=strategy_id,
+                result=result_data,
+                signals=result_data["conditions"],
+                trades=self._trade_entries(result_data, fill),
+                funding=[result_data["funding"]],
+            )
+        )
+        return {
+            "strategy_id": strategy_id,
+            "evaluation_id": journal.evaluation_id,
+            "config": config,
+            "symbol": market.symbol,
+            **result_data,
+        }
 
     @staticmethod
     def _engine_market(

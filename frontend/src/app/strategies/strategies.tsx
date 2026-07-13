@@ -76,7 +76,6 @@ type StrategyFormValues = {
   macdSlow: number;
   macdSignal: number;
   initialCapital: number;
-  positionSize: number;
   takeProfit: number;
   stopLoss: number;
   maximumPositions: number;
@@ -84,7 +83,7 @@ type StrategyFormValues = {
 };
 
 const initialValues: StrategyFormValues = {
-  symbols: ["BTC/USDT", "ETH/USDT"],
+  symbols: [],
   timeframe: "1h",
   fastMa: 20,
   slowMa: 50,
@@ -100,10 +99,9 @@ const initialValues: StrategyFormValues = {
   macdSlow: 26,
   macdSignal: 9,
   initialCapital: 10_000,
-  positionSize: 5,
   takeProfit: 4,
   stopLoss: 2,
-  maximumPositions: 2,
+  maximumPositions: 100,
   leverage: 1,
 };
 
@@ -229,7 +227,7 @@ function toRuleStrategyConfig(values: StrategyFormValues): RuleStrategyConfig {
     rsi: { enabled: values.rsiEnabled, period: values.rsiPeriod, oversold: values.rsiOversold, overbought: values.rsiOverbought },
     bollinger: { enabled: values.bollingerEnabled, period: values.bollingerPeriod, standard_deviations: values.bollingerDeviation },
     momentum_macd: { enabled: values.momentumEnabled, momentum_period: values.macdSignal, macd_fast_window: values.macdFast, macd_slow_window: values.macdSlow, macd_signal_window: values.macdSignal },
-    risk: { size_mode: "equity_fraction", size_value: values.positionSize / 100, take_profit_pct: values.takeProfit / 100, stop_loss_pct: values.stopLoss / 100, max_positions: values.maximumPositions, leverage: values.leverage },
+    risk: { size_mode: "equal_split", size_value: 1, take_profit_pct: values.takeProfit / 100, stop_loss_pct: values.stopLoss / 100, max_positions: values.maximumPositions, leverage: values.leverage },
   };
 }
 
@@ -267,6 +265,7 @@ export default function Strategies() {
   const startStrategy = useStartRuleStrategy(strategyId);
   const stopStrategy = useStopRuleStrategy(strategyId);
   const evaluateStrategy = useEvaluateRuleStrategy(strategyId);
+  const symbolOptions = symbolsQuery.data?.symbols.map((symbol) => symbol.replace("-", "/")) ?? [];
 
   useEffect(() => {
     if (!strategyQuery.data) return;
@@ -277,6 +276,13 @@ export default function Strategies() {
       timeframe: strategyQuery.data.config.interval ?? initialValues.timeframe,
     }));
   }, [strategyQuery.data]);
+
+  useEffect(() => {
+    if (strategyId || symbolOptions.length === 0) return;
+    setValues((current) => current.symbols.length === 0
+      ? { ...current, symbols: symbolOptions, maximumPositions: symbolOptions.length }
+      : current);
+  }, [strategyId, symbolOptions]);
 
   const errors = useMemo(() => {
     const next: Partial<Record<keyof StrategyFormValues, string>> = {};
@@ -298,10 +304,9 @@ export default function Strategies() {
       if (values.macdSlow < 3 || values.macdSlow > 200 || values.macdSlow <= values.macdFast) next.macdSlow = t("saas.operations.strategy.errors.largerThanFastPeriod");
       if (values.macdSignal < 2 || values.macdSignal > 100) next.macdSignal = t("saas.operations.strategy.errors.wholeNumber", { min: 2, max: 100 });
     }
-    if (values.positionSize <= 0 || values.positionSize > 25) next.positionSize = t("saas.operations.strategy.errors.percentRange", { min: 0.1, max: 25 });
     if (values.takeProfit <= 0 || values.takeProfit > 100) next.takeProfit = t("saas.operations.strategy.errors.percentRange", { min: 0.1, max: 100 });
     if (values.stopLoss <= 0 || values.stopLoss >= values.takeProfit) next.stopLoss = t("saas.operations.strategy.errors.positiveBelowTakeProfit");
-    if (!Number.isInteger(values.maximumPositions) || values.maximumPositions < 1 || values.maximumPositions > 10) next.maximumPositions = t("saas.operations.strategy.errors.wholeNumber", { min: 1, max: 10 });
+    if (!Number.isInteger(values.maximumPositions) || values.maximumPositions < 1 || values.maximumPositions > 100) next.maximumPositions = t("saas.operations.strategy.errors.wholeNumber", { min: 1, max: 100 });
     if (!Number.isFinite(values.initialCapital) || values.initialCapital <= 0 || values.initialCapital > 100_000_000) next.initialCapital = "Enter a paper capital amount between 1 and 100,000,000 USDT.";
     if (values.leverage < 1 || values.leverage > 5) next.leverage = t("saas.operations.strategy.errors.leverageRange");
     return next;
@@ -319,9 +324,8 @@ export default function Strategies() {
   ].filter(Boolean);
   const isPending = createStrategy.isPending || updateStrategy.isPending || startStrategy.isPending || stopStrategy.isPending || evaluateStrategy.isPending;
   const storedStrategy = strategyQuery.data;
-  const symbolOptions = symbolsQuery.data?.symbols.map((symbol) => symbol.replace("-", "/")) ?? [];
   const savePending = createStrategy.isPending || updateStrategy.isPending;
-  const selectionLimitReached = values.symbols.length >= 10;
+  const selectionLimitReached = values.symbols.length >= 100;
 
   const saveStrategy = async () => {
     if (!isValid) return;
@@ -372,7 +376,7 @@ export default function Strategies() {
         <div className="mx-auto flex max-w-[1600px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-xl font-semibold">{t("saas.operations.strategy.title")}</h1>
+              <h1 className="font-semibold text-xl">{t("saas.operations.strategy.title")}</h1>
               <Badge className="border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300" variant="outline">
                 <ShieldCheck /> {t("saas.operations.strategy.paperOnly")}
               </Badge>
@@ -406,11 +410,34 @@ export default function Strategies() {
             <CardContent className="grid gap-5 px-4 py-4 sm:px-5">
               <fieldset aria-describedby={errors.symbols ? "symbols-error" : "symbols-hint"}>
                 <legend className="font-medium text-sm">{t("saas.operations.strategy.fields.markets")}</legend>
-                <p className="mt-1 text-muted-foreground text-xs" id="symbols-hint">{t("saas.operations.strategy.fields.marketsHint", { max: 10 })}</p>
-                {symbolsQuery.isLoading ? <p className="mt-2 text-muted-foreground text-xs" role="status">{t("saas.operations.strategy.fields.marketsLoading")}</p> : null}
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-muted-foreground text-xs">已选择 {values.symbols.length} / {symbolOptions.length}</span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      disabled={symbolOptions.length === 0 || values.symbols.length === symbolOptions.length}
+                      onClick={() => update("symbols", symbolOptions)}
+                      size="sm"
+                      type="button"
+                      variant="secondary"
+                    >
+                      全选
+                    </Button>
+                    <Button
+                      disabled={values.symbols.length === 0}
+                      onClick={() => update("symbols", [])}
+                      size="sm"
+                      type="button"
+                      variant="ghost"
+                    >
+                      清空
+                    </Button>
+                  </div>
+                </div>
+                <p className="mt-1 text-muted-foreground text-xs" id="symbols-hint">默认选择所有支持的 USDT 币种。扫描器会逐一计算技术指标，并将可用资金按符合条件的币种数量均分。</p>
+                {symbolsQuery.isLoading ? <output className="mt-2 block text-muted-foreground text-xs">{t("saas.operations.strategy.fields.marketsLoading")}</output> : null}
                 {symbolsQuery.isError ? <p className="mt-2 text-destructive text-xs" role="alert">{t("saas.operations.strategy.fields.marketsError")}</p> : null}
                 {!symbolsQuery.isLoading && !symbolsQuery.isError ? (
-                  <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label={t("saas.operations.strategy.fields.paperMarkets")}>
+                  <div className="mt-3 flex flex-wrap gap-2">
                     {symbolOptions.map((symbol) => {
                       const selected = values.symbols.includes(symbol);
                       return (
@@ -479,12 +506,11 @@ export default function Strategies() {
 
           <Card className="gap-0 rounded-lg py-0 shadow-none">
             <RuleHeading icon={SlidersHorizontal} title={t("saas.operations.strategy.sections.riskLimits.title")} description={t("saas.operations.strategy.sections.riskLimits.description")} />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 lg:grid-cols-3 sm:px-5">
+            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-3">
               <NumericField error={errors.initialCapital} id="initial-capital" label="Initial paper capital" min={1} max={100_000_000} onChange={(value) => update("initialCapital", value)} step={100} unit="USDT" value={values.initialCapital} />
-              <NumericField error={errors.positionSize} id="position-size" label={t("saas.operations.strategy.fields.positionSize")} max={25} min={0.1} onChange={(value) => update("positionSize", value)} step={0.1} unit="%" value={values.positionSize} />
               <NumericField error={errors.takeProfit} id="take-profit" label={t("saas.operations.strategy.fields.takeProfit")} max={100} min={0.1} onChange={(value) => update("takeProfit", value)} step={0.1} unit="%" value={values.takeProfit} />
               <NumericField error={errors.stopLoss} id="stop-loss" label={t("saas.operations.strategy.fields.stopLoss")} max={99.9} min={0.1} onChange={(value) => update("stopLoss", value)} step={0.1} unit="%" value={values.stopLoss} />
-              <NumericField error={errors.maximumPositions} id="maximum-positions" label={t("saas.operations.strategy.fields.maximumOpenPositions")} max={10} min={1} onChange={(value) => update("maximumPositions", value)} value={values.maximumPositions} />
+              <NumericField error={errors.maximumPositions} id="maximum-positions" label={t("saas.operations.strategy.fields.maximumOpenPositions")} max={100} min={1} onChange={(value) => update("maximumPositions", value)} value={values.maximumPositions} />
               <NumericField error={errors.leverage} hint={t("saas.operations.strategy.fields.paperEvaluationOnly")} id="leverage" label={t("saas.operations.strategy.fields.maximumLeverage")} max={5} min={1} onChange={(value) => update("leverage", value)} step={0.5} unit="x" value={values.leverage} />
             </CardContent>
           </Card>
@@ -502,7 +528,7 @@ export default function Strategies() {
               <SummaryRow label={t("saas.operations.strategy.summary.entry")} value={t("saas.operations.strategy.summary.entryValue", { fast: values.fastMa, slow: values.slowMa })} />
               <SummaryRow label={t("saas.operations.strategy.summary.confirmations")} value={activeFilters.join(" | ") || t("saas.operations.strategy.summary.none")} />
               <SummaryRow label="Initial paper capital" value={`${values.initialCapital.toLocaleString()} USDT`} />
-              <SummaryRow label={t("saas.operations.strategy.summary.positionSize")} value={t("saas.operations.strategy.summary.positionSizeValue", { value: values.positionSize })} />
+              <SummaryRow label="Capital allocation" value="Available capital / qualified symbols (rounded down)" />
               <SummaryRow label={t("saas.operations.strategy.summary.exitLimits")} value={t("saas.operations.strategy.summary.exitLimitsValue", { takeProfit: values.takeProfit, stopLoss: values.stopLoss })} />
               <SummaryRow label={t("saas.operations.strategy.summary.exposureCap")} value={t("saas.operations.strategy.summary.exposureCapValue", { positions: values.maximumPositions, leverage: values.leverage })} />
             </CardContent>

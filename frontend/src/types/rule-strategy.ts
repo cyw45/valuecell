@@ -69,7 +69,7 @@ export interface MomentumMacdRuleConfig {
 }
 
 export interface RuleStrategyRiskConfig {
-  size_mode: "fixed_quote" | "equity_fraction";
+  size_mode: "fixed_quote" | "equity_fraction" | "equal_split";
   size_value: number;
   take_profit_pct?: number;
   stop_loss_pct?: number;
