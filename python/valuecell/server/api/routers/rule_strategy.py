@@ -19,6 +19,10 @@ from valuecell.server.services.rule_strategy_service import (
     RuleStrategyNotRunningError,
     RuleStrategyService,
 )
+from valuecell.server.services.rule_strategy_advisory_service import (
+    RuleStrategyAdvisoryService,
+    RuleStrategyAdvisoryUnavailableError,
+)
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
 )
@@ -27,12 +31,10 @@ from valuecell.server.db.repositories.rule_strategy_repository import (
 class RuleStrategyCreateRequest(BaseModel):
     """Create a stored rule strategy that can only run in paper mode."""
 
-    model_config = ConfigDict(extra="forbid")
-
+    initial_capital_quote: float = Field(default=10_000.0, gt=0, le=100_000_000)
+    config: RuleStrategyConfig
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
-    initial_capital_quote: float = Field(gt=0, le=100_000_000)
-    config: RuleStrategyConfig
 
 class RuleStrategyUpdateRequest(BaseModel):
     """Update only explicitly provided strategy metadata or configuration."""
@@ -65,6 +67,7 @@ def create_rule_strategy_router(
 
     router = APIRouter(prefix="/rule-strategies", tags=["rule-strategies"])
     rule_service = service or RuleStrategyService()
+    advisory_service = RuleStrategyAdvisoryService()
 
     @router.post("", response_model=SuccessResponse[dict[str, Any]], status_code=201)
     async def create_rule_strategy(
@@ -121,6 +124,26 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy updated")
 
+    @router.post(
+        "/{strategy_id}/advisory-analysis",
+        response_model=SuccessResponse[dict[str, Any]],
+    )
+    async def review_rule_strategy_configuration(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        try:
+            strategy = rule_service.get(strategy_id, principal.tenant_id)
+            evaluations = rule_service.evaluations(
+                strategy_id, principal.tenant_id, limit=10
+            )
+            data = advisory_service.review_configuration(strategy, evaluations)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuleStrategyAdvisoryUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="AI advisory generated")
+
     @router.post("/{strategy_id}/start", response_model=SuccessResponse[dict[str, Any]])
     async def start_rule_strategy(
         strategy_id: str,
@@ -160,6 +183,23 @@ def create_rule_strategy_router(
         except RuleStrategyNotRunningError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy evaluated")
+
+    @router.get(
+        "/{strategy_id}/evaluations",
+        response_model=SuccessResponse[list[dict[str, Any]]],
+    )
+    async def get_rule_strategy_evaluations(
+        strategy_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[list[dict[str, Any]]]:
+        try:
+            data = rule_service.evaluations(strategy_id, principal.tenant_id, limit)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(
+            data=data, msg="Paper evaluation explanations retrieved"
+        )
 
     @router.get(
         "/{strategy_id}/pnl-curve",

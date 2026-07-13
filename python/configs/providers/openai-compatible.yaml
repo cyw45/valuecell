@@ -31,21 +31,15 @@ connection:
   base_url: "${OPENAI_COMPATIBLE_BASE_URL:http://localhost:11434/v1}"
   api_key_env: "OPENAI_COMPATIBLE_API_KEY"
 
-# Default model if agents.yaml specified
-# Example: qwen3-max
-default_model: "qwen3-max"
+# Default chat model served through the configured HiCode proxy.
+default_model: "gpt-5.5"
 
-# Model Parameters Defaults
-defaults:
-  temperature: 0.7
-  max_tokens: 4096
-
-# Available Models (examples - adjust based on your provider model id)
+# Provider-visible chat models. Keep this aligned with the HiCode account.
 models:
-  - id: "qwen3-max"
-    name: "Qwen3 Max"
+  - id: "gpt-5.5"
+    name: "GPT-5.5"
     context_length: 256000
-    description: "Qwen3 Max model"
+    description: "GPT-5.5 through the configured HiCode proxy"
   
 
 # ============================================

@@ -96,11 +96,7 @@ def _evaluation_input() -> dict:
         "market": {
             "symbol": "BTC-USDT",
             "price": 80,
-            "equity_quote": 1_000,
-            "quote_balance": 1_000,
-            "open_position_count": 0,
             "funding_rate": 0.001,
-            "position": {"quantity": 0},
         },
     }
 
@@ -124,6 +120,7 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
         json={
             "name": "Oversold recovery",
             "description": "paper only",
+            "initial_capital_quote": 1_000,
             "config": _config(),
         },
     )
@@ -192,7 +189,12 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
 def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evaluation():
     client = _client()
     client.post(
-        "/rule-strategies", json={"name": "Oversold recovery", "config": _config()}
+        "/rule-strategies",
+        json={
+            "name": "Oversold recovery",
+            "initial_capital_quote": 1_000,
+            "config": _config(),
+        },
     )
 
     stopped = client.post(
@@ -264,7 +266,12 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
             "reason_code": "indicator_buy_confirmed",
             "reason": "Buy recommendation: configured indicators confirm a buy signal.",
             "sizing": result["sizing"],
-            "execution": "not_submitted",
+            "execution": "paper_filled",
+            "symbol": "BTC-USDT",
+            "price": 80.0,
+            "quantity": 1.25,
+            "quote_amount": 100.0,
+            "realized_pnl_quote": 0.0,
         }
     ]
     assert funding["entries"] == [
@@ -278,3 +285,62 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
     stopped = client.post(f"/rule-strategies/{STRATEGY_ID}/stop")
     assert stopped.status_code == 200
     assert stopped.json()["data"]["status"] == "stopped"
+
+
+def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None:
+    client = _client()
+    assert (
+        client.post(
+            "/rule-strategies",
+            json={
+                "name": "Oversold recovery",
+                "initial_capital_quote": 1_000,
+                "config": _config(),
+            },
+        ).status_code
+        == 201
+    )
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/start").status_code == 200
+    evaluated = client.post(
+        f"/rule-strategies/{STRATEGY_ID}/evaluate", json=_evaluation_input()
+    )
+    assert evaluated.status_code == 200
+    result = evaluated.json()["data"]
+
+    history = client.get(f"/rule-strategies/{STRATEGY_ID}/evaluations", params={"limit": 1})
+
+    assert history.status_code == 200
+    body = history.json()
+    assert body["code"] == 0
+    assert body["data"] == [
+        {
+            "strategy_id": STRATEGY_ID,
+            "evaluation_id": EVALUATION_ID,
+            "evaluated_at": "2026-07-10T00:00:00Z",
+            "action": result["action"],
+            "reason_code": result["reason_code"],
+            "reason": result["reason"],
+            "conditions": result["conditions"],
+            "indicators": result["indicators"],
+            "sizing": result["sizing"],
+            "funding": result["funding"],
+            "account": result["account"],
+            "trades": [
+                {
+                    "action": result["action"],
+                    "reason_code": result["reason_code"],
+                    "reason": result["reason"],
+                    "sizing": result["sizing"],
+                    "execution": "paper_filled",
+                    "symbol": "BTC-USDT",
+                    "price": 80.0,
+                    "quantity": 1.25,
+                    "quote_amount": 100.0,
+                    "realized_pnl_quote": 0.0,
+                }
+            ],
+        }
+    ]
+    assert [condition["code"] for condition in body["data"][0]["conditions"]] == [
+        condition["code"] for condition in result["conditions"]
+    ]

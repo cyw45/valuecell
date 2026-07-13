@@ -18,6 +18,8 @@ interface CryptoMarketIndicatorQueryParams {
   lookback?: number;
   providers?: string[];
   enabled?: boolean;
+  fromTsMs?: number;
+  toTsMs?: number;
   refreshIntervalSeconds?: number;
 }
 
@@ -53,6 +55,8 @@ export const useGetCryptoMarketIndicators = (
       params.interval,
       params.lookback ?? 240,
       providers.join(","),
+      params.fromTsMs ?? "",
+      params.toTsMs ?? "",
     ]),
     queryFn: () => {
       const searchParams = new URLSearchParams({
@@ -62,6 +66,12 @@ export const useGetCryptoMarketIndicators = (
       });
       if (providers.length > 0) {
         searchParams.set("providers", providers.join(","));
+      }
+      if (params.fromTsMs !== undefined) {
+        searchParams.set("from_ts_ms", String(params.fromTsMs));
+      }
+      if (params.toTsMs !== undefined) {
+        searchParams.set("to_ts_ms", String(params.toTsMs));
       }
       return apiClient.get<ApiResponse<CryptoMarketIndicators>>(
         `crypto-market/indicators?${searchParams.toString()}`,

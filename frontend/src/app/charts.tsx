@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BarChart3, ExternalLink, RadioTower } from "lucide-react";
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
+import { MarketIndicatorPanelChart, type MarketIndicatorPanel } from "@/components/valuecell/charts/market-indicator-panel";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -18,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import CandlestickChart, { type CandlestickData, type CandlestickMovingAverage } from "@/components/valuecell/charts/candlestick-chart";
 
 const SYMBOLS = [
@@ -27,20 +30,39 @@ const SYMBOLS = [
 ] as const;
 
 const INTERVALS = [
-  { value: "15m", labelKey: "saas.charts.intervals.fifteenMinutes" },
-  { value: "1h", labelKey: "saas.charts.intervals.oneHour" },
-  { value: "4h", labelKey: "saas.charts.intervals.fourHours" },
-  { value: "1d", labelKey: "saas.charts.intervals.oneDay" },
+  { value: "15m", label: "15m" }, { value: "1h", label: "1h" },
+  { value: "4h", label: "4h" }, { value: "1d", label: "1D" },
+  { value: "1w", label: "1W" }, { value: "1M", label: "1M" },
+  { value: "3M", label: "3M" }, { value: "1Y", label: "1Y" },
 ] as const;
+const HISTORY_RANGES = [
+  { value: "10d", label: "10D", days: 10 }, { value: "30d", label: "30D", days: 30 },
+  { value: "90d", label: "90D", days: 90 }, { value: "1y", label: "1Y", days: 365 },
+] as const;
+type HistoryRange = typeof HISTORY_RANGES[number]["value"];
 
 export default function ChartsPage() {
   const { t } = useTranslation();
   const [symbol, setSymbol] = useState<string>(SYMBOLS[0].value);
   const [interval, setInterval] = useState("1h");
+  const [indicatorPanel, setIndicatorPanel] = useState<MarketIndicatorPanel>("rsi");
+  const [historyRange, setHistoryRange] = useState<HistoryRange>("10d");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const fromTsMs = useMemo(() => {
+    if (fromDate) return new Date(`${fromDate}T00:00:00Z`).getTime();
+    const days = HISTORY_RANGES.find((range) => range.value === historyRange)?.days ?? 10;
+    return Date.now() - days * 24 * 60 * 60 * 1000;
+  }, [fromDate, historyRange]);
+  const toTsMs = useMemo(() => (
+    toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : Date.now()
+  ), [toDate]);
   const { data, isFetching, isError } = useGetCryptoMarketIndicators({
     symbols: [symbol],
     interval,
-    lookback: 240,
+    lookback: 5_000,
+    fromTsMs,
+    toTsMs,
   });
   const market = data?.symbols.find((item) => item.symbol === symbol);
   const failedReason = data?.failed_symbols?.[symbol];
@@ -52,13 +74,27 @@ export default function ChartsPage() {
     close: candle.close,
     volume: candle.volume,
   })) ?? [], [market]);
-  const movingAverages = useMemo<CandlestickMovingAverage[]>(() => market?.indicators.length
-    ? ["ma5", "ma20", "ma60"].map((key, index) => ({
-      name: key.toUpperCase(),
-      values: market.indicators.map((indicator) => indicator.ma[key] ?? null),
-      color: ["#f59e0b", "#3b82f6", "#a855f7"][index],
-    }))
-    : [], [market]);
+  const movingAverages = useMemo<CandlestickMovingAverage[]>(() => {
+    if (!market?.indicators.length) return [];
+    const overlays = [
+      { key: "ma5", name: "MA5", color: "#f59e0b" },
+      { key: "ma20", name: "MA20", color: "#3b82f6" },
+      { key: "ma60", name: "MA60", color: "#a855f7" },
+      { key: "upper", name: "BB Upper", color: "#94a3b8" },
+      { key: "middle", name: "BB Middle", color: "#64748b" },
+      { key: "lower", name: "BB Lower", color: "#94a3b8" },
+    ] as const;
+    return overlays.map((overlay) => ({
+      name: overlay.name,
+      color: overlay.color,
+      values: market.indicators.map((indicator) => {
+        if (overlay.key === "ma5" || overlay.key === "ma20" || overlay.key === "ma60") {
+          return indicator.ma[overlay.key] ?? null;
+        }
+        return indicator.bollinger[overlay.key] ?? null;
+      }),
+    }));
+  }, [market]);
 
   return (
     <div className="scroll-container size-full bg-muted/40">
@@ -81,9 +117,17 @@ export default function ChartsPage() {
                 <SelectContent>{SYMBOLS.map((option) => <SelectItem key={option.value} value={option.value}>{t(option.labelKey)}</SelectItem>)}</SelectContent>
               </Select>
               <Select value={interval} onValueChange={setInterval}>
-                <SelectTrigger className="w-full sm:w-32"><SelectValue /></SelectTrigger>
-                <SelectContent>{INTERVALS.map((option) => <SelectItem key={option.value} value={option.value}>{t(option.labelKey)}</SelectItem>)}</SelectContent>
+                <SelectTrigger className="w-full sm:w-24"><SelectValue /></SelectTrigger>
+                <SelectContent>{INTERVALS.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent>
               </Select>
+            </div>
+            <div className="flex flex-wrap gap-1" aria-label="Historical range">
+              {HISTORY_RANGES.map((range) => <Button key={range.value} onClick={() => setHistoryRange(range.value)} size="sm" type="button" variant={historyRange === range.value ? "secondary" : "ghost"}>{range.label}</Button>)}
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <Input aria-label="Start date" className="h-8 w-36" onChange={(event) => setFromDate(event.target.value)} type="date" value={fromDate} />
+              <span className="text-muted-foreground">to</span>
+              <Input aria-label="End date" className="h-8 w-36" onChange={(event) => setToDate(event.target.value)} type="date" value={toDate} />
             </div>
           </CardHeader>
           <CardContent className="px-0 pb-2 sm:px-2">
@@ -96,8 +140,26 @@ export default function ChartsPage() {
             ) : !market && !isFetching ? (
               <p className="py-28 text-center text-sm text-muted-foreground">{t("saas.charts.marketUnavailable")}</p>
             ) : (
-              <CandlestickChart data={candles} movingAverages={movingAverages} loading={isFetching} height={520} />
+              <CandlestickChart data={candles} movingAverages={movingAverages} loading={isFetching} height={430} />
             )}
+            {market?.indicators.length ? (
+              <div className="border-t px-4 py-4 sm:px-5">
+                <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="font-medium text-sm">Technical indicator</p>
+                    <p className="text-muted-foreground text-xs">Derived from the same exchange OHLCV snapshot as the candlestick chart.</p>
+                  </div>
+                  <Tabs onValueChange={(value) => setIndicatorPanel(value as MarketIndicatorPanel)} value={indicatorPanel}>
+                    <TabsList aria-label="Technical indicator panel">
+                      <TabsTrigger value="rsi">RSI</TabsTrigger>
+                      <TabsTrigger value="momentum">Momentum</TabsTrigger>
+                      <TabsTrigger value="macd">MACD</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                </div>
+                <MarketIndicatorPanelChart data={market.indicators} panel={indicatorPanel} />
+              </div>
+            ) : null}
           </CardContent>
         </Card>
 

@@ -61,6 +61,12 @@ def create_crypto_market_router() -> APIRouter:
             None,
             description="Optional comma-separated provider fallback order: okx,binance,gate,mexc",
         ),
+        from_ts_ms: int | None = Query(
+            None, gt=0, description="Inclusive UTC range start in milliseconds"
+        ),
+        to_ts_ms: int | None = Query(
+            None, gt=0, description="Inclusive UTC range end in milliseconds"
+        ),
     ):
         symbol_list = [item.strip() for item in symbols.split(",") if item.strip()]
         provider_list = (
@@ -74,6 +80,8 @@ def create_crypto_market_router() -> APIRouter:
             and interval.strip().lower() == settings.MARKET_DEFAULT_INTERVAL
             and lookback <= settings.MARKET_DEFAULT_LOOKBACK
             and set(symbol_list).issubset(set(settings.MARKET_DEFAULT_SYMBOLS))
+            and from_ts_ms is None
+            and to_ts_ms is None
         )
         if is_default_snapshot_query:
             snapshot = service.get_default_snapshot()
@@ -109,12 +117,17 @@ def create_crypto_market_router() -> APIRouter:
                 detail="Shared market snapshot is warming; retry shortly",
             )
         try:
-            data = await service.get_indicators(
-                symbols=symbol_list,
-                interval=interval,
-                lookback=lookback,
-                providers=provider_list,
-            )
+            request_kwargs = {
+                "symbols": symbol_list,
+                "interval": interval,
+                "lookback": lookback,
+                "providers": provider_list,
+            }
+            if from_ts_ms is not None:
+                request_kwargs["from_ts_ms"] = from_ts_ms
+            if to_ts_ms is not None:
+                request_kwargs["to_ts_ms"] = to_ts_ms
+            data = await service.get_indicators(**request_kwargs)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:

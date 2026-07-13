@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   BarChart3,
   CandlestickChart,
+  BrainCircuit,
   CircleDollarSign,
   Gauge,
   Layers3,
@@ -20,6 +21,8 @@ import { toast } from "sonner";
 import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
   useCreateRuleStrategy,
+  useRuleStrategyAdvisory,
+  useRuleStrategyEvaluations,
   useEvaluateRuleStrategy,
   useRuleStrategy,
   useStartRuleStrategy,
@@ -53,6 +56,7 @@ import type {
   RuleStrategyConfig,
   RuleStrategyEvaluation,
   RuleStrategyInterval,
+  RuleStrategyAdvisory,
 } from "@/types/rule-strategy";
 
 const TIMEFRAME_OPTIONS: RuleStrategyInterval[] = ["5m", "15m", "1h", "4h", "1d"];
@@ -321,6 +325,9 @@ export default function Strategies() {
   const symbolOptions = symbolsQuery.data?.symbols.map((symbol) => symbol.replace("-", "/")) ?? [];
   const savePending = createStrategy.isPending || updateStrategy.isPending;
   const selectionLimitReached = values.symbols.length >= 10;
+  const advisoryStrategy = useRuleStrategyAdvisory(strategyId || undefined);
+  const evaluationsQuery = useRuleStrategyEvaluations(strategyId || undefined);
+  const [advisory, setAdvisory] = useState<RuleStrategyAdvisory | null>(null);
 
   const saveStrategy = async () => {
     if (!isValid) return;
@@ -343,6 +350,12 @@ export default function Strategies() {
         await strategyQuery.refetch();
       }
       toast.success(t("saas.operations.strategy.toasts.saved"));
+      try {
+        const analysis = await advisoryStrategy.mutateAsync();
+        setAdvisory(analysis.data);
+      } catch {
+        setAdvisory(null);
+      }
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : t("saas.operations.strategy.toasts.operationFailed"),
@@ -504,6 +517,18 @@ export default function Strategies() {
               <SummaryRow label={t("saas.operations.strategy.summary.positionSize")} value={t("saas.operations.strategy.summary.positionSizeValue", { value: values.positionSize })} />
               <SummaryRow label={t("saas.operations.strategy.summary.exitLimits")} value={t("saas.operations.strategy.summary.exitLimitsValue", { takeProfit: values.takeProfit, stopLoss: values.stopLoss })} />
               <SummaryRow label={t("saas.operations.strategy.summary.exposureCap")} value={t("saas.operations.strategy.summary.exposureCapValue", { positions: values.maximumPositions, leverage: values.leverage })} />
+            </CardContent>
+          </Card>
+
+          <Card className="gap-0 rounded-lg py-0 shadow-none">
+            <CardHeader className="border-b px-4 py-4">
+              <CardTitle className="flex items-center gap-2 text-base"><BrainCircuit /> AI configuration review</CardTitle>
+              <CardDescription>Read-only guidance. It never changes rules or creates paper trades.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 px-4 py-4">
+              {advisory ? <div className="whitespace-pre-wrap text-sm leading-6">{advisory.content}</div> : <p className="text-muted-foreground text-sm">Saved strategies are reviewed automatically when an AI provider is configured.</p>}
+              {evaluationsQuery.data?.[0] ? <div className="rounded-md border bg-muted/30 p-3 text-sm"><p className="font-medium">Latest scheduled evaluation: {evaluationsQuery.data[0].action}</p><p className="mt-1 text-muted-foreground">{evaluationsQuery.data[0].reason}</p><p className="mt-2 text-xs text-muted-foreground">{evaluationsQuery.data[0].conditions.filter((condition) => condition.state !== "triggered").length} conditions did not trigger or were blocked.</p></div> : null}
+              {strategyId ? <Button disabled={advisoryStrategy.isPending} onClick={async () => { try { const result = await advisoryStrategy.mutateAsync(); setAdvisory(result.data); } catch (err) { toast.error(err instanceof Error ? err.message : "AI advisory is unavailable."); } }} type="button" variant="outline">{advisoryStrategy.isPending ? "Reviewing…" : "Refresh AI review"}</Button> : null}
             </CardContent>
           </Card>
 

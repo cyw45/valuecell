@@ -512,3 +512,40 @@ def test_crypto_market_router_returns_400_for_invalid_symbol(
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Unsupported crypto symbol: AAPL-USDT"
+
+
+@pytest.mark.parametrize("interval", ["1w", "1M", "3M", "1Y"])
+def test_crypto_market_router_forwards_historical_range_and_aggregation_interval(
+    monkeypatch: pytest.MonkeyPatch, interval: str
+) -> None:
+    service = AsyncMock()
+    service.get_indicators = AsyncMock(return_value=_sample_market_data())
+    monkeypatch.setattr(
+        "valuecell.server.api.routers.crypto_market.get_crypto_market_service",
+        lambda: service,
+    )
+    app = FastAPI()
+    app.include_router(create_crypto_market_router())
+
+    response = TestClient(app).get(
+        "/crypto-market/indicators",
+        params={
+            "symbols": "BTC-USDT",
+            "interval": interval,
+            "lookback": 24,
+            "from_ts_ms": 1_700_000_000_000,
+            "to_ts_ms": 1_710_000_000_000,
+            "providers": "okx",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 0
+    service.get_indicators.assert_awaited_once_with(
+        symbols=["BTC-USDT"],
+        interval=interval,
+        lookback=24,
+        providers=["okx"],
+        from_ts_ms=1_700_000_000_000,
+        to_ts_ms=1_710_000_000_000,
+    )

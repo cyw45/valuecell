@@ -30,9 +30,17 @@ from valuecell.server.api.schemas.crypto_market import (
 )
 
 DEFAULT_PROVIDERS: tuple[str, ...] = ("gate", "okx", "binance", "mexc")
-SUPPORTED_INTERVALS: set[str] = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"}
+SOURCE_INTERVALS: set[str] = {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"}
+AGGREGATED_INTERVALS: set[str] = {"1w", "1M", "3M", "1Y"}
+SUPPORTED_INTERVALS = SOURCE_INTERVALS | AGGREGATED_INTERVALS
+AGGREGATION_SOURCE_INTERVAL: dict[str, str] = {
+    "1w": "1d",
+    "1M": "1d",
+    "3M": "1d",
+    "1Y": "1d",
+}
 DEFAULT_LOOKBACK = 240
-MAX_LOOKBACK = 500
+MAX_LOOKBACK = 5_000
 CACHE_TTL_S = 12.0
 FETCH_TIMEOUT_S = 8.0
 MAX_CONCURRENT_FETCHES = 6
@@ -45,7 +53,8 @@ CANDLE_FRESHNESS_MAX_AGE_S = 90
 
 INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1_800,
-    "1h": 3_600, "4h": 14_400, "1d": 86_400,
+    "1h": 3_600, "4h": 14_400, "1d": 86_400, "1w": 604_800,
+    "1M": 2_592_000, "3M": 7_776_000, "1Y": 31_536_000,
 }
 
 MARKET_SNAPSHOT_FILENAME = "market_snapshot.json"
@@ -312,18 +321,30 @@ class CryptoMarketService:
         interval: str,
         lookback: int,
         providers: list[str] | None = None,
+        from_ts_ms: int | None = None,
+        to_ts_ms: int | None = None,
     ) -> CryptoMarketIndicatorsData:
         normalized_symbols = self._normalize_symbols(symbols)
         normalized_interval = self._normalize_interval(interval)
         normalized_lookback = self._normalize_lookback(lookback)
+        time_range = self._normalize_time_range(from_ts_ms, to_ts_ms)
         provider_pool = self._normalize_providers(providers)
-
+        source_interval = AGGREGATION_SOURCE_INTERVAL.get(
+            normalized_interval, normalized_interval
+        )
+        source_lookback = (
+            MAX_LOOKBACK
+            if normalized_interval in AGGREGATED_INTERVALS
+            else normalized_lookback
+        )
         tasks = [
             self._fetch_symbol_with_indicators(
                 symbol=symbol,
                 interval=normalized_interval,
-                lookback=normalized_lookback,
+                source_interval=source_interval,
+                lookback=source_lookback,
                 providers=provider_pool,
+                time_range=time_range,
             )
             for symbol in normalized_symbols
         ]
@@ -350,14 +371,26 @@ class CryptoMarketService:
         *,
         symbol: str,
         interval: str,
+        source_interval: str,
         lookback: int,
         providers: list[str],
+        time_range: tuple[int | None, int | None],
     ) -> CryptoSymbolIndicatorsData:
         fetch_result = await self._fetch_with_fallback(
             symbol=symbol,
-            interval=interval,
+            interval=source_interval,
             lookback=lookback,
             providers=providers,
+            time_range=time_range,
+        )
+        candles = self._aggregate_candles(fetch_result.candles, interval)
+        if not candles:
+            raise RuntimeError("No candles matched the requested time range")
+        fetch_result = CandleFetchResult(
+            symbol=fetch_result.symbol,
+            exchange_symbol=fetch_result.exchange_symbol,
+            provider=fetch_result.provider,
+            candles=candles,
         )
         indicators = self._compute_indicators(fetch_result.candles)
         latest_price = fetch_result.candles[-1].close if fetch_result.candles else None
@@ -393,6 +426,7 @@ class CryptoMarketService:
         interval: str,
         lookback: int,
         providers: list[str],
+        time_range: tuple[int | None, int | None],
     ) -> CandleFetchResult:
         errors: list[str] = []
         stale_result: CandleFetchResult | None = None
@@ -408,11 +442,17 @@ class CryptoMarketService:
                 continue
             for attempt in range(settings.MARKET_DATA_PROVIDER_ATTEMPTS):
                 try:
-                    result = await self._fetch_from_provider(
-                        provider=provider,
-                        symbol=symbol,
-                        interval=interval,
-                        lookback=lookback,
+                    result = (
+                        await self._fetch_history_from_provider(
+                            provider, symbol, interval, lookback, time_range
+                        )
+                        if any(time_range)
+                        else await self._fetch_from_provider(
+                            provider=provider,
+                            symbol=symbol,
+                            interval=interval,
+                            lookback=lookback,
+                        )
                     )
                     health.consecutive_failures = 0
                     health.cooldown_until = 0.0
@@ -434,7 +474,7 @@ class CryptoMarketService:
                         interval,
                         str(exc),
                     )
-        if stale_result is not None:
+        if stale_result is not None and not any(time_range):
             logger.warning(
                 "Serving last successful candles during provider outage symbol={} interval={}",
                 symbol,
@@ -442,6 +482,45 @@ class CryptoMarketService:
             )
             return stale_result
         raise RuntimeError("; ".join(errors) or "No provider succeeded")
+
+    async def _fetch_history_from_provider(
+        self,
+        provider: str,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        time_range: tuple[int | None, int | None],
+    ) -> CandleFetchResult:
+        from_ts_ms, to_ts_ms = time_range
+        if provider == "gate":
+            return await asyncio.to_thread(
+                self._fetch_gate_public_candles,
+                symbol,
+                interval,
+                lookback,
+                from_ts_ms,
+                to_ts_ms,
+            )
+        exchange_cls = getattr(ccxtpro, provider, None)
+        if exchange_cls is None:
+            raise RuntimeError(f"Exchange provider '{provider}' is not available")
+        exchange = exchange_cls({"enableRateLimit": True, "newUpdates": False})
+        exchange_symbol = self._to_exchange_symbol(symbol)
+        try:
+            raw = await exchange.fetch_ohlcv(
+                exchange_symbol,
+                timeframe=interval,
+                since=from_ts_ms,
+                limit=lookback,
+            )
+        finally:
+            close = getattr(exchange, "close", None)
+            if close is not None:
+                await close()
+        candles = self._filter_time_range(self._parse_ohlcv(raw), time_range)
+        if not candles:
+            raise RuntimeError("No candles returned for requested range")
+        return CandleFetchResult(symbol, exchange_symbol, provider, candles)
 
     async def _fetch_from_provider(
         self,
@@ -540,39 +619,44 @@ class CryptoMarketService:
         )
 
     def _fetch_gate_public_candles(
-        self, symbol: str, interval: str, lookback: int
+        self,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        from_ts_ms: int | None = None,
+        to_ts_ms: int | None = None,
     ) -> CandleFetchResult:
-        query = urlencode(
-            {
-                "currency_pair": symbol.replace("-", "_"),
-                "interval": interval,
-                "limit": lookback,
-            }
-        )
+        query_data: dict[str, str | int] = {
+            "currency_pair": symbol.replace("-", "_"),
+            "interval": interval,
+            "limit": lookback,
+        }
+        if from_ts_ms is not None:
+            query_data["from"] = from_ts_ms // 1000
+        if to_ts_ms is not None:
+            query_data["to"] = to_ts_ms // 1000
+        query = urlencode(query_data)
         url = f"https://api.gateio.ws/api/v4/spot/candlesticks?{query}"
         with urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
             raw = json.loads(response.read().decode("utf-8"))
-        candles = [
-            CryptoCandleData(
-                ts=int(row[0]) * 1000,
-                volume=float(row[1]),
-                close=float(row[2]),
-                high=float(row[3]),
-                low=float(row[4]),
-                open=float(row[5]),
-            )
-            for row in raw
-            if len(row) >= 6
-        ]
-        candles.sort(key=lambda item: item.ts)
-        if not candles:
-            raise RuntimeError("Gate returned no candles")
-        return CandleFetchResult(
-            symbol=symbol,
-            exchange_symbol=symbol.replace("-", "_"),
-            provider="gate",
-            candles=candles,
+        candles = self._filter_time_range(
+            [
+                CryptoCandleData(
+                    ts=int(row[0]) * 1000,
+                    volume=float(row[1]),
+                    close=float(row[2]),
+                    high=float(row[3]),
+                    low=float(row[4]),
+                    open=float(row[5]),
+                )
+                for row in raw
+                if len(row) >= 6
+            ],
+            (from_ts_ms, to_ts_ms),
         )
+        if not candles:
+            raise RuntimeError("Gate returned no candles for requested range")
+        return CandleFetchResult(symbol, symbol.replace("-", "_"), "gate", candles)
 
     def _compute_indicators(
         self,
@@ -640,10 +724,67 @@ class CryptoMarketService:
         return normalized
 
     def _normalize_interval(self, interval: str) -> str:
-        normalized = interval.strip().lower()
-        if normalized not in SUPPORTED_INTERVALS:
+        raw_interval = interval.strip()
+        if raw_interval in AGGREGATED_INTERVALS:
+            return raw_interval
+        normalized = raw_interval.lower()
+        if normalized not in SOURCE_INTERVALS:
             raise ValueError(f"Unsupported interval: {interval}")
         return normalized
+
+    @staticmethod
+    def _normalize_time_range(
+        from_ts_ms: int | None, to_ts_ms: int | None
+    ) -> tuple[int | None, int | None]:
+        if from_ts_ms is not None and from_ts_ms <= 0:
+            raise ValueError("from_ts_ms must be positive")
+        if to_ts_ms is not None and to_ts_ms <= 0:
+            raise ValueError("to_ts_ms must be positive")
+        if from_ts_ms is not None and to_ts_ms is not None and from_ts_ms > to_ts_ms:
+            raise ValueError("from_ts_ms must not be later than to_ts_ms")
+        return from_ts_ms, to_ts_ms
+
+    @staticmethod
+    def _filter_time_range(
+        candles: list[CryptoCandleData], time_range: tuple[int | None, int | None]
+    ) -> list[CryptoCandleData]:
+        from_ts_ms, to_ts_ms = time_range
+        return [
+            candle for candle in candles
+            if (from_ts_ms is None or candle.ts >= from_ts_ms)
+            and (to_ts_ms is None or candle.ts <= to_ts_ms)
+        ]
+
+    @staticmethod
+    def _aggregate_candles(
+        candles: list[CryptoCandleData], interval: str
+    ) -> list[CryptoCandleData]:
+        if interval not in AGGREGATED_INTERVALS:
+            return candles
+        buckets: dict[tuple[int, int], list[CryptoCandleData]] = {}
+        for candle in candles:
+            timestamp = datetime.fromtimestamp(candle.ts / 1000, tz=timezone.utc)
+            if interval == "1w":
+                iso_year, iso_week, _ = timestamp.isocalendar()
+                bucket = (iso_year, iso_week)
+            elif interval == "1M":
+                bucket = (timestamp.year, timestamp.month)
+            elif interval == "3M":
+                bucket = (timestamp.year, (timestamp.month - 1) // 3 + 1)
+            else:
+                bucket = (timestamp.year, 1)
+            buckets.setdefault(bucket, []).append(candle)
+        return [
+            CryptoCandleData(
+                ts=items[0].ts,
+                open=items[0].open,
+                high=max(item.high for item in items),
+                low=min(item.low for item in items),
+                close=items[-1].close,
+                volume=sum(item.volume for item in items),
+            )
+            for items in buckets.values()
+        ]
 
     def _normalize_lookback(self, lookback: int) -> int:
         if lookback <= 0:

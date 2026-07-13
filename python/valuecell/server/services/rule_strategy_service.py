@@ -139,6 +139,32 @@ class RuleStrategyService:
             **result_data,
         }
 
+    def evaluations(
+        self, strategy_id: str, tenant_id: str, limit: int
+    ) -> list[dict[str, Any]]:
+        """Return complete, durable explanations for each paper evaluation."""
+        self._require_strategy(strategy_id, tenant_id)
+        entries: list[dict[str, Any]] = []
+        for journal in self.repository.get_evaluations(strategy_id, tenant_id, limit=limit):
+            result = journal.result or {}
+            entries.append(
+                {
+                    "strategy_id": strategy_id,
+                    "evaluation_id": journal.evaluation_id,
+                    "evaluated_at": journal.created_at,
+                    "action": result.get("action", "no_op"),
+                    "reason_code": result.get("reason_code", "unknown"),
+                    "reason": result.get("reason", "No explanation was recorded."),
+                    "conditions": result.get("conditions", []),
+                    "indicators": result.get("indicators", {}),
+                    "sizing": result.get("sizing", {}),
+                    "funding": result.get("funding", {}),
+                    "account": result.get("account", {}),
+                    "trades": journal.trades or [],
+                }
+            )
+        return entries
+
     def account(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
         config = RuleStrategyConfig.model_validate(strategy.config)

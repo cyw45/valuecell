@@ -11,6 +11,8 @@ import type {
   RuleStrategyPnlPoint,
   RuleStrategyTradeLogEntry,
   UpdateRuleStrategyRequest,
+  RuleStrategyAdvisory,
+  RuleStrategyEvaluationHistoryEntry,
 } from "@/types/rule-strategy";
 
 const ruleStrategyKey = (strategyId: string) => ["rule-strategies", strategyId] as const;
@@ -85,6 +87,26 @@ export function useEvaluateRuleStrategy(strategyId?: string) {
       }
       queryClient.invalidateQueries({ queryKey: [...ruleStrategyKey(strategyId), "pnl-curve"] });
     },
+  });
+}
+
+export function useRuleStrategyEvaluations(strategyId?: string) {
+  return useQuery({
+    queryKey: [...ruleStrategyKey(strategyId ?? ""), "evaluations"] as const,
+    queryFn: () => apiClient.get<ApiResponse<RuleStrategyEvaluationHistoryEntry[]>>(
+      `/rule-strategies/${strategyId}/evaluations?limit=100`, { requiresAuth: true },
+    ),
+    select: (response) => response.data,
+    enabled: Boolean(strategyId),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useRuleStrategyAdvisory(strategyId?: string) {
+  return useMutation({
+    mutationFn: () => apiClient.post<ApiResponse<RuleStrategyAdvisory>>(
+      `/rule-strategies/${strategyId}/advisory-analysis`, undefined, { requiresAuth: true },
+    ),
   });
 }
 

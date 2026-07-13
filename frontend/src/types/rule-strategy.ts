@@ -159,6 +159,19 @@ export interface RuleStrategyEvaluation {
   account: RuleStrategyPaperAccount;
 }
 
+export interface RuleStrategyEvaluationHistoryEntry extends RuleStrategyEvaluation {
+  evaluated_at: string;
+  trades: RuleStrategyTradeLogEntry[];
+}
+
+export interface RuleStrategyAdvisory {
+  kind: "configuration_review";
+  authority: "advisory_only";
+  provider: string;
+  model_id: string;
+  content: string;
+}
+
 export interface RuleStrategyLogEntry extends RuleStrategyCondition {
   evaluation_id: string;
   evaluated_at: string;
