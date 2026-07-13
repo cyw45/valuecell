@@ -56,10 +56,10 @@ class RuleStrategyAdvisoryService:
                         {
                             "role": "system",
                             "content": (
-                                "You are a read-only paper-trading strategy reviewer. "
-                                "Never recommend a trade or an order. Never claim performance "
-                                "not present in the evidence. Give concise configuration and risk "
-                                "observations with evidence. Recommendations cannot imply automatic changes."
+                                "你是只读的纸面交易策略审阅顾问。必须使用简体中文回答；"
+                                "首次出现的技术术语可在中文后保留常用英文缩写。绝不建议立即交易或下单，"
+                                "绝不声称证据中没有的表现。基于提供的证据，简洁说明配置、风险和"
+                                "条件触发频率的观察。所有建议都不能暗示自动修改。"
                             ),
                         },
                         {"role": "user", "content": prompt},

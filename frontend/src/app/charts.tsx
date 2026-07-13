@@ -39,6 +39,10 @@ const HISTORY_RANGES = [
   { value: "10d", label: "10D", days: 10 }, { value: "30d", label: "30D", days: 30 },
   { value: "90d", label: "90D", days: 90 }, { value: "1y", label: "1Y", days: 365 },
 ] as const;
+const INTERVAL_SECONDS: Record<string, number> = {
+  "15m": 900, "1h": 3_600, "4h": 14_400, "1d": 86_400,
+  "1w": 604_800, "1M": 2_592_000, "3M": 7_776_000, "1Y": 31_536_000,
+};
 type HistoryRange = typeof HISTORY_RANGES[number]["value"];
 
 export default function ChartsPage() {
@@ -48,19 +52,24 @@ export default function ChartsPage() {
   const [indicatorPanel, setIndicatorPanel] = useState<MarketIndicatorPanel>("rsi");
   const [historyRange, setHistoryRange] = useState<HistoryRange>("10d");
   const [fromDate, setFromDate] = useState("");
+  const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
   const [toDate, setToDate] = useState("");
   const fromTsMs = useMemo(() => {
     if (fromDate) return new Date(`${fromDate}T00:00:00Z`).getTime();
     const days = HISTORY_RANGES.find((range) => range.value === historyRange)?.days ?? 10;
-    return Date.now() - days * 24 * 60 * 60 * 1000;
-  }, [fromDate, historyRange]);
+    return requestNowMs - days * 24 * 60 * 60 * 1000;
+  }, [fromDate, historyRange, requestNowMs]);
   const toTsMs = useMemo(() => (
-    toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : Date.now()
-  ), [toDate]);
+    toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : requestNowMs
+  ), [requestNowMs, toDate]);
+  const lookback = useMemo(() => Math.min(
+    5_000,
+    Math.ceil((toTsMs - fromTsMs) / (INTERVAL_SECONDS[interval] * 1000)) + 2,
+  ), [fromTsMs, interval, toTsMs]);
   const { data, isFetching, isError } = useGetCryptoMarketIndicators({
     symbols: [symbol],
     interval,
-    lookback: 5_000,
+    lookback,
     fromTsMs,
     toTsMs,
   });
@@ -122,12 +131,12 @@ export default function ChartsPage() {
               </Select>
             </div>
             <div className="flex flex-wrap gap-1" aria-label="Historical range">
-              {HISTORY_RANGES.map((range) => <Button key={range.value} onClick={() => setHistoryRange(range.value)} size="sm" type="button" variant={historyRange === range.value ? "secondary" : "ghost"}>{range.label}</Button>)}
+              {HISTORY_RANGES.map((range) => <Button key={range.value} onClick={() => { setHistoryRange(range.value); setFromDate(""); setToDate(""); setRequestNowMs(Date.now()); }} size="sm" type="button" variant={historyRange === range.value ? "secondary" : "ghost"}>{range.label}</Button>)}
             </div>
             <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Input aria-label="Start date" className="h-8 w-36" onChange={(event) => setFromDate(event.target.value)} type="date" value={fromDate} />
+              <Input aria-label="Start date" className="h-8 w-36" onChange={(event) => { setFromDate(event.target.value); setRequestNowMs(Date.now()); }} type="date" value={fromDate} />
               <span className="text-muted-foreground">to</span>
-              <Input aria-label="End date" className="h-8 w-36" onChange={(event) => setToDate(event.target.value)} type="date" value={toDate} />
+              <Input aria-label="End date" className="h-8 w-36" onChange={(event) => { setToDate(event.target.value); setRequestNowMs(Date.now()); }} type="date" value={toDate} />
             </div>
           </CardHeader>
           <CardContent className="px-0 pb-2 sm:px-2">
@@ -136,7 +145,7 @@ export default function ChartsPage() {
               {market?.freshness_status === "stale" ? <Badge variant="outline">Data delayed</Badge> : null}
             </div>
             {isError || failedReason ? (
-              <p className="py-28 text-center text-sm text-destructive">{t("saas.charts.marketUnavailable")}</p>
+              <p className="px-6 py-28 text-center text-sm text-destructive">{t("saas.charts.marketUnavailable")}{failedReason ? `：${failedReason}` : ""}</p>
             ) : !market && !isFetching ? (
               <p className="py-28 text-center text-sm text-muted-foreground">{t("saas.charts.marketUnavailable")}</p>
             ) : (

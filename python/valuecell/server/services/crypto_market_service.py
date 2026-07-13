@@ -43,6 +43,7 @@ DEFAULT_LOOKBACK = 240
 MAX_LOOKBACK = 5_000
 CACHE_TTL_S = 12.0
 FETCH_TIMEOUT_S = 8.0
+MAX_GATE_CANDLES_PER_REQUEST = 1_000
 MAX_CONCURRENT_FETCHES = 6
 MA_WINDOWS: tuple[int, ...] = (5, 10, 20, 60)
 RSI_WINDOW = 14
@@ -626,37 +627,72 @@ class CryptoMarketService:
         from_ts_ms: int | None = None,
         to_ts_ms: int | None = None,
     ) -> CandleFetchResult:
+        if from_ts_ms is None or to_ts_ms is None:
+            candles = self._fetch_gate_candle_page(
+                symbol, interval, min(lookback, MAX_GATE_CANDLES_PER_REQUEST), None, None
+            )
+        else:
+            interval_s = INTERVAL_SECONDS[interval]
+            start_s = from_ts_ms // 1000
+            end_s = to_ts_ms // 1000
+            candles = []
+            while start_s <= end_s:
+                page_end_s = min(
+                    end_s, start_s + interval_s * (MAX_GATE_CANDLES_PER_REQUEST - 1)
+                )
+                candles.extend(
+                    self._fetch_gate_candle_page(
+                        symbol,
+                        interval,
+                        MAX_GATE_CANDLES_PER_REQUEST,
+                        start_s,
+                        page_end_s,
+                    )
+                )
+                start_s = page_end_s + interval_s
+        candles = self._filter_time_range(candles, (from_ts_ms, to_ts_ms))
+        if not candles:
+            raise RuntimeError("Gate returned no candles for requested range")
+        unique_candles = {candle.ts: candle for candle in candles}
+        return CandleFetchResult(
+            symbol,
+            symbol.replace("-", "_"),
+            "gate",
+            sorted(unique_candles.values(), key=lambda item: item.ts),
+        )
+
+    @staticmethod
+    def _fetch_gate_candle_page(
+        symbol: str,
+        interval: str,
+        limit: int,
+        from_s: int | None,
+        to_s: int | None,
+    ) -> list[CryptoCandleData]:
         query_data: dict[str, str | int] = {
             "currency_pair": symbol.replace("-", "_"),
             "interval": interval,
-            "limit": lookback,
+            "limit": limit,
         }
-        if from_ts_ms is not None:
-            query_data["from"] = from_ts_ms // 1000
-        if to_ts_ms is not None:
-            query_data["to"] = to_ts_ms // 1000
-        query = urlencode(query_data)
-        url = f"https://api.gateio.ws/api/v4/spot/candlesticks?{query}"
+        if from_s is not None:
+            query_data["from"] = from_s
+        if to_s is not None:
+            query_data["to"] = to_s
+        url = f"https://api.gateio.ws/api/v4/spot/candlesticks?{urlencode(query_data)}"
         with urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
             raw = json.loads(response.read().decode("utf-8"))
-        candles = self._filter_time_range(
-            [
-                CryptoCandleData(
-                    ts=int(row[0]) * 1000,
-                    volume=float(row[1]),
-                    close=float(row[2]),
-                    high=float(row[3]),
-                    low=float(row[4]),
-                    open=float(row[5]),
-                )
-                for row in raw
-                if len(row) >= 6
-            ],
-            (from_ts_ms, to_ts_ms),
-        )
-        if not candles:
-            raise RuntimeError("Gate returned no candles for requested range")
-        return CandleFetchResult(symbol, symbol.replace("-", "_"), "gate", candles)
+        return [
+            CryptoCandleData(
+                ts=int(row[0]) * 1000,
+                volume=float(row[1]),
+                close=float(row[2]),
+                high=float(row[3]),
+                low=float(row[4]),
+                open=float(row[5]),
+            )
+            for row in raw
+            if len(row) >= 6
+        ]
 
     def _compute_indicators(
         self,

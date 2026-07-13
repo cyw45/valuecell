@@ -54,8 +54,8 @@ def create_crypto_market_router() -> APIRouter:
         lookback: int = Query(
             settings.MARKET_DEFAULT_LOOKBACK,
             ge=1,
-            le=500,
-            description="Number of candles",
+            le=5_000,
+            description="Number of source candles, up to 5,000 for historical ranges",
         ),
         providers: str | None = Query(
             None,
