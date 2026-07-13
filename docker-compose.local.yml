@@ -5,7 +5,9 @@ services:
       context: .
       dockerfile: docker/DockerFile
       args:
-        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        # Official PyPI is the default for US/EU VPS builds. Override only after
+        # verifying a regional mirror is reachable from the Docker build network.
+        UV_DEFAULT_INDEX: ${UV_DEFAULT_INDEX:-https://pypi.org/simple}
     image: valuecell-local-backend:latest
     env_file:
       - ./docker/runtime/.env
