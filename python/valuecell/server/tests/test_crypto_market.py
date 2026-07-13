@@ -283,6 +283,99 @@ async def test_crypto_market_service_reports_symbol_fetch_failures(
     }
 
 
+@pytest.mark.asyncio
+async def test_historical_fetch_failure_does_not_open_shared_provider_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = CryptoMarketService(providers=("okx",))
+
+    async def failing_history_fetch(
+        provider: str,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        time_range: tuple[int | None, int | None],
+    ) -> CandleFetchResult:
+        raise RuntimeError("historical range unavailable")
+
+    CryptoMarketService._provider_health.clear()
+    monkeypatch.setattr(service, "_fetch_history_from_provider", failing_history_fetch)
+
+    result = await service.get_indicators(
+        symbols=["BTC-USDT"],
+        interval="1h",
+        lookback=240,
+        providers=["okx"],
+        from_ts_ms=BASE_TS,
+        to_ts_ms=BASE_TS + 60_000,
+    )
+
+    assert result.symbols == []
+    assert "historical range unavailable" in result.failed_symbols["BTC-USDT"]
+    assert CryptoMarketService._provider_health["okx"].consecutive_failures == 0
+
+
+def test_mexc_history_retrieval_pages_public_rest_candles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = CryptoMarketService(providers=("mexc",))
+    interval_ms = 3_600_000
+    from_ts_ms = BASE_TS
+    to_ts_ms = BASE_TS + interval_ms * 1_000
+    calls: list[tuple[int | None, int | None]] = []
+
+    def fake_page(
+        provider: str,
+        symbol: str,
+        interval: str,
+        limit: int,
+        page_from_ts_ms: int | None,
+        page_to_ts_ms: int | None,
+    ) -> list[CryptoCandleData]:
+        assert provider == "mexc"
+        assert symbol == "BTC-USDT"
+        assert interval == "1h"
+        assert limit == 1_000
+        calls.append((page_from_ts_ms, page_to_ts_ms))
+        assert page_from_ts_ms is not None
+        assert page_to_ts_ms is not None
+        return [
+            CryptoCandleData(
+                ts=page_from_ts_ms,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=1_000.0,
+            ),
+            CryptoCandleData(
+                ts=page_to_ts_ms,
+                open=101.0,
+                high=102.0,
+                low=100.0,
+                close=101.5,
+                volume=1_000.0,
+            ),
+        ]
+
+    monkeypatch.setattr(service, "_fetch_rest_candle_page", fake_page)
+
+    result = service._fetch_provider_candles(
+        "mexc", "BTC-USDT", "1h", 1_001, from_ts_ms, to_ts_ms
+    )
+
+    assert calls == [
+        (from_ts_ms, from_ts_ms + interval_ms * 999),
+        (from_ts_ms + interval_ms * 1_000, to_ts_ms),
+    ]
+    assert result.exchange_symbol == "BTC/USDT"
+    assert [candle.ts for candle in result.candles] == [
+        from_ts_ms,
+        from_ts_ms + interval_ms * 999,
+        to_ts_ms,
+    ]
+
+
 def test_crypto_market_router_returns_success_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

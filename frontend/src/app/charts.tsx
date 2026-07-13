@@ -62,6 +62,7 @@ export default function ChartsPage() {
   const toTsMs = useMemo(() => (
     toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : requestNowMs
   ), [requestNowMs, toDate]);
+  const useSharedSnapshot = interval === "1h" && historyRange === "10d" && !fromDate && !toDate;
   const lookback = useMemo(() => Math.min(
     5_000,
     Math.ceil((toTsMs - fromTsMs) / (INTERVAL_SECONDS[interval] * 1000)) + 2,
@@ -69,9 +70,9 @@ export default function ChartsPage() {
   const { data, isFetching, isError } = useGetCryptoMarketIndicators({
     symbols: [symbol],
     interval,
-    lookback,
-    fromTsMs,
-    toTsMs,
+    lookback: useSharedSnapshot ? 240 : lookback,
+    fromTsMs: useSharedSnapshot ? undefined : fromTsMs,
+    toTsMs: useSharedSnapshot ? undefined : toTsMs,
   });
   const market = data?.symbols.find((item) => item.symbol === symbol);
   const failedReason = data?.failed_symbols?.[symbol];

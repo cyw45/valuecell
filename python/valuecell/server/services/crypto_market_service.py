@@ -13,7 +13,6 @@ from pathlib import Path
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-import ccxt.pro as ccxtpro
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -56,6 +55,18 @@ INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1_800,
     "1h": 3_600, "4h": 14_400, "1d": 86_400, "1w": 604_800,
     "1M": 2_592_000, "3M": 7_776_000, "1Y": 31_536_000,
+}
+
+REST_PROVIDER_PAGE_LIMITS: dict[str, int] = {
+    "gate": 1_000,
+    "binance": 1_000,
+    "mexc": 1_000,
+    "okx": 300,
+}
+REST_PROVIDER_INTERVALS: dict[str, dict[str, str]] = {
+    "binance": {"1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1d": "1d"},
+    "mexc": {"1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "60m", "4h": "4h", "1d": "1d"},
+    "okx": {"1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1Dutc"},
 }
 
 MARKET_SNAPSHOT_FILENAME = "market_snapshot.json"
@@ -427,16 +438,17 @@ class CryptoMarketService:
         interval: str,
         lookback: int,
         providers: list[str],
-        time_range: tuple[int | None, int | None],
+        time_range: tuple[int | None, int | None] = (None, None),
     ) -> CandleFetchResult:
         errors: list[str] = []
         stale_result: CandleFetchResult | None = None
         settings = get_settings()
+        is_historical_request = any(time_range)
         for provider in providers:
             health = self._provider_health.setdefault(provider, ProviderHealth())
             cache_key = (provider, symbol, interval, lookback)
             cached = self._cache.get(cache_key)
-            if health.cooldown_until > time.monotonic():
+            if not is_historical_request and health.cooldown_until > time.monotonic():
                 errors.append(f"{provider}: cooling down")
                 if stale_result is None and cached is not None:
                     stale_result = cached.result
@@ -455,10 +467,11 @@ class CryptoMarketService:
                             lookback=lookback,
                         )
                     )
-                    health.consecutive_failures = 0
-                    health.cooldown_until = 0.0
-                    health.last_error = None
-                    health.last_success_at = datetime.now(timezone.utc).isoformat()
+                    if not is_historical_request:
+                        health.consecutive_failures = 0
+                        health.cooldown_until = 0.0
+                        health.last_error = None
+                        health.last_success_at = datetime.now(timezone.utc).isoformat()
                     return result
                 except Exception as exc:
                     errors.append(f"{provider}: {exc}")
@@ -467,14 +480,15 @@ class CryptoMarketService:
                     if attempt + 1 < settings.MARKET_DATA_PROVIDER_ATTEMPTS:
                         await asyncio.sleep(0.25 * (attempt + 1))
                         continue
-                    self._record_provider_failure(provider, exc)
-                    logger.warning(
-                        "Crypto OHLCV fetch failed provider={} symbol={} interval={} err={}",
-                        provider,
-                        symbol,
-                        interval,
-                        str(exc),
-                    )
+                    if not is_historical_request:
+                        self._record_provider_failure(provider, exc)
+                        logger.warning(
+                            "Crypto OHLCV fetch failed provider={} symbol={} interval={} err={}",
+                            provider,
+                            symbol,
+                            interval,
+                            str(exc),
+                        )
         if stale_result is not None and not any(time_range):
             logger.warning(
                 "Serving last successful candles during provider outage symbol={} interval={}",
@@ -483,7 +497,6 @@ class CryptoMarketService:
             )
             return stale_result
         raise RuntimeError("; ".join(errors) or "No provider succeeded")
-
     async def _fetch_history_from_provider(
         self,
         provider: str,
@@ -492,36 +505,15 @@ class CryptoMarketService:
         lookback: int,
         time_range: tuple[int | None, int | None],
     ) -> CandleFetchResult:
-        from_ts_ms, to_ts_ms = time_range
-        if provider == "gate":
-            return await asyncio.to_thread(
-                self._fetch_gate_public_candles,
-                symbol,
-                interval,
-                lookback,
-                from_ts_ms,
-                to_ts_ms,
-            )
-        exchange_cls = getattr(ccxtpro, provider, None)
-        if exchange_cls is None:
-            raise RuntimeError(f"Exchange provider '{provider}' is not available")
-        exchange = exchange_cls({"enableRateLimit": True, "newUpdates": False})
-        exchange_symbol = self._to_exchange_symbol(symbol)
-        try:
-            raw = await exchange.fetch_ohlcv(
-                exchange_symbol,
-                timeframe=interval,
-                since=from_ts_ms,
-                limit=lookback,
-            )
-        finally:
-            close = getattr(exchange, "close", None)
-            if close is not None:
-                await close()
-        candles = self._filter_time_range(self._parse_ohlcv(raw), time_range)
-        if not candles:
-            raise RuntimeError("No candles returned for requested range")
-        return CandleFetchResult(symbol, exchange_symbol, provider, candles)
+        return await asyncio.to_thread(
+            self._fetch_provider_candles,
+            provider,
+            symbol,
+            interval,
+            lookback,
+            time_range[0],
+            time_range[1],
+        )
 
     async def _fetch_from_provider(
         self,
@@ -587,37 +579,186 @@ class CryptoMarketService:
         interval: str,
         lookback: int,
     ) -> CandleFetchResult:
+        return await asyncio.to_thread(
+            self._fetch_provider_candles,
+            provider,
+            symbol,
+            interval,
+            lookback,
+            None,
+            None,
+        )
+
+    def _fetch_provider_candles(
+        self,
+        provider: str,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        from_ts_ms: int | None,
+        to_ts_ms: int | None,
+    ) -> CandleFetchResult:
         if provider == "gate":
-            return await asyncio.to_thread(
-                self._fetch_gate_public_candles, symbol, interval, lookback
+            return self._fetch_gate_public_candles(
+                symbol, interval, lookback, from_ts_ms, to_ts_ms
             )
-        exchange_cls = getattr(ccxtpro, provider, None)
-        if exchange_cls is None:
-            raise RuntimeError(f"Exchange provider '{provider}' is not available")
-
-        exchange = exchange_cls({"enableRateLimit": True, "newUpdates": False})
-        exchange_symbol = self._to_exchange_symbol(symbol)
-        try:
-            raw = await exchange.fetch_ohlcv(
-                exchange_symbol,
-                timeframe=interval,
-                since=None,
-                limit=lookback,
+        if provider not in REST_PROVIDER_PAGE_LIMITS:
+            raise RuntimeError(f"Unsupported market-data provider: {provider}")
+        if interval not in REST_PROVIDER_INTERVALS[provider]:
+            raise RuntimeError(f"Provider '{provider}' does not support interval '{interval}'")
+        if from_ts_ms is None or to_ts_ms is None:
+            candles = self._fetch_rest_candle_page(
+                provider,
+                symbol,
+                interval,
+                min(lookback, REST_PROVIDER_PAGE_LIMITS[provider]),
+                None,
+                None,
             )
-        finally:
-            close = getattr(exchange, "close", None)
-            if close is not None:
-                await close()
-
-        candles = self._parse_ohlcv(raw)
+        elif provider == "okx":
+            candles = self._fetch_rest_candle_page(
+                provider,
+                symbol,
+                interval,
+                REST_PROVIDER_PAGE_LIMITS[provider],
+                None,
+                None,
+            )
+        else:
+            candles = self._fetch_rest_candle_range(
+                provider, symbol, interval, from_ts_ms, to_ts_ms
+            )
+        candles = self._filter_time_range(candles, (from_ts_ms, to_ts_ms))
         if not candles:
-            raise RuntimeError("No candles returned")
+            raise RuntimeError("Provider returned no candles for requested range")
         return CandleFetchResult(
             symbol=symbol,
-            exchange_symbol=exchange_symbol,
+            exchange_symbol=symbol.replace("-", "/"),
             provider=provider,
             candles=candles,
         )
+
+    def _fetch_rest_candle_range(
+        self,
+        provider: str,
+        symbol: str,
+        interval: str,
+        from_ts_ms: int,
+        to_ts_ms: int,
+    ) -> list[CryptoCandleData]:
+        page_limit = REST_PROVIDER_PAGE_LIMITS[provider]
+        interval_ms = INTERVAL_SECONDS[interval] * 1_000
+        cursor = from_ts_ms
+        candles: list[CryptoCandleData] = []
+        while cursor <= to_ts_ms:
+            page_end = min(to_ts_ms, cursor + interval_ms * (page_limit - 1))
+            page = self._fetch_rest_candle_page(
+                provider, symbol, interval, page_limit, cursor, page_end
+            )
+            candles.extend(page)
+            if not page:
+                break
+            cursor = max(
+                cursor + interval_ms,
+                max(item.ts for item in page) + interval_ms,
+            )
+        unique_candles = {candle.ts: candle for candle in candles}
+        return sorted(unique_candles.values(), key=lambda item: item.ts)
+
+    def _fetch_rest_candle_page(
+        self,
+        provider: str,
+        symbol: str,
+        interval: str,
+        limit: int,
+        from_ts_ms: int | None,
+        to_ts_ms: int | None,
+    ) -> list[CryptoCandleData]:
+        url = self._provider_candle_url(
+            provider, symbol, interval, limit, from_ts_ms, to_ts_ms
+        )
+        with urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return self._parse_rest_candles(provider, payload)
+
+    @staticmethod
+    def _provider_candle_url(
+        provider: str,
+        symbol: str,
+        interval: str,
+        limit: int,
+        from_ts_ms: int | None,
+        to_ts_ms: int | None,
+    ) -> str:
+        compact_symbol = symbol.replace("-", "")
+        if provider == "binance":
+            query: dict[str, str | int] = {
+                "symbol": compact_symbol,
+                "interval": REST_PROVIDER_INTERVALS[provider][interval],
+                "limit": limit,
+            }
+            if from_ts_ms is not None:
+                query["startTime"] = from_ts_ms
+            if to_ts_ms is not None:
+                query["endTime"] = to_ts_ms
+            return f"https://api.binance.com/api/v3/klines?{urlencode(query)}"
+        if provider == "mexc":
+            query = {
+                "symbol": compact_symbol,
+                "interval": REST_PROVIDER_INTERVALS[provider][interval],
+                "limit": limit,
+            }
+            if from_ts_ms is not None:
+                query["startTime"] = from_ts_ms
+            if to_ts_ms is not None:
+                query["endTime"] = to_ts_ms
+            return f"https://api.mexc.com/api/v3/klines?{urlencode(query)}"
+        query = {
+            "instId": symbol,
+            "bar": REST_PROVIDER_INTERVALS[provider][interval],
+            "limit": limit,
+        }
+        return f"https://www.okx.com/api/v5/market/candles?{urlencode(query)}"
+
+    @staticmethod
+    def _parse_rest_candles(
+        provider: str, payload: object
+    ) -> list[CryptoCandleData]:
+        if provider == "okx":
+            if not isinstance(payload, dict) or payload.get("code") != "0":
+                raise RuntimeError("OKX returned an unsuccessful candle response")
+            rows = payload.get("data")
+        else:
+            rows = payload
+        if not isinstance(rows, list):
+            raise RuntimeError(f"{provider} returned malformed candle data")
+        candles: list[CryptoCandleData] = []
+        for row in rows:
+            if not isinstance(row, list) or len(row) < 6:
+                continue
+            try:
+                if provider == "okx":
+                    candle = CryptoCandleData(
+                        ts=int(row[0]),
+                        open=float(row[1]),
+                        high=float(row[2]),
+                        low=float(row[3]),
+                        close=float(row[4]),
+                        volume=float(row[5]),
+                    )
+                else:
+                    candle = CryptoCandleData(
+                        ts=int(row[0]),
+                        open=float(row[1]),
+                        high=float(row[2]),
+                        low=float(row[3]),
+                        close=float(row[4]),
+                        volume=float(row[5]),
+                    )
+            except (TypeError, ValueError):
+                continue
+            candles.append(candle)
+        return sorted(candles, key=lambda item: item.ts)
 
     def _fetch_gate_public_candles(
         self,
