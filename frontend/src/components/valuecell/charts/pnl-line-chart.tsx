@@ -22,6 +22,7 @@ export function PnlLineChart({ data, height = 200, theme = "light" }: PnlLineCha
   const { t, i18n } = useTranslation();
   const chartRef = useRef<HTMLDivElement>(null);
   const chartInstance = useRef<ECharts | null>(null);
+  const locale = i18n.language.replace("_", "-");
 
   const option: EChartsOption = useMemo(() => {
     const textColor = theme === "dark" ? "#a1a1aa" : "#71717a";
@@ -40,7 +41,7 @@ export function PnlLineChart({ data, height = 200, theme = "light" }: PnlLineCha
       },
       xAxis: {
         type: "category",
-        data: data.map((d) => new Intl.DateTimeFormat(i18n.language, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(d.ts))),
+        data: data.map((d) => new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(d.ts))),
         axisLine: { lineStyle: { color: axisLineColor } },
         axisTick: { show: false },
         axisLabel: { color: textColor, fontSize: 11, interval: "auto" },
@@ -69,7 +70,7 @@ export function PnlLineChart({ data, height = 200, theme = "light" }: PnlLineCha
         },
       ],
     };
-  }, [data, theme, t, i18n.language]);
+  }, [data, locale, theme, t]);
 
   useChartResize(chartInstance);
 
