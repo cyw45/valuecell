@@ -31,6 +31,9 @@ class RuleEngine:
     def evaluate(
         self, request: RuleStrategyEvaluationRequest
     ) -> RuleStrategyEvaluationResult:
+        if request.config.advanced_rules.enabled:
+            return self._evaluate_advanced(request)
+
         closes = [candle.close for candle in request.candles]
         config = request.config
         market = request.market
@@ -98,6 +101,289 @@ class RuleEngine:
             sizing=sizing,
             funding=funding,
         )
+
+    def _evaluate_advanced(
+        self, request: RuleStrategyEvaluationRequest
+    ) -> RuleStrategyEvaluationResult:
+        """Evaluate independently configured multi-timeframe indicator rules."""
+        rules = request.config.advanced_rules
+        indicators = RuleStrategyIndicatorValues()
+        entry_assessments: list[_SignalAssessment] = []
+        exit_assessments: list[_SignalAssessment] = []
+
+        if rules.moving_average.enabled:
+            assessment, values = self._advanced_ma_assessment(
+                self._candles_for(request, rules.moving_average.interval),
+                rules.moving_average.period,
+                rules.moving_average.entry_comparator,
+                rules.moving_average.interval,
+            )
+            entry_assessments.append(assessment)
+            indicators = indicators.model_copy(update=values)
+        if rules.macd.enabled:
+            assessment, values = self._advanced_macd_assessment(
+                self._candles_for(request, rules.macd.interval),
+                rules.macd.fast_window,
+                rules.macd.slow_window,
+                rules.macd.signal_window,
+                rules.macd.entry_cross,
+                rules.macd.interval,
+            )
+            entry_assessments.append(assessment)
+            indicators = indicators.model_copy(update=values)
+        if rules.bollinger.enabled:
+            assessment, values = self._advanced_bollinger_assessment(
+                self._candles_for(request, rules.bollinger.interval),
+                rules.bollinger.period,
+                rules.bollinger.standard_deviations,
+                rules.bollinger.entry_reference,
+                rules.bollinger.entry_comparator,
+                rules.bollinger.interval,
+            )
+            entry_assessments.append(assessment)
+            indicators = indicators.model_copy(update=values)
+
+        rsi_entries, rsi_exits, rsi_values = self._advanced_rsi_assessments(
+            request, rules.rsi
+        )
+        entry_assessments.extend(rsi_entries)
+        exit_assessments.extend(rsi_exits)
+        indicators = indicators.model_copy(update=rsi_values)
+
+        momentum_entries, momentum_exits, momentum_values = (
+            self._advanced_momentum_assessments(request, rules.momentum)
+        )
+        entry_assessments.extend(momentum_entries)
+        exit_assessments.extend(momentum_exits)
+        indicators = indicators.model_copy(update=momentum_values)
+
+        brar_entries, brar_exits, brar_values = self._advanced_brar_assessments(
+            request, rules.brar
+        )
+        entry_assessments.extend(brar_entries)
+        exit_assessments.extend(brar_exits)
+        indicators = indicators.model_copy(update=brar_values)
+
+        conditions = [assessment.check for assessment in entry_assessments]
+        conditions.extend(assessment.check for assessment in exit_assessments)
+        sizing = self._sizing(request)
+        entry_side = self._confirmed_side(
+            entry_assessments, rules.entry_confirmation_mode
+        )
+        exit_side = self._confirmed_side(
+            exit_assessments, rules.exit_confirmation_mode
+        )
+        risk_exit_conditions, risk_exit_reason = self._exit_conditions(request)
+        conditions.extend(risk_exit_conditions)
+
+        if request.market.position.quantity > 0:
+            if risk_exit_reason is not None:
+                action, reason_code, reason = self._position_action(
+                    "neutral", risk_exit_reason, rules.exit_confirmation_mode, []
+                )
+            elif exit_side == "sell":
+                action = "sell"
+                reason_code = "advanced_exit_confirmed"
+                reason = "Sell recommendation: configured exit rules are confirmed."
+            elif exit_side == "unavailable":
+                action = "no_op"
+                reason_code = "insufficient_candle_history"
+                reason = "No action: supplied candle history is insufficient."
+            else:
+                action = "no_op"
+                reason_code = "no_exit_signal"
+                reason = "No action: configured exit rules are not confirmed."
+        elif entry_side == "buy":
+            action = "buy"
+            reason_code = "advanced_entry_confirmed"
+            reason = "Buy recommendation: configured multi-timeframe rules are confirmed."
+        elif entry_side == "unavailable":
+            action = "no_op"
+            reason_code = "insufficient_candle_history"
+            reason = "No action: supplied candle history is insufficient."
+        else:
+            action = "no_op"
+            reason_code = "advanced_entry_not_confirmed"
+            reason = "No action: configured multi-timeframe entry rules are not confirmed."
+
+        risk_conditions = self._risk_conditions(request, action, sizing)
+        conditions.extend(risk_conditions)
+        if action == "buy":
+            block = next(
+                (check for check in risk_conditions if check.state == "blocked"), None
+            )
+            if block is not None:
+                action = "no_op"
+                reason_code = block.code
+                reason = block.detail
+        funding = self._funding(request, action, sizing)
+        return RuleStrategyEvaluationResult(
+            action=action,
+            reason_code=reason_code,
+            reason=reason,
+            conditions=conditions,
+            indicators=indicators,
+            sizing=sizing,
+            funding=funding,
+        )
+
+    @staticmethod
+    def _candles_for(request: RuleStrategyEvaluationRequest, interval: str):
+        return request.candle_sets.get(interval, request.candles)
+
+    def _advanced_ma_assessment(
+        self, candles, period: int, comparator: str, interval: str
+    ) -> tuple[_SignalAssessment, dict[str, float]]:
+        if len(candles) < period:
+            return self._unavailable("price_ma", "indicator", period, len(candles)), {}
+        average = self._sma([candle.close for candle in candles[-period:]])
+        price = candles[-1].close
+        matched = price >= average if comparator == "above" else price <= average
+        detail = f"price is {comparator} the {period}-period moving average on {interval}"
+        return self._assessment(
+            "price_ma", "buy" if matched else "neutral", detail,
+            {"price": price, "moving_average_long": average, "interval": interval},
+        ), {"moving_average_long": average}
+
+    def _advanced_macd_assessment(
+        self, candles, fast_window: int, slow_window: int, signal_window: int,
+        cross: str, interval: str,
+    ) -> tuple[_SignalAssessment, dict[str, float]]:
+        required = slow_window + signal_window
+        if len(candles) < required:
+            return self._unavailable("macd_cross", "indicator", required, len(candles)), {}
+        closes = [candle.close for candle in candles]
+        fast = self._ema_series(closes, fast_window)
+        slow = self._ema_series(closes, slow_window)
+        macd_series = [left - right for left, right in zip(fast, slow)]
+        signal_series = self._ema_series(macd_series, signal_window)
+        previous_macd, macd = macd_series[-2], macd_series[-1]
+        previous_signal, signal = signal_series[-2], signal_series[-1]
+        golden = previous_macd <= previous_signal and macd > signal
+        death = previous_macd >= previous_signal and macd < signal
+        matched = golden if cross == "golden" else death
+        values = {
+            "macd": macd,
+            "macd_signal": signal,
+            "previous_macd": previous_macd,
+            "previous_macd_signal": previous_signal,
+            "interval": interval,
+        }
+        return self._assessment(
+            "macd_cross", "buy" if matched else "neutral",
+            f"{cross} MACD crossover on {interval}", values,
+        ), values
+
+    def _advanced_bollinger_assessment(
+        self, candles, period: int, multiplier: float, reference: str,
+        comparator: str, interval: str,
+    ) -> tuple[_SignalAssessment, dict[str, float]]:
+        if len(candles) < period:
+            return self._unavailable("bollinger_price", "indicator", period, len(candles)), {}
+        closes = [candle.close for candle in candles[-period:]]
+        middle = self._sma(closes)
+        deviation = math.sqrt(sum((close - middle) ** 2 for close in closes) / period)
+        references = {
+            "upper": middle + multiplier * deviation,
+            "middle": middle,
+            "lower": middle - multiplier * deviation,
+        }
+        price = candles[-1].close
+        target = references[reference]
+        matched = price >= target if comparator == "above" else price <= target
+        values = {
+            "bollinger_upper": references["upper"],
+            "bollinger_middle": middle,
+            "bollinger_lower": references["lower"],
+            "price": price,
+            "interval": interval,
+        }
+        return self._assessment(
+            "bollinger_price", "buy" if matched else "neutral",
+            f"price is {comparator} Bollinger {reference} band on {interval}", values,
+        ), values
+
+    def _advanced_rsi_assessments(self, request, rule):
+        if not rule.enabled:
+            return [], [], {}
+        candles = self._candles_for(request, rule.interval)
+        required = rule.period + 1
+        if len(candles) < required:
+            assessment = self._unavailable("rsi_entry", "indicator", required, len(candles))
+            return [assessment], [assessment] if rule.exit_enabled else [], {}
+        closes = [candle.close for candle in candles]
+        rsi = self._rsi_value(closes, rule.period)
+        return self._threshold_assessments("rsi", rsi, rule, {"rsi": rsi, "interval": rule.interval})
+
+    def _advanced_momentum_assessments(self, request, rule):
+        if not rule.enabled:
+            return [], [], {}
+        candles = self._candles_for(request, rule.interval)
+        required = rule.period + 1
+        if len(candles) < required:
+            assessment = self._unavailable("momentum_entry", "indicator", required, len(candles))
+            return [assessment], [assessment] if rule.exit_enabled else [], {}
+        momentum = candles[-1].close - candles[-rule.period - 1].close
+        return self._threshold_assessments(
+            "momentum", momentum, rule, {"momentum": momentum, "interval": rule.interval}
+        )
+
+    def _advanced_brar_assessments(self, request, rule):
+        if not rule.enabled:
+            return [], [], {}
+        candles = self._candles_for(request, rule.interval)
+        required = rule.period + 1
+        if len(candles) < required:
+            assessment = self._unavailable("brar_entry", "indicator", required, len(candles))
+            return [assessment], [assessment] if rule.exit_enabled else [], {}
+        window = candles[-rule.period:]
+        previous = candles[-rule.period - 1 : -1]
+        ar_numerator = sum(candle.high - candle.open for candle in window)
+        ar_denominator = sum(candle.open - candle.low for candle in window)
+        br_numerator = sum(max(candle.high - prior.close, 0.0) for candle, prior in zip(window, previous))
+        br_denominator = sum(max(prior.close - candle.low, 0.0) for candle, prior in zip(window, previous))
+        ar = 100.0 if ar_denominator == 0 else ar_numerator / ar_denominator * 100
+        br = 100.0 if br_denominator == 0 else br_numerator / br_denominator * 100
+        value = ar if rule.component == "ar" else br
+        return self._threshold_assessments(
+            "brar", value, rule,
+            {"brar_ar": ar, "brar_br": br, "interval": rule.interval},
+        )
+
+    def _threshold_assessments(self, code, value, rule, values):
+        entry_matched = self._matches_threshold(
+            value, rule.entry_comparator, rule.entry_threshold
+        )
+        entry = self._assessment(
+            f"{code}_entry", "buy" if entry_matched else "neutral",
+            f"{code} is {rule.entry_comparator} the entry threshold", values,
+        )
+        if not rule.exit_enabled:
+            return [entry], [], values
+        exit_matched = self._matches_threshold(
+            value, rule.exit_comparator, rule.exit_threshold
+        )
+        exit_assessment = self._assessment(
+            f"{code}_exit", "sell" if exit_matched else "neutral",
+            f"{code} is {rule.exit_comparator} the exit threshold", values,
+        )
+        return [entry], [exit_assessment], values
+
+    @staticmethod
+    def _matches_threshold(value: float, comparator: str, threshold: float) -> bool:
+        return value >= threshold if comparator == "above" else value <= threshold
+
+    @staticmethod
+    def _rsi_value(closes: list[float], period: int) -> float:
+        changes = [
+            current - previous
+            for previous, current in zip(closes[-period - 1 :], closes[-period:])
+        ]
+        average_gain = sum(max(change, 0.0) for change in changes) / period
+        average_loss = sum(max(-change, 0.0) for change in changes) / period
+        if average_loss == 0:
+            return 100.0 if average_gain > 0 else 50.0
+        return 100.0 - 100.0 / (1.0 + average_gain / average_loss)
 
     def _moving_average_assessment(
         self, closes: list[float], short_window: int, long_window: int

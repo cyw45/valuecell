@@ -394,3 +394,93 @@ def test_result_explains_conditions_sizing_and_projected_funding():
     assert result.funding.projected_notional_quote == pytest.approx(100.0)
     assert result.funding.estimated_payment_quote == pytest.approx(-1.0)
     assert result.funding.direction == "debit"
+
+
+def test_advanced_rules_combine_multiple_intervals_and_brar_for_entry():
+    daily = _candles([10.0] * 19 + [20.0])
+    macd = _candles([10.0, 10.0, 9.0, 10.0])
+    fifteen_minute = _candles([10.0] * 17 + [100.0, 90.0, 80.0])
+    request = RuleStrategyEvaluationRequest.model_validate(
+        {
+            "config": {
+                "advanced_rules": {
+                    "enabled": True,
+                    "entry_confirmation_mode": "all",
+                    "exit_confirmation_mode": "any",
+                    "moving_average": {
+                        "enabled": True,
+                        "interval": "1d",
+                        "period": 20,
+                        "entry_comparator": "above",
+                    },
+                    "macd": {
+                        "enabled": True,
+                        "interval": "5m",
+                        "fast_window": 1,
+                        "slow_window": 2,
+                        "signal_window": 2,
+                        "entry_cross": "golden",
+                    },
+                    "bollinger": {
+                        "enabled": True,
+                        "interval": "15m",
+                        "period": 20,
+                        "standard_deviations": 2,
+                        "entry_reference": "middle",
+                        "entry_comparator": "above",
+                    },
+                    "rsi": {
+                        "enabled": True,
+                        "interval": "15m",
+                        "period": 2,
+                        "entry_comparator": "below",
+                        "entry_threshold": 20,
+                        "exit_enabled": True,
+                        "exit_comparator": "above",
+                        "exit_threshold": 85,
+                    },
+                    "momentum": {
+                        "enabled": True,
+                        "interval": "15m",
+                        "period": 14,
+                        "entry_comparator": "below",
+                        "entry_threshold": 100,
+                        "exit_enabled": True,
+                        "exit_comparator": "above",
+                        "exit_threshold": 100,
+                    },
+                    "brar": {
+                        "enabled": True,
+                        "interval": "15m",
+                        "period": 2,
+                        "component": "br",
+                        "entry_comparator": "below",
+                        "entry_threshold": 1_000,
+                        "exit_enabled": False,
+                    },
+                }
+            },
+            "candles": fifteen_minute,
+            "candle_sets": {"1d": daily, "5m": macd, "15m": fifteen_minute},
+            "market": {
+                "symbol": "BTC-USDT",
+                "price": 80.0,
+                "equity_quote": 1_000.0,
+                "quote_balance": 1_000.0,
+            },
+        }
+    )
+
+    result = RuleEngine().evaluate(request)
+
+    assert result.action == "buy"
+    assert result.reason_code == "advanced_entry_confirmed"
+    assert {condition.code for condition in result.conditions} >= {
+        "price_ma",
+        "macd_cross",
+        "bollinger_price",
+        "rsi_entry",
+        "momentum_entry",
+        "brar_entry",
+    }
+    assert result.indicators.brar_br is not None

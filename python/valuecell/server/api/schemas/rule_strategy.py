@@ -158,6 +158,87 @@ class RuleStrategyRiskConfig(RuleStrategyModel):
         return self
 
 
+class AdvancedMovingAverageRuleConfig(RuleStrategyModel):
+    """Price-to-moving-average comparison on an independently selected interval."""
+
+    enabled: bool = False
+    interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "1d"
+    period: int = Field(default=20, ge=2, le=500)
+    entry_comparator: Literal["above", "below"] = "above"
+
+
+class AdvancedMacdRuleConfig(RuleStrategyModel):
+    """MACD crossover condition with an independently selected interval."""
+
+    enabled: bool = False
+    interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "5m"
+    fast_window: int = Field(default=12, ge=1, le=500)
+    slow_window: int = Field(default=26, ge=2, le=500)
+    signal_window: int = Field(default=9, ge=1, le=500)
+    entry_cross: Literal["golden", "death"] = "golden"
+
+    @model_validator(mode="after")
+    def validate_windows(self) -> AdvancedMacdRuleConfig:
+        if self.fast_window >= self.slow_window:
+            raise ValueError("fast_window must be smaller than slow_window")
+        return self
+
+
+class AdvancedBollingerRuleConfig(RuleStrategyModel):
+    """Price-to-Bollinger-band comparison on an independently selected interval."""
+
+    enabled: bool = False
+    interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "15m"
+    period: int = Field(default=20, ge=2, le=500)
+    standard_deviations: float = Field(default=2.0, gt=0, le=10)
+    entry_reference: Literal["upper", "middle", "lower"] = "middle"
+    entry_comparator: Literal["above", "below"] = "above"
+
+
+class AdvancedThresholdRuleConfig(RuleStrategyModel):
+    """Threshold entry and exit configuration for a scalar technical indicator."""
+
+    enabled: bool = False
+    interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "15m"
+    period: int = Field(default=14, ge=1, le=500)
+    entry_comparator: Literal["above", "below"] = "below"
+    entry_threshold: float = 20.0
+    exit_enabled: bool = True
+    exit_comparator: Literal["above", "below"] = "above"
+    exit_threshold: float = 85.0
+
+
+class AdvancedBrarRuleConfig(AdvancedThresholdRuleConfig):
+    """BRAR threshold configuration. Operators may use the AR or BR component."""
+
+    period: int = Field(default=26, ge=2, le=500)
+    component: Literal["ar", "br"] = "br"
+    entry_threshold: float = 30.0
+    exit_enabled: bool = False
+
+
+class AdvancedRuleSetConfig(RuleStrategyModel):
+    """Fully configurable multi-timeframe indicator rule set."""
+
+    enabled: bool = False
+    entry_confirmation_mode: Literal["all", "any"] = "all"
+    exit_confirmation_mode: Literal["all", "any"] = "any"
+    moving_average: AdvancedMovingAverageRuleConfig = Field(
+        default_factory=AdvancedMovingAverageRuleConfig
+    )
+    macd: AdvancedMacdRuleConfig = Field(default_factory=AdvancedMacdRuleConfig)
+    bollinger: AdvancedBollingerRuleConfig = Field(
+        default_factory=AdvancedBollingerRuleConfig
+    )
+    rsi: AdvancedThresholdRuleConfig = Field(
+        default_factory=lambda: AdvancedThresholdRuleConfig(period=14)
+    )
+    momentum: AdvancedThresholdRuleConfig = Field(
+        default_factory=lambda: AdvancedThresholdRuleConfig(period=14)
+    )
+    brar: AdvancedBrarRuleConfig = Field(default_factory=AdvancedBrarRuleConfig)
+
+
 class RuleStrategyConfig(RuleStrategyModel):
     """Paper-only rules and their normalized public-market evaluation scope."""
 
@@ -175,6 +256,7 @@ class RuleStrategyConfig(RuleStrategyModel):
     rsi: RsiRuleConfig = Field(default_factory=RsiRuleConfig)
     bollinger: BollingerRuleConfig = Field(default_factory=BollingerRuleConfig)
     momentum_macd: MomentumMacdRuleConfig = Field(default_factory=MomentumMacdRuleConfig)
+    advanced_rules: AdvancedRuleSetConfig = Field(default_factory=AdvancedRuleSetConfig)
     risk: RuleStrategyRiskConfig = Field(default_factory=RuleStrategyRiskConfig)
 
     @model_validator(mode="after")
@@ -197,6 +279,7 @@ class RuleStrategyEvaluationRequest(BaseModel):
 
     config: RuleStrategyConfig
     candles: list[RuleStrategyCandle] = Field(min_length=1, max_length=5_000)
+    candle_sets: dict[str, list[RuleStrategyCandle]] = Field(default_factory=dict)
     market: RuleStrategyEngineMarketSnapshot
 
     @model_validator(mode="after")
@@ -204,6 +287,17 @@ class RuleStrategyEvaluationRequest(BaseModel):
         timestamps = [candle.timestamp_ms for candle in self.candles]
         if any(current <= previous for previous, current in zip(timestamps, timestamps[1:])):
             raise ValueError("candle timestamps must be strictly increasing")
+        for interval, candle_set in self.candle_sets.items():
+            if not candle_set:
+                raise ValueError(f"candle set for {interval} must not be empty")
+            set_timestamps = [candle.timestamp_ms for candle in candle_set]
+            if any(
+                current <= previous
+                for previous, current in zip(set_timestamps, set_timestamps[1:])
+            ):
+                raise ValueError(
+                    f"candle timestamps for {interval} must be strictly increasing"
+                )
         return self
 
 
@@ -235,6 +329,8 @@ class RuleStrategyIndicatorValues(BaseModel):
     macd_signal: float | None = None
     previous_macd: float | None = None
     previous_macd_signal: float | None = None
+    brar_ar: float | None = None
+    brar_br: float | None = None
 
 
 class RuleStrategySizing(BaseModel):
@@ -270,3 +366,20 @@ class RuleStrategyEvaluationResult(BaseModel):
     indicators: RuleStrategyIndicatorValues
     sizing: RuleStrategySizing
     funding: RuleStrategyFundingImpact
+
+
+class RuleStrategyTextImportConfig(RuleStrategyModel):
+    """AI-proposed fields that can be safely copied into a strategy draft."""
+
+    interval: Literal["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] = "15m"
+    advanced_rules: AdvancedRuleSetConfig
+    risk: RuleStrategyRiskConfig
+
+
+class RuleStrategyTextImportProposal(RuleStrategyModel):
+    """Validated, review-only structured result from a natural-language strategy."""
+
+    strategy_name: str | None = Field(default=None, max_length=200)
+    config: RuleStrategyTextImportConfig
+    summary: str = Field(min_length=1, max_length=2_000)
+    unresolved_items: list[str] = Field(default_factory=list, max_length=30)

@@ -44,6 +44,41 @@ _INTERVAL_SECONDS: dict[str, int] = {
 }
 
 
+def _required_intervals(config: RuleStrategyConfig) -> set[str]:
+    """Return every candle interval required by the configured rule set."""
+    intervals = {config.interval}
+    rules = config.advanced_rules
+    if not rules.enabled:
+        return intervals
+    for rule in (
+        rules.moving_average,
+        rules.macd,
+        rules.bollinger,
+        rules.rsi,
+        rules.momentum,
+        rules.brar,
+    ):
+        if rule.enabled:
+            intervals.add(rule.interval)
+    return intervals
+
+
+def _required_lookback(config: RuleStrategyConfig) -> int:
+    """Fetch sufficient history for the largest configured technical window."""
+    rules = config.advanced_rules
+    if not rules.enabled:
+        return 100
+    return max(
+        100,
+        rules.moving_average.period,
+        rules.macd.slow_window + rules.macd.signal_window,
+        rules.bollinger.period,
+        rules.rsi.period + 1,
+        rules.momentum.period + 1,
+        rules.brar.period + 1,
+    )
+
+
 class StrategyScheduler:
     """Wraps AsyncIOScheduler to drive paper rule strategy evaluations."""
 
@@ -131,9 +166,8 @@ class StrategyScheduler:
         """Fetch OHLCV, evaluate rule engine, journal result — paper only."""
         config = RuleStrategyConfig.model_validate(config_dict)
         symbols = config.symbols
-        interval = config.interval
-        lookback = 100
-        account_balance = config.initial_capital_quote
+        intervals = sorted(_required_intervals(config))
+        lookback = _required_lookback(config)
 
         if not symbols:
             logger.warning(
@@ -143,80 +177,76 @@ class StrategyScheduler:
             return
 
         market_service = get_crypto_market_service()
-        snapshot = market_service.get_default_snapshot()
-        if (
-            snapshot is not None
-            and snapshot.data.interval == interval
-        ):
-            by_symbol = {item.symbol: item for item in snapshot.data.symbols}
-            market_data = type(snapshot.data)(
-                interval=snapshot.data.interval,
-                lookback=min(lookback, snapshot.data.lookback),
-                providers=snapshot.data.providers,
-                symbols=[
-                    item.model_copy(update={"candles": item.candles[-lookback:]})
-                    for symbol in symbols
-                    if (item := by_symbol.get(symbol)) is not None
-                ],
-                failed_symbols={
-                    symbol: "market snapshot unavailable"
-                    for symbol in symbols
-                    if symbol not in by_symbol
-                },
-                snapshot_fetched_at=snapshot.fetched_at.isoformat(),
+        try:
+            fetched_sets = await asyncio.gather(
+                *[
+                    market_service.get_indicators(
+                        symbols=symbols,
+                        interval=interval,
+                        lookback=lookback,
+                    )
+                    for interval in intervals
+                ]
             )
-        else:
-            try:
-                market_data = await market_service.get_indicators(
-                    symbols=symbols,
-                    interval=interval,
-                    lookback=lookback,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "StrategyScheduler OHLCV fetch failed strategy_id={} err={}",
-                    strategy_id,
-                    exc,
-                )
-                return
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "StrategyScheduler OHLCV fetch failed strategy_id={} err={}",
+                strategy_id,
+                exc,
+            )
+            return
+        market_data_by_interval = {
+            interval: {item.symbol: item for item in data.symbols}
+            for interval, data in zip(intervals, fetched_sets)
+        }
 
         service = RuleStrategyService()
 
-        market_inputs: list[tuple[list[RuleStrategyCandle], RuleStrategyMarketSnapshot]] = []
-        for symbol_result in market_data.symbols:
+        market_inputs: list[
+            tuple[dict[str, list[RuleStrategyCandle]], RuleStrategyMarketSnapshot]
+        ] = []
+        for symbol in symbols:
             try:
-                candles = [
-                    RuleStrategyCandle(
-                        timestamp_ms=c.ts,
-                        open=c.open,
-                        high=c.high,
-                        low=c.low,
-                        close=c.close,
-                        volume=c.volume,
-                    )
-                    for c in symbol_result.candles
-                ]
-                if not candles:
+                candle_sets: dict[str, list[RuleStrategyCandle]] = {}
+                latest_price: float | None = None
+                for interval, by_symbol in market_data_by_interval.items():
+                    symbol_result = by_symbol.get(symbol)
+                    if symbol_result is None:
+                        continue
+                    candles = [
+                        RuleStrategyCandle(
+                            timestamp_ms=c.ts,
+                            open=c.open,
+                            high=c.high,
+                            low=c.low,
+                            close=c.close,
+                            volume=c.volume,
+                        )
+                        for c in symbol_result.candles
+                    ]
+                    if candles:
+                        candle_sets[interval] = candles
+                    if interval == config.interval and symbol_result.latest_price is not None:
+                        latest_price = symbol_result.latest_price
+                primary_candles = candle_sets.get(config.interval)
+                if not primary_candles:
                     logger.warning(
                         "StrategyScheduler skipping empty candles symbol={} strategy_id={}",
-                        symbol_result.symbol,
+                        symbol,
                         strategy_id,
                     )
                     continue
-
-                latest_price = symbol_result.latest_price or candles[-1].close
                 market_snapshot = RuleStrategyMarketSnapshot(
-                    symbol=symbol_result.symbol,
-                    price=latest_price,
+                    symbol=symbol,
+                    price=latest_price or primary_candles[-1].close,
                     funding_rate=0.0,
                 )
-
-                market_inputs.append((candles, market_snapshot))
+                market_inputs.append((candle_sets, market_snapshot))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "StrategyScheduler tick error strategy_id={} symbol={} err={}",
                     strategy_id,
-                    symbol_result.symbol,
+                    symbol,
                     exc,
                 )
                 continue

@@ -144,7 +144,7 @@ class RuleStrategyService:
         self,
         strategy_id: str,
         tenant_id: str,
-        market_inputs: list[tuple[list[Any], RuleStrategyMarketSnapshot]],
+        market_inputs: list[tuple[list[Any] | dict[str, list[Any]], RuleStrategyMarketSnapshot]],
     ) -> list[dict[str, Any]]:
         """Evaluate one market cycle and split paper capital across buy candidates.
 
@@ -161,12 +161,17 @@ class RuleStrategyService:
         config = RuleStrategyConfig.model_validate(strategy.config)
         account = self._account_from_history(strategy, tenant_id, config)
         evaluated: list[tuple[RuleStrategyMarketSnapshot, dict[str, Any]]] = []
-        for candles, market in market_inputs:
+        for candle_input, market in market_inputs:
+            candle_sets = (
+                candle_input if isinstance(candle_input, dict) else {config.interval: candle_input}
+            )
+            candles = candle_sets.get(config.interval) or next(iter(candle_sets.values()))
             engine_market = self._engine_market(account, market, config.risk.leverage)
             result = self.engine.evaluate(
                 RuleStrategyEvaluationRequest(
                     config=config,
                     candles=candles,
+                    candle_sets=candle_sets,
                     market=engine_market,
                 )
             )
@@ -238,6 +243,11 @@ class RuleStrategyService:
                 {
                     "strategy_id": strategy_id,
                     "evaluation_id": journal.evaluation_id,
+                    **(
+                        {"symbol": result["symbol"]}
+                        if "symbol" in result
+                        else {}
+                    ),
                     "evaluated_at": journal.created_at,
                     "action": result.get("action", "no_op"),
                     "reason_code": result.get("reason_code", "unknown"),
@@ -281,6 +291,7 @@ class RuleStrategyService:
         account: RuleStrategyPaperAccount,
         fill: dict[str, Any] | None,
     ) -> dict[str, Any]:
+        result_data["symbol"] = market.symbol
         result_data["account"] = account.model_dump(mode="json")
         journal = self.repository.append_evaluation(
             RuleStrategyEvaluationJournal(

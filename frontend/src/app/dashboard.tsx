@@ -1,14 +1,19 @@
 import { useTheme } from "next-themes";
-import { useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import {
   ArrowUpRight,
   BarChart3,
   CandlestickChart,
   CircleDollarSign,
+  Clock3,
+  Cpu,
+  Crosshair,
   Layers3,
   Moon,
+  RefreshCw,
   RadioTower,
+  Settings2,
   Sun,
   TrendingDown,
   TrendingUp,
@@ -47,6 +52,60 @@ function toDashboardSymbol(symbol: string) {
   return symbol.replace("-", "/");
 }
 
+function TerminalValue({
+  value,
+  suffix = "",
+  signed = false,
+  compact = false,
+  className,
+}: {
+  value: number;
+  suffix?: string;
+  signed?: boolean;
+  compact?: boolean;
+  className?: string;
+}) {
+  const initialValue = Number.isFinite(value) ? value : 0;
+  const [displayValue, setDisplayValue] = useState(initialValue);
+  const [showFlash, setShowFlash] = useState(false);
+  const previousValueRef = useRef(initialValue);
+
+  useEffect(() => {
+    const target = Number.isFinite(value) ? value : 0;
+    const start = previousValueRef.current;
+    if (start === target) return;
+
+    previousValueRef.current = target;
+    setShowFlash(true);
+    const startTime = performance.now();
+    const animationDurationMs = 650;
+    let frameId = 0;
+    const animateValue = (time: number) => {
+      const progress = Math.min((time - startTime) / animationDurationMs, 1);
+      const easedProgress = 1 - (1 - progress) ** 3;
+      setDisplayValue(start + (target - start) * easedProgress);
+      if (progress < 1) frameId = requestAnimationFrame(animateValue);
+    };
+    frameId = requestAnimationFrame(animateValue);
+    const flashTimer = window.setTimeout(() => setShowFlash(false), 3_000);
+
+    return () => {
+      cancelAnimationFrame(frameId);
+      window.clearTimeout(flashTimer);
+    };
+  }, [value]);
+
+  const formatter = compact ? compactCurrency : currency;
+  const visibleValue = `${signed && displayValue >= 0 ? "+" : ""}${formatter.format(displayValue)}${suffix}`;
+
+  return (
+    <span className={cn("terminal-number relative inline-block tabular-nums", className)}>
+      <span>{visibleValue}</span>
+      {showFlash ? <span aria-hidden className="terminal-value-flash">{visibleValue}</span> : null}
+    </span>
+  );
+}
+
 function KpiCard({
   icon: Icon,
   label,
@@ -56,7 +115,7 @@ function KpiCard({
 }: {
   icon: typeof WalletCards;
   label: string;
-  value: string;
+  value: ReactNode;
   detail: string;
   trend?: "positive" | "negative" | "neutral";
 }) {
@@ -71,16 +130,15 @@ function KpiCard({
             <p className="font-medium text-[11px] text-muted-foreground uppercase tracking-[0.08em]">
               {label}
             </p>
-            <p
+            <div
               className={cn(
                 "dashboard-amount mt-2 truncate font-semibold text-2xl tabular-nums",
                 isPositive && "text-emerald-500 dark:text-emerald-400",
                 isNegative && "text-rose-500 dark:text-rose-400",
               )}
-              title={value}
             >
               {value}
-            </p>
+            </div>
           </div>
           <span className={cn(
             "grid size-9 shrink-0 place-items-center rounded-md border",
@@ -150,6 +208,15 @@ export default function DashboardPage() {
   const recentSignals = evaluations
     .filter((item) => item.action !== "no_op")
     .slice(0, 5);
+  const latestEvaluation = evaluations[0];
+  const enabledIndicators = [
+    ruleStrategy?.config.moving_average.enabled ? `均线 ${ruleStrategy.config.moving_average.short_window}/${ruleStrategy.config.moving_average.long_window}` : null,
+    ruleStrategy?.config.rsi.enabled ? `RSI ${ruleStrategy.config.rsi.period}` : null,
+    ruleStrategy?.config.bollinger.enabled ? `布林带 ${ruleStrategy.config.bollinger.period}` : null,
+    ruleStrategy?.config.momentum_macd.enabled ? `MACD ${ruleStrategy.config.momentum_macd.macd_fast_window}/${ruleStrategy.config.momentum_macd.macd_slow_window}/${ruleStrategy.config.momentum_macd.macd_signal_window}` : null,
+  ].filter((item): item is string => item !== null);
+  const recentlyScanned = evaluations.slice(0, 8);
+  const requestedCapital = latestEvaluation?.sizing.requested_quote ?? 0;
 
   return (
     <div className="scroll-container dashboard-shell flex size-full flex-col">
@@ -190,10 +257,55 @@ export default function DashboardPage() {
         </header>
 
         <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="投资组合概览">
-          <KpiCard icon={WalletCards} label="组合权益" value={`${currency.format(account?.equity_quote ?? 0)} USDT`} detail={`初始资金 ${currency.format(account?.initial_capital_quote ?? 10_000)} USDT`} />
-          <KpiCard icon={pnl >= 0 ? TrendingUp : TrendingDown} label="总收益与亏损" value={`${pnl >= 0 ? "+" : ""}${currency.format(pnl)} USDT`} detail={`策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`} trend={pnl >= 0 ? "positive" : "negative"} />
-          <KpiCard icon={CircleDollarSign} label="可用资金" value={`${currency.format(account?.quote_balance ?? 0)} USDT`} detail={`已投入 ${currency.format(Math.max(invested, 0))} USDT`} />
+          <KpiCard icon={WalletCards} label="组合权益" value={<><TerminalValue value={account?.equity_quote ?? 0} /> USDT</>} detail={`初始资金 ${currency.format(account?.initial_capital_quote ?? 10_000)} USDT`} />
+          <KpiCard icon={pnl >= 0 ? TrendingUp : TrendingDown} label="总收益与亏损" value={<><TerminalValue signed value={pnl} /> USDT</>} detail={`策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`} trend={pnl >= 0 ? "positive" : "negative"} />
+          <KpiCard icon={CircleDollarSign} label="可用资金" value={<><TerminalValue value={account?.quote_balance ?? 0} /> USDT</>} detail={`已投入 ${currency.format(Math.max(invested, 0))} USDT`} />
           <KpiCard icon={Layers3} label="策略执行情况" value={`${holdingRows.length} / ${ruleStrategy?.config.risk.max_positions ?? 0}`} detail={`已成交 ${trades.length} 笔模拟交易，扫描 ${trackedSymbols.length} 个币种`} trend="neutral" />
+        </section>
+
+        <section className="terminal-strip grid gap-px overflow-hidden rounded-lg border border-sky-500/20 bg-border/50 lg:grid-cols-[1.2fr_1fr_1fr_1.1fr]" aria-label="策略终端状态">
+          <div className="bg-card/95 px-3 py-3">
+            <div className="flex items-center gap-2 text-sky-500"><Cpu className="size-3.5" /><span className="terminal-label">当前策略</span></div>
+            <p className="mt-2 truncate font-medium text-sm">{ruleStrategy?.name ?? "尚未配置策略"}</p>
+            <p className="mt-1 text-muted-foreground text-xs">{ruleStrategy ? `${trackedSymbols.length} 个币种 · ${ruleStrategy.config.interval} 周期` : "前往策略配置页面启用扫描"}</p>
+          </div>
+          <div className="bg-card/95 px-3 py-3">
+            <div className="flex items-center gap-2 text-emerald-500"><Crosshair className="size-3.5" /><span className="terminal-label">本轮筛选</span></div>
+            <p className="terminal-number mt-2 font-semibold text-lg">{holdingRows.length} <span className="text-muted-foreground text-xs">个当前持仓</span></p>
+            <p className="mt-1 text-muted-foreground text-xs">合格币种按本轮数量均分资金</p>
+          </div>
+          <div className="bg-card/95 px-3 py-3">
+            <div className="flex items-center gap-2 text-amber-500"><CircleDollarSign className="size-3.5" /><span className="terminal-label">最新单币额度</span></div>
+            <p className="terminal-number mt-2 font-semibold text-lg"><TerminalValue value={requestedCapital} /> <span className="text-muted-foreground text-xs">USDT</span></p>
+            <p className="mt-1 text-muted-foreground text-xs">总资金 ÷ 本轮合格币种数，向下取整</p>
+          </div>
+          <div className="bg-card/95 px-3 py-3">
+            <div className="flex items-center gap-2 text-violet-500"><Clock3 className="size-3.5" /><span className="terminal-label">最近评估</span></div>
+            <p className="mt-2 truncate font-medium text-sm">{latestEvaluation?.symbol ? toDashboardSymbol(latestEvaluation.symbol) : "等待首轮扫描"}</p>
+            <p className="mt-1 text-muted-foreground text-xs">{latestEvaluation?.evaluated_at ? new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(latestEvaluation.evaluated_at)) : "策略启动后自动更新"}</p>
+          </div>
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <div className="flex items-center justify-between border-border/70 border-b px-4 py-3">
+              <div><h2 className="font-semibold">策略参数总览</h2><p className="mt-0.5 text-muted-foreground text-xs">首页同步展示正在使用的筛选与风控配置</p></div>
+              <Button asChild size="sm" variant="ghost"><Link to="/strategies"><Settings2 /> 编辑</Link></Button>
+            </div>
+            <CardContent className="grid gap-px bg-border/60 p-px sm:grid-cols-2 lg:grid-cols-4">
+              <div className="bg-card px-3 py-3"><p className="terminal-label">均线趋势</p><p className="mt-1 font-medium text-sm">{ruleStrategy?.config.moving_average.enabled ? `MA ${ruleStrategy.config.moving_average.short_window} / ${ruleStrategy.config.moving_average.long_window}` : "未启用"}</p></div>
+              <div className="bg-card px-3 py-3"><p className="terminal-label">RSI 阈值</p><p className="mt-1 font-medium text-sm">{ruleStrategy?.config.rsi.enabled ? `${ruleStrategy.config.rsi.oversold} / ${ruleStrategy.config.rsi.overbought}` : "未启用"}</p></div>
+              <div className="bg-card px-3 py-3"><p className="terminal-label">止盈 / 止损</p><p className="mt-1 font-medium text-sm">{ruleStrategy?.config.risk.take_profit_pct ? `${(ruleStrategy.config.risk.take_profit_pct * 100).toFixed(1)}%` : "--"} / {ruleStrategy?.config.risk.stop_loss_pct ? `${(ruleStrategy.config.risk.stop_loss_pct * 100).toFixed(1)}%` : "--"}</p></div>
+              <div className="bg-card px-3 py-3"><p className="terminal-label">启用指标</p><p className="mt-1 truncate font-medium text-sm" title={enabledIndicators.join("，")}>{enabledIndicators.join(" · ") || "未启用"}</p></div>
+            </CardContent>
+          </Card>
+
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <div className="flex items-center justify-between border-border/70 border-b px-4 py-3"><div><h2 className="font-semibold">扫描回放</h2><p className="mt-0.5 text-muted-foreground text-xs">最近评估的策略动作</p></div><RefreshCw className="size-4 text-sky-500" /></div>
+            <CardContent className="grid grid-cols-2 gap-px bg-border/60 p-px sm:grid-cols-4">
+              {recentlyScanned.length === 0 ? <p className="col-span-full bg-card px-4 py-7 text-center text-muted-foreground text-sm">策略启动后，这里会显示本轮扫描的币种与动作。</p> : recentlyScanned.map((item) => <button className="bg-card px-3 py-2 text-left transition-colors hover:bg-sky-500/5" key={item.evaluation_id} onClick={() => item.symbol && setSelectedSymbol(item.symbol)} type="button"><span className="block truncate font-medium text-xs">{item.symbol ? toDashboardSymbol(item.symbol) : "市场评估"}</span><span className={cn("mt-1 block text-xs", item.action === "buy" ? "text-emerald-500" : item.action === "sell" ? "text-rose-500" : "text-muted-foreground")}>{item.action === "buy" ? "符合入场" : item.action === "sell" ? "符合离场" : "继续观察"}</span></button>)}
+            </CardContent>
+          </Card>
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.72fr)_minmax(300px,0.78fr)]">

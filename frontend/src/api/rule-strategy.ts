@@ -1,4 +1,4 @@
-import { QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ApiResponse, apiClient } from "@/lib/api-client";
 import type {
   CreateRuleStrategyRequest,
@@ -13,6 +13,7 @@ import type {
   UpdateRuleStrategyRequest,
   RuleStrategyAdvisory,
   RuleStrategyEvaluationHistoryEntry,
+  RuleStrategyTextImportProposal,
 } from "@/types/rule-strategy";
 
 const ruleStrategyKey = (strategyId: string) => ["rule-strategies", strategyId] as const;
@@ -107,6 +108,17 @@ export function useRuleStrategyAdvisory(strategyId?: string) {
     mutationFn: () => apiClient.post<ApiResponse<RuleStrategyAdvisory>>(
       `/rule-strategies/${strategyId}/advisory-analysis`, undefined, { requiresAuth: true },
     ),
+  });
+}
+
+export function useParseRuleStrategyText() {
+  return useMutation({
+    mutationFn: (strategyText: string) =>
+      apiClient.post<ApiResponse<RuleStrategyTextImportProposal>>(
+        "/rule-strategies/parse-strategy-text",
+        { strategy_text: strategyText },
+        { requiresAuth: true },
+      ),
   });
 }
 

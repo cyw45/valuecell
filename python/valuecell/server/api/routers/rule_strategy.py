@@ -13,6 +13,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
     RuleStrategyMarketSnapshot,
+    RuleStrategyTextImportProposal,
 )
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyNotFoundError,
@@ -22,6 +23,10 @@ from valuecell.server.services.rule_strategy_service import (
 from valuecell.server.services.rule_strategy_advisory_service import (
     RuleStrategyAdvisoryService,
     RuleStrategyAdvisoryUnavailableError,
+)
+from valuecell.server.services.rule_strategy_text_import_service import (
+    RuleStrategyTextImportService,
+    RuleStrategyTextImportUnavailableError,
 )
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
@@ -60,6 +65,14 @@ class RuleStrategyEvaluateRequest(BaseModel):
     candles: list[RuleStrategyCandle] = Field(min_length=1, max_length=5_000)
     market: RuleStrategyMarketSnapshot
 
+
+class RuleStrategyTextImportRequest(BaseModel):
+    """Natural-language strategy description awaiting explicit user review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_text: str = Field(min_length=10, max_length=8_000)
+
 def create_rule_strategy_router(
     service: RuleStrategyService | None = None,
 ) -> APIRouter:
@@ -68,6 +81,22 @@ def create_rule_strategy_router(
     router = APIRouter(prefix="/rule-strategies", tags=["rule-strategies"])
     rule_service = service or RuleStrategyService()
     advisory_service = RuleStrategyAdvisoryService()
+    text_import_service = RuleStrategyTextImportService()
+
+    @router.post(
+        "/parse-strategy-text",
+        response_model=SuccessResponse[RuleStrategyTextImportProposal],
+    )
+    async def parse_strategy_text(
+        request: RuleStrategyTextImportRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[RuleStrategyTextImportProposal]:
+        del principal
+        try:
+            data = await text_import_service.parse(request.strategy_text)
+        except RuleStrategyTextImportUnavailableError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Strategy text parsed for review")
 
     @router.post("", response_model=SuccessResponse[dict[str, Any]], status_code=201)
     async def create_rule_strategy(

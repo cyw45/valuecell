@@ -68,6 +68,60 @@ export interface MomentumMacdRuleConfig {
   macd_signal_window: number;
 }
 
+export type RuleStrategyCandleInterval = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+
+export interface AdvancedMovingAverageRuleConfig {
+  enabled: boolean;
+  interval: RuleStrategyCandleInterval;
+  period: number;
+  entry_comparator: "above" | "below";
+}
+
+export interface AdvancedMacdRuleConfig {
+  enabled: boolean;
+  interval: RuleStrategyCandleInterval;
+  fast_window: number;
+  slow_window: number;
+  signal_window: number;
+  entry_cross: "golden" | "death";
+}
+
+export interface AdvancedBollingerRuleConfig {
+  enabled: boolean;
+  interval: RuleStrategyCandleInterval;
+  period: number;
+  standard_deviations: number;
+  entry_reference: "upper" | "middle" | "lower";
+  entry_comparator: "above" | "below";
+}
+
+export interface AdvancedThresholdRuleConfig {
+  enabled: boolean;
+  interval: RuleStrategyCandleInterval;
+  period: number;
+  entry_comparator: "above" | "below";
+  entry_threshold: number;
+  exit_enabled: boolean;
+  exit_comparator: "above" | "below";
+  exit_threshold: number;
+}
+
+export interface AdvancedBrarRuleConfig extends AdvancedThresholdRuleConfig {
+  component: "ar" | "br";
+}
+
+export interface AdvancedRuleSetConfig {
+  enabled: boolean;
+  entry_confirmation_mode: "all" | "any";
+  exit_confirmation_mode: "all" | "any";
+  moving_average: AdvancedMovingAverageRuleConfig;
+  macd: AdvancedMacdRuleConfig;
+  bollinger: AdvancedBollingerRuleConfig;
+  rsi: AdvancedThresholdRuleConfig;
+  momentum: AdvancedThresholdRuleConfig;
+  brar: AdvancedBrarRuleConfig;
+}
+
 export interface RuleStrategyRiskConfig {
   size_mode: "fixed_quote" | "equity_fraction" | "equal_split";
   size_value: number;
@@ -77,7 +131,7 @@ export interface RuleStrategyRiskConfig {
   leverage: number;
 }
 
-export type RuleStrategyInterval = "5m" | "15m" | "1h" | "4h" | "1d";
+export type RuleStrategyInterval = RuleStrategyCandleInterval;
 
 export interface RuleStrategyConfig {
   mode: "paper";
@@ -90,6 +144,7 @@ export interface RuleStrategyConfig {
   rsi: RsiRuleConfig;
   bollinger: BollingerRuleConfig;
   momentum_macd: MomentumMacdRuleConfig;
+  advanced_rules: AdvancedRuleSetConfig;
   risk: RuleStrategyRiskConfig;
 }
 
@@ -130,7 +185,7 @@ export interface RuleStrategyIndicators {
 }
 
 export interface RuleStrategySizing {
-  mode: "fixed_quote" | "equity_fraction";
+  mode: "fixed_quote" | "equity_fraction" | "equal_split";
   requested_quote: number;
   max_allowed_quote: number;
   affordable_quote: number;
@@ -159,7 +214,21 @@ export interface RuleStrategyEvaluation {
   account: RuleStrategyPaperAccount;
 }
 
+export interface RuleStrategyTextImportConfig {
+  interval: RuleStrategyCandleInterval;
+  advanced_rules: AdvancedRuleSetConfig;
+  risk: RuleStrategyRiskConfig;
+}
+
+export interface RuleStrategyTextImportProposal {
+  strategy_name: string | null;
+  config: RuleStrategyTextImportConfig;
+  summary: string;
+  unresolved_items: string[];
+}
+
 export interface RuleStrategyEvaluationHistoryEntry extends RuleStrategyEvaluation {
+  symbol?: string;
   evaluated_at: string;
   trades: RuleStrategyTradeLogEntry[];
 }
