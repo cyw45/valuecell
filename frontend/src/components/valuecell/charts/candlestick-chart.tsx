@@ -7,6 +7,8 @@ import {
   AxisPointerComponent,
   DataZoomComponent,
   GridComponent,
+  LegendComponent,
+  MarkLineComponent,
   TooltipComponent,
 } from "echarts/components";
 import type { ECharts } from "echarts/core";
@@ -25,6 +27,8 @@ echarts.use([
   ECandlestickChart,
   LineChart,
   GridComponent,
+  LegendComponent,
+  MarkLineComponent,
   TooltipComponent,
   AxisPointerComponent,
   DataZoomComponent,
@@ -45,10 +49,18 @@ export interface CandlestickMovingAverage {
   color?: string;
 }
 
+export interface CandlestickBollingerBands {
+  upper: Array<number | null>;
+  middle: Array<number | null>;
+  lower: Array<number | null>;
+}
+
 
 interface CandlestickChartProps {
   data: CandlestickData[];
   movingAverages?: CandlestickMovingAverage[];
+  bollingerBands?: CandlestickBollingerBands;
+  currentPrice?: number | null;
   width?: number | string;
   height?: number | string;
   className?: string;
@@ -61,6 +73,8 @@ interface CandlestickChartProps {
 function CandlestickChart({
   data,
   movingAverages = [],
+  bollingerBands,
+  currentPrice,
   width = "100%",
   height = 500,
   className,
@@ -96,7 +110,7 @@ function CandlestickChart({
 
     const series: EChartsOption["series"] = [
       {
-        name: "K-Line",
+        name: "K线",
         type: "candlestick",
         data: ohlcData,
         clip: true,
@@ -106,6 +120,18 @@ function CandlestickChart({
           borderColor: stockColors.positive, // up candle border
           borderColor0: stockColors.negative, // down candle border
         },
+        markLine: currentPrice != null
+          ? {
+              symbol: "none",
+              lineStyle: { color: "#fbbf24", type: "dashed", width: 1 },
+              label: {
+                color: theme === "dark" ? "#fef3c7" : "#78350f",
+                formatter: `现价 ${currentPrice.toLocaleString()}`,
+                position: "end",
+              },
+              data: [{ yAxis: currentPrice }],
+            }
+          : undefined,
       },
     ];
     for (const movingAverage of movingAverages) {
@@ -118,10 +144,27 @@ function CandlestickChart({
         lineStyle: { width: 1.5, color: movingAverage.color },
       });
     }
+    if (bollingerBands) {
+      const bands = [
+        { name: "BOLL 上轨", values: bollingerBands.upper, color: "#fb7185", type: "dashed" },
+        { name: "BOLL 中线", values: bollingerBands.middle, color: "#fbbf24", type: "solid" },
+        { name: "BOLL 下轨", values: bollingerBands.lower, color: "#38bdf8", type: "dashed" },
+      ] as const;
+      for (const band of bands) {
+        series.push({
+          name: band.name,
+          type: "line",
+          data: band.values,
+          showSymbol: false,
+          smooth: true,
+          lineStyle: { width: 1.2, color: band.color, type: band.type },
+        });
+      }
+    }
 
     if (showVolume) {
       series.push({
-        name: "Volume",
+        name: "成交量",
         type: "bar",
         xAxisIndex: 1,
         yAxisIndex: 1,
@@ -203,6 +246,13 @@ function CandlestickChart({
     const gridColor = theme === "dark" ? "rgba(137, 160, 205, 0.12)" : "rgba(71, 85, 105, 0.12)";
     return {
       animation: false,
+      legend: {
+        top: 2,
+        left: "center",
+        textStyle: { color: textColor, fontSize: 10 },
+        itemWidth: 14,
+        itemHeight: 2,
+      },
       tooltip: {
         trigger: "axis",
         axisPointer: { type: "cross" },
@@ -233,7 +283,7 @@ function CandlestickChart({
       ],
       series,
     };
-  }, [data, movingAverages, stockColors, showVolume, dateFormat, theme]);
+  }, [data, movingAverages, bollingerBands, currentPrice, stockColors, showVolume, dateFormat, theme]);
 
   useChartResize(chartInstance);
 

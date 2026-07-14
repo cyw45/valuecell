@@ -58,6 +58,31 @@ import { cn } from "@/lib/utils";
 
 const TIMEFRAME_OPTIONS: RuleStrategyInterval[] = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"];
 const ADVANCED_TIMEFRAME_OPTIONS = ["1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"] as const;
+const DEFAULT_STRATEGY_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"];
+
+const PAPER_DEMO_ADVANCED_RULES: AdvancedRuleSetConfig = {
+  enabled: true,
+  entry_confirmation_mode: "all",
+  exit_confirmation_mode: "any",
+  moving_average: { enabled: false, interval: "1d", period: 20, entry_comparator: "above" },
+  macd: { enabled: false, interval: "5m", fast_window: 12, slow_window: 26, signal_window: 9, entry_cross: "golden" },
+  bollinger: { enabled: false, interval: "15m", period: 20, standard_deviations: 2, entry_reference: "middle", entry_comparator: "above" },
+  rsi: { enabled: true, interval: "1m", period: 1, entry_comparator: "above", entry_threshold: -1, exit_enabled: true, exit_comparator: "above", exit_threshold: -1 },
+  momentum: { enabled: false, interval: "1m", period: 14, entry_comparator: "below", entry_threshold: 20, exit_enabled: false, exit_comparator: "above", exit_threshold: 85 },
+  brar: { enabled: false, interval: "1m", period: 26, component: "br", entry_comparator: "below", entry_threshold: 30, exit_enabled: false, exit_comparator: "above", exit_threshold: 85 },
+};
+
+function createPaperDemoAdvancedRules(): AdvancedRuleSetConfig {
+  return {
+    ...PAPER_DEMO_ADVANCED_RULES,
+    moving_average: { ...PAPER_DEMO_ADVANCED_RULES.moving_average },
+    macd: { ...PAPER_DEMO_ADVANCED_RULES.macd },
+    bollinger: { ...PAPER_DEMO_ADVANCED_RULES.bollinger },
+    rsi: { ...PAPER_DEMO_ADVANCED_RULES.rsi },
+    momentum: { ...PAPER_DEMO_ADVANCED_RULES.momentum },
+    brar: { ...PAPER_DEMO_ADVANCED_RULES.brar },
+  };
+}
 
 
 type StrategyFormValues = {
@@ -342,9 +367,17 @@ export default function Strategies() {
 
   useEffect(() => {
     if (strategyId || symbolOptions.length === 0) return;
-    setValues((current) => current.symbols.length === 0
-      ? { ...current, symbols: symbolOptions, maximumPositions: symbolOptions.length }
-      : current);
+    setValues((current) => {
+      if (current.symbols.length > 0) return current;
+      const symbols = DEFAULT_STRATEGY_SYMBOLS.filter((symbol) =>
+        symbolOptions.includes(symbol),
+      );
+      return {
+        ...current,
+        symbols: symbols.length > 0 ? symbols : [symbolOptions[0]],
+        maximumPositions: 1,
+      };
+    });
   }, [strategyId, symbolOptions]);
 
   const errors = useMemo(() => {
@@ -370,7 +403,7 @@ export default function Strategies() {
     if (values.takeProfitEnabled && (values.takeProfit <= 0 || values.takeProfit > 100)) next.takeProfit = t("saas.operations.strategy.errors.percentRange", { min: 0.1, max: 100 });
     if (values.stopLossEnabled && (values.stopLoss <= 0 || values.stopLoss > 100)) next.stopLoss = t("saas.operations.strategy.errors.percentRange", { min: 0.1, max: 100 });
     if (!Number.isInteger(values.maximumPositions) || values.maximumPositions < 1 || values.maximumPositions > 100) next.maximumPositions = t("saas.operations.strategy.errors.wholeNumber", { min: 1, max: 100 });
-    if (!Number.isFinite(values.initialCapital) || values.initialCapital <= 0 || values.initialCapital > 100_000_000) next.initialCapital = "Enter a paper capital amount between 1 and 100,000,000 USDT.";
+    if (!Number.isFinite(values.initialCapital) || values.initialCapital <= 0 || values.initialCapital > 100_000_000) next.initialCapital = "请输入 1 至 100,000,000 USDT 之间的初始模拟资金。";
     if (values.leverage < 1 || values.leverage > 5) next.leverage = t("saas.operations.strategy.errors.leverageRange");
     return next;
   }, [t, values]);
@@ -392,6 +425,23 @@ export default function Strategies() {
         },
       },
     }));
+  };
+
+  const applyPaperDemoPreset = () => {
+    setValues((current) => ({
+      ...current,
+      timeframe: "1m",
+      rsiEnabled: false,
+      bollingerEnabled: false,
+      momentumEnabled: false,
+      advancedRules: createPaperDemoAdvancedRules(),
+      takeProfitEnabled: false,
+      stopLossEnabled: false,
+      maximumPositions: 100,
+      leverage: 1,
+    }));
+    setName("纸面交易演示策略");
+    toast.success("极限演示预设已回填。请保存策略后重新启动；行情数据就绪后会买入，下一轮扫描会模拟卖出。");
   };
 
   const isValid = Object.keys(errors).length === 0;
@@ -487,6 +537,16 @@ export default function Strategies() {
             <AlertTitle>{t("saas.operations.strategy.explicitInputs.title")}</AlertTitle>
             <AlertDescription>
               {t("saas.operations.strategy.explicitInputs.description")}
+            </AlertDescription>
+          </Alert>
+          <Alert className="border-amber-500/35 bg-amber-500/5">
+            <Activity className="text-amber-500" />
+            <AlertTitle>纸面交易演示预设</AlertTitle>
+            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>使用 1 分钟 RSI 高于 -1 的必过规则：行情数据就绪即模拟买入，下一轮扫描模拟卖出。仅用于验证买卖、持仓和盈亏链路，不适用于真实策略。</span>
+              <Button className="w-fit shrink-0" onClick={applyPaperDemoPreset} type="button" variant="secondary">
+                应用演示预设
+              </Button>
             </AlertDescription>
           </Alert>
           <Card className="gap-0 rounded-lg py-0 shadow-none">
@@ -633,7 +693,7 @@ export default function Strategies() {
           <Card className="gap-0 rounded-lg py-0 shadow-none">
             <RuleHeading icon={SlidersHorizontal} title={t("saas.operations.strategy.sections.riskLimits.title")} description={t("saas.operations.strategy.sections.riskLimits.description")} />
             <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-3">
-              <NumericField error={errors.initialCapital} id="initial-capital" label="Initial paper capital" min={1} max={100_000_000} onChange={(value) => update("initialCapital", value)} step={100} unit="USDT" value={values.initialCapital} />
+              <NumericField error={errors.initialCapital} id="initial-capital" label="初始模拟资金" min={1} max={100_000_000} onChange={(value) => update("initialCapital", value)} step={100} unit="USDT" value={values.initialCapital} />
               <div className="grid gap-2"><div className="flex items-center justify-between gap-3"><Label htmlFor="take-profit-enabled">启用止盈</Label><Switch checked={values.takeProfitEnabled} id="take-profit-enabled" onCheckedChange={(enabled) => update("takeProfitEnabled", enabled)} /></div><NumericField disabled={!values.takeProfitEnabled} error={errors.takeProfit} id="take-profit" label={t("saas.operations.strategy.fields.takeProfit")} max={100} min={0.1} onChange={(value) => update("takeProfit", value)} step={0.1} unit="%" value={values.takeProfit} /></div>
               <div className="grid gap-2"><div className="flex items-center justify-between gap-3"><Label htmlFor="stop-loss-enabled">启用止损</Label><Switch checked={values.stopLossEnabled} id="stop-loss-enabled" onCheckedChange={(enabled) => update("stopLossEnabled", enabled)} /></div><NumericField disabled={!values.stopLossEnabled} error={errors.stopLoss} id="stop-loss" label={t("saas.operations.strategy.fields.stopLoss")} max={100} min={0.1} onChange={(value) => update("stopLoss", value)} step={0.1} unit="%" value={values.stopLoss} /></div>
               <NumericField error={errors.maximumPositions} id="maximum-positions" label={t("saas.operations.strategy.fields.maximumOpenPositions")} max={100} min={1} onChange={(value) => update("maximumPositions", value)} value={values.maximumPositions} />
@@ -653,8 +713,8 @@ export default function Strategies() {
               <SummaryRow label={t("saas.operations.strategy.summary.timeframe")} value={values.timeframe} />
               <SummaryRow label={t("saas.operations.strategy.summary.entry")} value={t("saas.operations.strategy.summary.entryValue", { fast: values.fastMa, slow: values.slowMa })} />
               <SummaryRow label={t("saas.operations.strategy.summary.confirmations")} value={activeFilters.join(" | ") || t("saas.operations.strategy.summary.none")} />
-              <SummaryRow label="Initial paper capital" value={`${values.initialCapital.toLocaleString()} USDT`} />
-              <SummaryRow label="Capital allocation" value="Available capital / qualified symbols (rounded down)" />
+              <SummaryRow label="初始模拟资金" value={`${values.initialCapital.toLocaleString()} USDT`} />
+              <SummaryRow label="资金分配" value="可用资金 / 符合条件币种数量（向下取整）" />
               <SummaryRow label={t("saas.operations.strategy.summary.exitLimits")} value={t("saas.operations.strategy.summary.exitLimitsValue", { takeProfit: values.takeProfit, stopLoss: values.stopLoss })} />
               <SummaryRow label={t("saas.operations.strategy.summary.exposureCap")} value={t("saas.operations.strategy.summary.exposureCapValue", { positions: values.maximumPositions, leverage: values.leverage })} />
             </CardContent>

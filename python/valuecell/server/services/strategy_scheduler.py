@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import asyncio
@@ -16,9 +17,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
     RuleStrategyMarketSnapshot,
-    RuleStrategyPosition,
 )
-from valuecell.server.db.models.rule_strategy import RuleStrategy
 from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
 from valuecell.server.services.live_execution_service import LiveExecutionService
@@ -123,7 +122,9 @@ class StrategyScheduler:
             self._scheduler.remove_job(job_id)
             logger.info("StrategyScheduler removed job strategy_id={}", job_id)
 
-        # Add jobs for newly running strategies
+        # Add new jobs and replace jobs whose stored configuration changed.
+        # Replacing every job on each sync postpones its next run indefinitely
+        # when the sync frequency is shorter than the evaluation interval.
         for strategy in running_strategies:
             try:
                 config = RuleStrategyConfig.model_validate(strategy.config)
@@ -138,14 +139,23 @@ class StrategyScheduler:
                 _MIN_INTERVAL_S,
                 config.decide_interval_s or _INTERVAL_SECONDS[config.interval],
             )
+            job_args = [
+                strategy.strategy_id,
+                strategy.tenant_id,
+                config.model_dump(mode="json"),
+            ]
+            existing_job = self._scheduler.get_job(strategy.strategy_id)
+            if existing_job is not None and list(existing_job.args) == job_args:
+                continue
             self._scheduler.add_job(
                 self._tick,
                 trigger=IntervalTrigger(seconds=interval_s),
                 id=strategy.strategy_id,
-                args=[strategy.strategy_id, strategy.tenant_id, config.model_dump()],
+                args=job_args,
                 replace_existing=True,
                 coalesce=True,
                 max_instances=1,
+                next_run_time=datetime.now(timezone.utc),
             )
             logger.info(
                 "StrategyScheduler added job strategy_id={} interval={}s",

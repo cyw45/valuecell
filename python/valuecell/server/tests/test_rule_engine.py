@@ -484,3 +484,44 @@ def test_advanced_rules_combine_multiple_intervals_and_brar_for_entry():
         "brar_entry",
     }
     assert result.indicators.brar_br is not None
+
+
+@pytest.mark.parametrize(
+    ("market", "expected_action", "expected_reason"),
+    [
+        (None, "buy", "advanced_entry_confirmed"),
+        (
+            {"position": {"quantity": 2.0, "entry_price": 10.0}},
+            "sell",
+            "advanced_exit_confirmed",
+        ),
+    ],
+)
+def test_advanced_rsi_full_range_rule_always_cycles_paper_positions(
+    market, expected_action, expected_reason
+):
+    """A threshold below the RSI range provides a deterministic paper demo."""
+    result = _evaluate(
+        [10.0, 10.0],
+        config={
+            "advanced_rules": {
+                "enabled": True,
+                "entry_confirmation_mode": "all",
+                "exit_confirmation_mode": "any",
+                "rsi": {
+                    "enabled": True,
+                    "interval": "1m",
+                    "period": 1,
+                    "entry_comparator": "above",
+                    "entry_threshold": -1,
+                    "exit_enabled": True,
+                    "exit_comparator": "above",
+                    "exit_threshold": -1,
+                },
+            }
+        },
+        market=market,
+    )
+
+    assert result.action == expected_action
+    assert result.reason_code == expected_reason

@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import CandlestickChartComponent, {
+  type CandlestickBollingerBands,
   type CandlestickData,
   type CandlestickMovingAverage,
 } from "@/components/valuecell/charts/candlestick-chart";
@@ -194,6 +195,13 @@ export default function DashboardPage() {
       color: ["#fbbf24", "#38bdf8", "#c084fc"][index],
     }))
     : [];
+  const bollingerBands: CandlestickBollingerBands | undefined = market?.indicators.length
+    ? {
+      upper: market.indicators.map((indicator) => indicator.bollinger.upper ?? null),
+      middle: market.indicators.map((indicator) => indicator.bollinger.middle ?? null),
+      lower: market.indicators.map((indicator) => indicator.bollinger.lower ?? null),
+    }
+    : undefined;
   const account = ruleStrategy?.account;
   const pnl = (account?.realized_pnl_quote ?? 0) + (account?.unrealized_pnl_quote ?? 0);
   const pnlPercent = account && account.initial_capital_quote > 0
@@ -318,16 +326,26 @@ export default function DashboardPage() {
                   <p className="text-muted-foreground text-xs">{market?.latest_price ? `${market.latest_price.toLocaleString()} USDT` : "等待市场价格"}，{market?.interval ?? ruleStrategy?.config.interval ?? "1h"} K 线</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Badge variant={marketFailure || marketError ? "destructive" : "outline"} className="gap-1 text-[11px]">
-                  <RadioTower className="size-3" /> {market?.provider ?? "行情数据源"}
-                </Badge>
-                {market?.freshness_status === "stale" ? <Badge variant="outline">数据延迟</Badge> : null}
+              <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                <div className="min-w-[132px] text-right">
+                  <p className="terminal-label">当前价格</p>
+                  {market?.latest_price != null ? (
+                    <p className="mt-1 whitespace-nowrap text-amber-500 text-lg dark:text-amber-300">
+                      <TerminalValue value={market.latest_price} /> <span className="text-xs">USDT</span>
+                    </p>
+                  ) : <p className="mt-1 text-muted-foreground text-sm">等待行情</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={marketFailure || marketError ? "destructive" : "outline"} className="gap-1 text-[11px]">
+                    <RadioTower className="size-3" /> {market?.provider ?? "行情数据源"}
+                  </Badge>
+                  {market?.freshness_status === "stale" ? <Badge variant="outline">数据延迟</Badge> : null}
+                </div>
               </div>
             </div>
             <CardContent className="p-0">
               {marketError || marketFailure ? <p className="py-28 text-center text-destructive text-sm">市场数据暂时不可用。</p> : (
-                <CandlestickChartComponent data={candles} movingAverages={movingAverages} loading={marketLoading} height={410} theme={isDark ? "dark" : "light"} />
+                <CandlestickChartComponent bollingerBands={bollingerBands} currentPrice={market?.latest_price} data={candles} movingAverages={movingAverages} loading={marketLoading} height={410} theme={isDark ? "dark" : "light"} />
               )}
             </CardContent>
           </Card>

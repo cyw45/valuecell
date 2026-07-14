@@ -129,7 +129,12 @@ function Compile {
                 Write-Warn "prepare_envs.ps1 not found, running uv sync directly..."
                 uv sync
             }
-            uv run valuecell/server/db/init_db.py
+            $quantOnlyMode = (& uv run python -c "from valuecell.server.config.settings import get_settings; print(str(get_settings().QUANT_ONLY_MODE).lower())" | Select-Object -Last 1).Trim()
+            if ($quantOnlyMode -eq "true") {
+                Write-Info "Quant-only mode enabled; skipping legacy database and agent initialization."
+            } else {
+                uv run valuecell/server/db/init_db.py
+            }
             Write-Success "Python dependencies synced"
         } catch {
             Write-Err "Failed to sync Python dependencies: $_"
