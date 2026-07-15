@@ -20,7 +20,7 @@ import { useSaaSSession } from "@/store/system-store";
 const PRIMARY_NAVIGATION = [
   { labelKey: "saas.navigation.dashboard", to: "/dashboard", icon: LayoutDashboard },
   { labelKey: "saas.navigation.charts", to: "/charts", icon: CandlestickChart },
-  { labelKey: "saas.navigation.strategies", to: "/strategies", icon: SlidersHorizontal },
+  { labelKey: "saas.navigation.strategies", to: "/dashboard#strategy-configuration", icon: SlidersHorizontal },
   { labelKey: "saas.navigation.trades", to: "/trades", icon: BarChart3 },
   { labelKey: "saas.navigation.funding", to: "/funding", icon: Landmark },
 ] as const;
@@ -52,7 +52,10 @@ const AppSidebar: FC = () => {
       <nav className="flex flex-1 flex-col gap-1 p-2" aria-label={t("saas.navigation.workspace")}>
         {PRIMARY_NAVIGATION.map(({ labelKey, to, icon: Icon }) => {
           const label = t(labelKey);
-          const isActive = location.pathname === to || location.pathname.startsWith(`${to}/`);
+          const [pathname, hash] = to.split("#");
+          const isActive = hash
+            ? location.pathname === pathname && location.hash === `#${hash}`
+            : location.pathname === pathname || location.pathname.startsWith(`${pathname}/`);
           const navItem = (
             <NavLink
               key={to}

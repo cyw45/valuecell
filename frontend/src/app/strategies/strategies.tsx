@@ -332,7 +332,7 @@ function toRuleStrategyConfig(values: StrategyFormValues): RuleStrategyConfig {
   };
 }
 
-export default function Strategies() {
+export function RuleStrategyConfiguration({ embedded = false }: { embedded?: boolean }) {
   const { t } = useTranslation();
   const [values, setValues] = useState<StrategyFormValues>(initialValues);
   const [strategyId, setStrategyId] = useState(() => localStorage.getItem("valuecell.rule-strategy-id") ?? "");
@@ -454,6 +454,7 @@ export default function Strategies() {
   const storedStrategy = strategyQuery.data;
   const savePending = createStrategy.isPending || updateStrategy.isPending;
   const selectionLimitReached = values.symbols.length >= 100;
+  const ConfigurationHeading = embedded ? "h2" : "h1";
 
   const saveStrategy = async () => {
     if (!isValid) return;
@@ -512,12 +513,12 @@ export default function Strategies() {
   };
 
   return (
-    <div className="scroll-container flex size-full flex-col bg-background">
-      <header className="border-b px-4 py-4 sm:px-6">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className={cn("flex flex-col", embedded ? "gap-4" : "scroll-container size-full bg-background")}>
+      <header className={cn("border-b px-4 py-4 sm:px-6", embedded && "rounded-lg border border-sky-400/15 bg-card/90")}>
+        <div className={cn("mx-auto flex max-w-[1600px] flex-col gap-4 lg:flex-row lg:items-center lg:justify-between", embedded && "max-w-none")}>
           <div>
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="font-semibold text-xl">{t("saas.operations.strategy.title")}</h1>
+              <ConfigurationHeading className="font-semibold text-xl">{t("saas.operations.strategy.title")}</ConfigurationHeading>
               <Badge className="border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300" variant="outline">
                 <ShieldCheck /> {t("saas.operations.strategy.paperOnly")}
               </Badge>
@@ -530,7 +531,7 @@ export default function Strategies() {
         </div>
       </header>
 
-      <div className="mx-auto grid w-full max-w-[1600px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className={cn("mx-auto grid w-full max-w-[1600px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_360px]", embedded && "max-w-none px-0 pb-0 pt-4 sm:px-0 sm:pb-0 sm:pt-4")}>
         <form className="grid min-w-0 gap-4" noValidate>
           <Alert className="border-sky-500/30 bg-sky-500/5">
             <AlertTriangle />
@@ -777,4 +778,9 @@ export default function Strategies() {
       </div>
     </div>
   );
+}
+
+
+export default function Strategies() {
+  return <RuleStrategyConfiguration />;
 }

@@ -2,7 +2,11 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BarChart3, ExternalLink, RadioTower } from "lucide-react";
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
-import { MarketIndicatorPanelChart, type MarketIndicatorPanel } from "@/components/valuecell/charts/market-indicator-panel";
+import {
+  MarketIndicatorPanelChart,
+  type MarketIndicatorPanel,
+  type RsiBollingerMode,
+} from "@/components/valuecell/charts/market-indicator-panel";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -50,6 +54,7 @@ export default function ChartsPage() {
   const [symbol, setSymbol] = useState<string>(SYMBOLS[0].value);
   const [interval, setInterval] = useState("1h");
   const [indicatorPanel, setIndicatorPanel] = useState<MarketIndicatorPanel>("rsi");
+  const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
   const [historyRange, setHistoryRange] = useState<HistoryRange>("10d");
   const [fromDate, setFromDate] = useState("");
   const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
@@ -90,19 +95,11 @@ export default function ChartsPage() {
       { key: "ma5", name: "MA5", color: "#f59e0b" },
       { key: "ma20", name: "MA20", color: "#3b82f6" },
       { key: "ma60", name: "MA60", color: "#a855f7" },
-      { key: "upper", name: "BB Upper", color: "#94a3b8" },
-      { key: "middle", name: "BB Middle", color: "#64748b" },
-      { key: "lower", name: "BB Lower", color: "#94a3b8" },
     ] as const;
     return overlays.map((overlay) => ({
       name: overlay.name,
       color: overlay.color,
-      values: market.indicators.map((indicator) => {
-        if (overlay.key === "ma5" || overlay.key === "ma20" || overlay.key === "ma60") {
-          return indicator.ma[overlay.key] ?? null;
-        }
-        return indicator.bollinger[overlay.key] ?? null;
-      }),
+      values: market.indicators.map((indicator) => indicator.ma[overlay.key] ?? null),
     }));
   }, [market]);
 
@@ -159,15 +156,31 @@ export default function ChartsPage() {
                     <p className="font-medium text-sm">Technical indicator</p>
                     <p className="text-muted-foreground text-xs">Derived from the same exchange OHLCV snapshot as the candlestick chart.</p>
                   </div>
-                  <Tabs onValueChange={(value) => setIndicatorPanel(value as MarketIndicatorPanel)} value={indicatorPanel}>
-                    <TabsList aria-label="Technical indicator panel">
-                      <TabsTrigger value="rsi">RSI</TabsTrigger>
-                      <TabsTrigger value="momentum">Momentum</TabsTrigger>
-                      <TabsTrigger value="macd">MACD</TabsTrigger>
-                    </TabsList>
-                  </Tabs>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Tabs onValueChange={(value) => setIndicatorPanel(value as MarketIndicatorPanel)} value={indicatorPanel}>
+                      <TabsList aria-label="Technical indicator panel">
+                        <TabsTrigger value="rsi">RSI</TabsTrigger>
+                        <TabsTrigger value="momentum">Momentum</TabsTrigger>
+                        <TabsTrigger value="macd">MACD</TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                    {indicatorPanel === "rsi" ? (
+                      <Tabs onValueChange={(value) => setRsiMode(value as RsiBollingerMode)} value={rsiMode}>
+                        <TabsList aria-label="RSI 与布林带显示方式">
+                          <TabsTrigger value="rsi">RSI</TabsTrigger>
+                          <TabsTrigger value="bollinger">布林带</TabsTrigger>
+                          <TabsTrigger value="both">同时显示</TabsTrigger>
+                        </TabsList>
+                      </Tabs>
+                    ) : null}
+                  </div>
                 </div>
-                <MarketIndicatorPanelChart data={market.indicators} panel={indicatorPanel} />
+                {indicatorPanel === "rsi" ? (
+                  <div className="space-y-3">
+                    {rsiMode !== "bollinger" ? <MarketIndicatorPanelChart data={market.indicators} panel="rsi" height={rsiMode === "both" ? 190 : 220} /> : null}
+                    {rsiMode !== "rsi" ? <MarketIndicatorPanelChart candles={market.candles} data={market.indicators} panel="bollinger" height={rsiMode === "both" ? 210 : 220} /> : null}
+                  </div>
+                ) : <MarketIndicatorPanelChart data={market.indicators} panel={indicatorPanel} />}
               </div>
             ) : null}
           </CardContent>

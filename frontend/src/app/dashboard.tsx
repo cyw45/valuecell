@@ -1,6 +1,5 @@
 import { useTheme } from "next-themes";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
 import {
   ArrowUpRight,
   BarChart3,
@@ -26,17 +25,21 @@ import {
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
+import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import CandlestickChartComponent, {
-  type CandlestickBollingerBands,
   type CandlestickData,
   type CandlestickMovingAverage,
 } from "@/components/valuecell/charts/candlestick-chart";
-import { MarketIndicatorPanelChart } from "@/components/valuecell/charts/market-indicator-panel";
+import {
+  MarketIndicatorPanelChart,
+  type RsiBollingerMode,
+} from "@/components/valuecell/charts/market-indicator-panel";
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
+import { ThresholdGauge } from "@/components/valuecell/charts/threshold-gauge";
 import { cn } from "@/lib/utils";
 
 const currency = new Intl.NumberFormat("en-US", {
@@ -168,6 +171,7 @@ export default function DashboardPage() {
   const activeSymbols = Object.keys(ruleStrategy?.account.positions ?? {});
   const marketSymbols = activeSymbols.length > 0 ? activeSymbols : trackedSymbols;
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USDT");
+  const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
   const selectedIsAvailable = marketSymbols.includes(selectedSymbol);
   const effectiveSymbol = selectedIsAvailable || marketSymbols.length === 0
     ? selectedSymbol
@@ -195,19 +199,26 @@ export default function DashboardPage() {
       color: ["#fbbf24", "#38bdf8", "#c084fc"][index],
     }))
     : [];
-  const bollingerBands: CandlestickBollingerBands | undefined = market?.indicators.length
-    ? {
-      upper: market.indicators.map((indicator) => indicator.bollinger.upper ?? null),
-      middle: market.indicators.map((indicator) => indicator.bollinger.middle ?? null),
-      lower: market.indicators.map((indicator) => indicator.bollinger.lower ?? null),
-    }
-    : undefined;
   const account = ruleStrategy?.account;
   const pnl = (account?.realized_pnl_quote ?? 0) + (account?.unrealized_pnl_quote ?? 0);
   const pnlPercent = account && account.initial_capital_quote > 0
     ? (pnl / account.initial_capital_quote) * 100
     : 0;
   const invested = account ? account.equity_quote - account.quote_balance : 0;
+  const latestRsi = market?.indicators[market.indicators.length - 1]?.rsi ?? null;
+  const rsiDescription = latestRsi === null
+    ? "等待可用行情"
+    : latestRsi <= 30
+      ? "超卖区：低于 30"
+      : latestRsi >= 70
+        ? "超买区：高于 70"
+        : "中性区：30–70";
+  const capitalUtilization = account && account.equity_quote > 0
+    ? Math.min(Math.max((Math.max(invested, 0) / account.equity_quote) * 100, 0), 100)
+    : null;
+  const utilizationDescription = capitalUtilization === null
+    ? "等待策略账户"
+    : "已投入资金 ÷ 当前组合权益";
   const holdingRows = useMemo(() => Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
     const value = position.quantity * position.mark_price;
     const profit = position.quantity * (position.mark_price - position.entry_price);
@@ -225,6 +236,19 @@ export default function DashboardPage() {
   ].filter((item): item is string => item !== null);
   const recentlyScanned = evaluations.slice(0, 8);
   const requestedCapital = latestEvaluation?.sizing.requested_quote ?? 0;
+
+  const scrollToStrategyConfiguration = () => {
+    document.getElementById("strategy-configuration")?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  };
+
+  useEffect(() => {
+    if (window.location.hash !== "#strategy-configuration") return;
+    const frameId = window.requestAnimationFrame(scrollToStrategyConfiguration);
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
 
   return (
     <div className="scroll-container dashboard-shell flex size-full flex-col">
@@ -258,8 +282,8 @@ export default function DashboardPage() {
               </TooltipTrigger>
               <TooltipContent>{isDark ? "切换为浅色主题" : "切换为深色主题"}</TooltipContent>
             </Tooltip>
-            <Button asChild className="bg-sky-600 text-white hover:bg-sky-500">
-              <Link to="/strategies">配置策略 <ArrowUpRight /></Link>
+            <Button className="bg-sky-600 text-white hover:bg-sky-500" onClick={scrollToStrategyConfiguration} type="button">
+              配置策略 <ArrowUpRight />
             </Button>
           </div>
         </header>
@@ -269,6 +293,23 @@ export default function DashboardPage() {
           <KpiCard icon={pnl >= 0 ? TrendingUp : TrendingDown} label="总收益与亏损" value={<><TerminalValue signed value={pnl} /> USDT</>} detail={`策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`} trend={pnl >= 0 ? "positive" : "negative"} />
           <KpiCard icon={CircleDollarSign} label="可用资金" value={<><TerminalValue value={account?.quote_balance ?? 0} /> USDT</>} detail={`已投入 ${currency.format(Math.max(invested, 0))} USDT`} />
           <KpiCard icon={Layers3} label="策略执行情况" value={`${holdingRows.length} / ${ruleStrategy?.config.risk.max_positions ?? 0}`} detail={`已成交 ${trades.length} 笔模拟交易，扫描 ${trackedSymbols.length} 个币种`} trend="neutral" />
+        </section>
+
+        <section aria-label="关键阈值仪表" className="grid gap-3 lg:grid-cols-2">
+          <ThresholdGauge
+            description={rsiDescription}
+            displayValue={latestRsi === null ? "—" : latestRsi.toFixed(1)}
+            label="RSI（14）"
+            thresholds={["30 超卖", "50 中性", "70 超买"]}
+            value={latestRsi}
+          />
+          <ThresholdGauge
+            description={utilizationDescription}
+            displayValue={capitalUtilization === null ? "—" : `${capitalUtilization.toFixed(1)}%`}
+            label="资金使用率"
+            thresholds={["0%", "50%", "100% 上限"]}
+            value={capitalUtilization}
+          />
         </section>
 
         <section className="terminal-strip grid gap-px overflow-hidden rounded-lg border border-sky-500/20 bg-border/50 lg:grid-cols-[1.2fr_1fr_1fr_1.1fr]" aria-label="策略终端状态">
@@ -298,7 +339,7 @@ export default function DashboardPage() {
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
             <div className="flex items-center justify-between border-border/70 border-b px-4 py-3">
               <div><h2 className="font-semibold">策略参数总览</h2><p className="mt-0.5 text-muted-foreground text-xs">首页同步展示正在使用的筛选与风控配置</p></div>
-              <Button asChild size="sm" variant="ghost"><Link to="/strategies"><Settings2 /> 编辑</Link></Button>
+              <Button onClick={scrollToStrategyConfiguration} size="sm" type="button" variant="ghost"><Settings2 /> 编辑</Button>
             </div>
             <CardContent className="grid gap-px bg-border/60 p-px sm:grid-cols-2 lg:grid-cols-4">
               <div className="bg-card px-3 py-3"><p className="terminal-label">均线趋势</p><p className="mt-1 font-medium text-sm">{ruleStrategy?.config.moving_average.enabled ? `MA ${ruleStrategy.config.moving_average.short_window} / ${ruleStrategy.config.moving_average.long_window}` : "未启用"}</p></div>
@@ -345,7 +386,7 @@ export default function DashboardPage() {
             </div>
             <CardContent className="p-0">
               {marketError || marketFailure ? <p className="py-28 text-center text-destructive text-sm">市场数据暂时不可用。</p> : (
-                <CandlestickChartComponent bollingerBands={bollingerBands} currentPrice={market?.latest_price} data={candles} movingAverages={movingAverages} loading={marketLoading} height={410} theme={isDark ? "dark" : "light"} />
+                <CandlestickChartComponent currentPrice={market?.latest_price} data={candles} movingAverages={movingAverages} loading={marketLoading} height={410} theme={isDark ? "dark" : "light"} />
               )}
             </CardContent>
           </Card>
@@ -370,15 +411,25 @@ export default function DashboardPage() {
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.72fr)_minmax(300px,0.78fr)]">
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-              <div><h2 className="font-semibold">所选币种技术指标</h2><p className="mt-0.5 text-muted-foreground text-xs">{toDashboardSymbol(effectiveSymbol)} 的 RSI、MACD 与成交量动量</p></div>
-              <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:pb-0">
-                {["BTC-USDT", ...marketSymbols.filter((symbol) => symbol !== "BTC-USDT")].slice(0, 12).map((symbol) => <button className={cn("shrink-0 rounded-md border px-2.5 py-1 font-medium text-xs transition-colors", effectiveSymbol === symbol ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300" : "border-border text-muted-foreground hover:bg-muted")} key={symbol} onClick={() => setSelectedSymbol(symbol)} type="button">{toDashboardSymbol(symbol)}</button>)}
+            <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div><h2 className="font-semibold">所选币种技术指标</h2><p className="mt-0.5 text-muted-foreground text-xs">{toDashboardSymbol(effectiveSymbol)} 的 RSI、布林带与 MACD</p></div>
+                <div className="flex max-w-full gap-1 overflow-x-auto pb-1 sm:pb-0">
+                  {["BTC-USDT", ...marketSymbols.filter((symbol) => symbol !== "BTC-USDT")].slice(0, 12).map((symbol) => <button className={cn("shrink-0 rounded-md border px-2.5 py-1 font-medium text-xs transition-colors", effectiveSymbol === symbol ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300" : "border-border text-muted-foreground hover:bg-muted")} key={symbol} onClick={() => setSelectedSymbol(symbol)} type="button">{toDashboardSymbol(symbol)}</button>)}
+                </div>
+              </div>
+              <div aria-label="RSI 与布林带显示方式" className="flex w-fit rounded-md border border-cyan-500/25 bg-cyan-500/5 p-0.5" role="group">
+                <button aria-pressed={rsiMode === "rsi"} className={cn("rounded px-2.5 py-1 font-medium text-xs transition-colors", rsiMode === "rsi" ? "bg-violet-500/20 text-violet-700 dark:text-violet-200" : "text-muted-foreground hover:text-foreground")} onClick={() => setRsiMode("rsi")} type="button">RSI</button>
+                <button aria-pressed={rsiMode === "bollinger"} className={cn("rounded px-2.5 py-1 font-medium text-xs transition-colors", rsiMode === "bollinger" ? "bg-cyan-500/20 text-cyan-700 dark:text-cyan-200" : "text-muted-foreground hover:text-foreground")} onClick={() => setRsiMode("bollinger")} type="button">布林带</button>
+                <button aria-pressed={rsiMode === "both"} className={cn("rounded px-2.5 py-1 font-medium text-xs transition-colors", rsiMode === "both" ? "bg-sky-500/20 text-sky-700 dark:text-sky-200" : "text-muted-foreground hover:text-foreground")} onClick={() => setRsiMode("both")} type="button">同时显示</button>
               </div>
             </div>
             <CardContent className="grid gap-px overflow-hidden bg-border/60 p-px md:grid-cols-2">
-              <div className="bg-card p-2"><MarketIndicatorPanelChart data={market?.indicators ?? []} panel="rsi" height={190} theme={isDark ? "dark" : "light"} /></div>
-              <div className="bg-card p-2"><MarketIndicatorPanelChart data={market?.indicators ?? []} panel="macd" height={190} theme={isDark ? "dark" : "light"} /></div>
+              <div className="flex flex-col gap-2 bg-card p-2">
+                {rsiMode !== "bollinger" ? <MarketIndicatorPanelChart data={market?.indicators ?? []} panel="rsi" height={rsiMode === "both" ? 160 : 190} theme={isDark ? "dark" : "light"} /> : null}
+                {rsiMode !== "rsi" ? <MarketIndicatorPanelChart candles={market?.candles ?? []} data={market?.indicators ?? []} panel="bollinger" height={rsiMode === "both" ? 180 : 190} theme={isDark ? "dark" : "light"} /> : null}
+              </div>
+              <div className="bg-card p-2"><MarketIndicatorPanelChart data={market?.indicators ?? []} panel="macd" height={rsiMode === "both" ? 350 : 190} theme={isDark ? "dark" : "light"} /></div>
             </CardContent>
           </Card>
 
@@ -394,6 +445,10 @@ export default function DashboardPage() {
           <div className="flex flex-col gap-2 border-border/70 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-semibold">组合收益与亏损</h2><p className="mt-0.5 text-muted-foreground text-xs">模拟执行产生的已实现与未实现收益汇总</p></div><span className={cn("font-semibold text-sm tabular-nums", pnl >= 0 ? "text-emerald-500" : "text-rose-500")}>{pnl >= 0 ? "+" : ""}{currency.format(pnl)} USDT</span></div>
           <CardContent className="p-2 sm:p-4">{pnlCurve?.length ? <PnlLineChart data={pnlCurve} height={240} theme={isDark ? "dark" : "light"} /> : <div className="grid h-60 place-items-center text-center"><p className="text-muted-foreground text-sm">首个评估周期完成后将显示收益曲线。</p></div>}</CardContent>
         </Card>
+
+        <section aria-label="策略配置" className="scroll-mt-4" id="strategy-configuration">
+          <RuleStrategyConfiguration embedded />
+        </section>
       </div>
     </div>
   );
