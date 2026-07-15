@@ -5,11 +5,13 @@
 !python/
 !python/pyproject.toml
 !python/uv.lock
-!python/valuecell/
 !python/README.md
+!python/valuecell/
 !python/valuecell/**
 !python/configs/
 !python/configs/**
+!python/apscheduler/
+!python/apscheduler/**
 
 # Frontend build inputs.
 !frontend/

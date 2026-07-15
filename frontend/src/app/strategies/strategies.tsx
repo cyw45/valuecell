@@ -62,7 +62,7 @@ const DEFAULT_STRATEGY_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"];
 
 const PAPER_DEMO_ADVANCED_RULES: AdvancedRuleSetConfig = {
   enabled: true,
-  entry_confirmation_mode: "all",
+  entry_confirmation_mode: "any",
   exit_confirmation_mode: "any",
   moving_average: { enabled: false, interval: "1d", period: 20, entry_comparator: "above" },
   macd: { enabled: false, interval: "5m", fast_window: 12, slow_window: 26, signal_window: 9, entry_cross: "golden" },
