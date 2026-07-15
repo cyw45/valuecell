@@ -248,7 +248,7 @@ class Settings:
         if self.MARKET_REFRESH_S < 30:
             raise ValueError("VALUECELL_MARKET_REFRESH_S must be at least 30")
         self.MARKET_DATA_MAX_CONCURRENT_FETCHES = _positive_int_env(
-            "VALUECELL_MARKET_DATA_MAX_CONCURRENT_FETCHES", 1
+            "VALUECELL_MARKET_DATA_MAX_CONCURRENT_FETCHES", 12
         )
         self.MARKET_DATA_PROVIDER_ATTEMPTS = _positive_int_env(
             "VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", 1
