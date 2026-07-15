@@ -357,7 +357,7 @@ export default function DashboardPage() {
             </div>
             <CardContent className="p-0">
               {holdingRows.length === 0 ? <div className="px-4 py-12 text-center"><BarChart3 className="mx-auto size-6 text-muted-foreground/60" /><p className="mt-3 text-muted-foreground text-sm">暂时没有符合条件的持仓</p><p className="mt-1 text-muted-foreground text-xs">策略在入场信号成交后会将币种展示在这里。</p></div> : (
-                <div className="divide-y divide-border/70">
+                <div className="max-h-96 divide-y divide-border/70 overflow-y-auto overscroll-contain">
                   {holdingRows.map(({ symbol, position, value, profit }) => <button className="group flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-sky-500/5" key={symbol} onClick={() => setSelectedSymbol(symbol)} type="button">
                     <span className="min-w-0"><span className="block font-medium group-hover:text-sky-500">{toDashboardSymbol(symbol)}</span><span className="block text-muted-foreground text-xs">{position.quantity.toFixed(6)} 个，入场价 {compactCurrency.format(position.entry_price)}</span></span>
                     <span className="text-right tabular-nums"><span className="block font-medium text-sm">{currency.format(value)}</span><span className={cn("block text-xs", profit >= 0 ? "text-emerald-500" : "text-rose-500")}>{profit >= 0 ? "+" : ""}{currency.format(profit)}</span></span>
