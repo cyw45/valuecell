@@ -68,7 +68,15 @@ export interface MomentumMacdRuleConfig {
   macd_signal_window: number;
 }
 
-export type RuleStrategyCandleInterval = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+export type RuleStrategyCandleInterval =
+  | "1m"
+  | "3m"
+  | "5m"
+  | "15m"
+  | "30m"
+  | "1h"
+  | "4h"
+  | "1d";
 
 export interface AdvancedMovingAverageRuleConfig {
   enabled: boolean;
@@ -123,8 +131,7 @@ export interface AdvancedRuleSetConfig {
 }
 
 export interface RuleStrategyRiskConfig {
-  size_mode: "fixed_quote" | "equity_fraction" | "equal_split";
-  size_value: number;
+  order_quote_amount: number;
   take_profit_pct?: number;
   stop_loss_pct?: number;
   max_positions: number;
@@ -185,7 +192,7 @@ export interface RuleStrategyIndicators {
 }
 
 export interface RuleStrategySizing {
-  mode: "fixed_quote" | "equity_fraction" | "equal_split";
+  mode: "fixed_quote";
   requested_quote: number;
   max_allowed_quote: number;
   affordable_quote: number;
@@ -227,7 +234,8 @@ export interface RuleStrategyTextImportProposal {
   unresolved_items: string[];
 }
 
-export interface RuleStrategyEvaluationHistoryEntry extends RuleStrategyEvaluation {
+export interface RuleStrategyEvaluationHistoryEntry
+  extends RuleStrategyEvaluation {
   symbol?: string;
   evaluated_at: string;
   trades: RuleStrategyTradeLogEntry[];
@@ -290,4 +298,8 @@ export interface EvaluateRuleStrategyRequest {
   market: RuleStrategyMarketSnapshot;
 }
 
-export interface RuleStrategyPnlPoint { ts: string; cumulative_pnl: number; action: string; }
+export interface RuleStrategyPnlPoint {
+  ts: string;
+  cumulative_pnl: number;
+  action: string;
+}

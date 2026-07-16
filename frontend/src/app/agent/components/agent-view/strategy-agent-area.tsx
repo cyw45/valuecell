@@ -15,10 +15,7 @@ import CreateStrategyModal from "@/app/agent/components/strategy-items/modals/cr
 import { Button } from "@/components/ui/button";
 import type { AgentViewProps } from "@/types/agent";
 import type { Strategy } from "@/types/strategy";
-import {
-  StrategyWorkspace,
-  TradeStrategyGroup,
-} from "../strategy-items";
+import { StrategyWorkspace, TradeStrategyGroup } from "../strategy-items";
 
 const EmptyIllustration = () => (
   <svg

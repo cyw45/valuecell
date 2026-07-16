@@ -14,7 +14,13 @@ export interface StrategyConfigOption {
 export interface StrategyConfigField {
   key: string;
   label: string;
-  field_type: "text" | "number" | "boolean" | "select" | "multi_select" | "number_list";
+  field_type:
+    | "text"
+    | "number"
+    | "boolean"
+    | "select"
+    | "multi_select"
+    | "number_list";
   default?: unknown;
   description?: string;
   min?: number;

@@ -22,9 +22,12 @@ export const useSandboxConnections = () =>
   useQuery({
     queryKey: sandboxExchangeKeys.connections,
     queryFn: () =>
-      apiClient.get<ApiResponse<SandboxConnection[]>>(`${basePath}/connections`, {
-        requiresAuth: true,
-      }),
+      apiClient.get<ApiResponse<SandboxConnection[]>>(
+        `${basePath}/connections`,
+        {
+          requiresAuth: true,
+        },
+      ),
     select: (response) => response.data,
   });
 
@@ -38,7 +41,9 @@ export const useCreateSandboxConnection = () => {
         { requiresAuth: true },
       ),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: sandboxExchangeKeys.connections }),
+      queryClient.invalidateQueries({
+        queryKey: sandboxExchangeKeys.connections,
+      }),
   });
 };
 
@@ -61,9 +66,12 @@ export const useSandboxOrders = (connectionId?: string) =>
       const query = connectionId
         ? `?credential_id=${encodeURIComponent(connectionId)}`
         : "";
-      return apiClient.get<ApiResponse<SandboxOrder[]>>(`${basePath}/orders${query}`, {
-        requiresAuth: true,
-      });
+      return apiClient.get<ApiResponse<SandboxOrder[]>>(
+        `${basePath}/orders${query}`,
+        {
+          requiresAuth: true,
+        },
+      );
     },
     select: (response) => response.data,
     enabled: Boolean(connectionId),

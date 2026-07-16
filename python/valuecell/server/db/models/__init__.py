@@ -19,10 +19,17 @@ from .strategy_holding import StrategyHolding
 from .strategy_instruction import StrategyInstruction
 from .strategy_portfolio import StrategyPortfolioView
 from .rule_strategy import RuleStrategy, RuleStrategyEvaluationJournal
-from .tenant import SaaSUser, Tenant, TenantMembership
+from .tenant import SaaSUser, Tenant, TenantMembership, TenantProfile
 from .tenant_credential import TenantCredential
 from .sandbox_exchange_order import SandboxExchangeOrder
 from .live_execution import LiveExecutionOrder, LiveRiskPolicy, LiveStrategyBinding
+from .saas_control import (
+    AuditEvent,
+    EnterpriseAgreement,
+    ProfitSettlement,
+    ServicePlan,
+    TenantSubscription,
+)
 from .user_profile import ProfileCategory, UserProfile
 from .watchlist import Watchlist, WatchlistItem
 
@@ -44,8 +51,18 @@ __all__ = [
     "StrategyInstruction",
     "RuleStrategy",
     "RuleStrategyEvaluationJournal",
+    "SaaSUser",
+    "Tenant",
+    "TenantMembership",
+    "TenantProfile",
+    "TenantCredential",
     "SandboxExchangeOrder",
     "LiveExecutionOrder",
     "LiveRiskPolicy",
     "LiveStrategyBinding",
+    "AuditEvent",
+    "EnterpriseAgreement",
+    "ProfitSettlement",
+    "ServicePlan",
+    "TenantSubscription",
 ]

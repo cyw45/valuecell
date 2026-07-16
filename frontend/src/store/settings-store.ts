@@ -17,11 +17,20 @@ import type { StockChangeType } from "@/types/stock";
 
 export type StockColorMode = "GREEN_UP_RED_DOWN" | "RED_UP_GREEN_DOWN";
 export type LanguageCode = "en" | "zh_CN" | "zh_TW" | "ja";
-export type MarketDataRefreshMode = "manual" | "5s" | "15s" | "30s" | "1m" | "5m";
+export type MarketDataRefreshMode =
+  | "manual"
+  | "5s"
+  | "15s"
+  | "30s"
+  | "1m"
+  | "5m";
 export const DEFAULT_LANGUAGE = "zh_CN";
 export const DEFAULT_MARKET_DATA_REFRESH_MODE: MarketDataRefreshMode = "15s";
 
-export const MARKET_DATA_REFRESH_INTERVAL_MS: Record<MarketDataRefreshMode, false | number> = {
+export const MARKET_DATA_REFRESH_INTERVAL_MS: Record<
+  MarketDataRefreshMode,
+  false | number
+> = {
   manual: false,
   "5s": 5_000,
   "15s": 15_000,

@@ -18,7 +18,9 @@ class SaaSUser(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     email = Column(String(320), nullable=False, unique=True, index=True)
     password_hash = Column(String(512), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class Tenant(Base):
@@ -28,7 +30,9 @@ class Tenant(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(200), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class TenantMembership(Base):
@@ -37,9 +41,49 @@ class TenantMembership(Base):
     __tablename__ = "tenant_memberships"
 
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_id = Column(String(36), ForeignKey("saas_users.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id = Column(
+        String(36),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String(36),
+        ForeignKey("saas_users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     role = Column(String(32), nullable=False, default="owner")
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
-    __table_args__ = (UniqueConstraint("tenant_id", "user_id", name="uq_tenant_membership"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "user_id", name="uq_tenant_membership"),
+    )
+
+
+class TenantProfile(Base):
+    """Commercial tenant classification created during registration."""
+
+    __tablename__ = "tenant_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(
+        String(36),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    tenant_type = Column(String(16), nullable=False, default="personal", index=True)
+    organization_name = Column(String(200), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )

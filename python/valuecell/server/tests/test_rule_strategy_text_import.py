@@ -23,8 +23,7 @@ def test_text_import_json_is_validated_as_a_reviewable_strategy_draft():
           }
         },
         "risk": {
-          "size_mode": "equal_split",
-          "size_value": 1,
+          "order_quote_amount": 100,
           "take_profit_pct": null,
           "stop_loss_pct": null,
           "max_positions": 100,

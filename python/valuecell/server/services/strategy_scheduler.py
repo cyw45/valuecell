@@ -28,6 +28,7 @@ from valuecell.server.services.crypto_market_service import get_crypto_market_se
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyService,
 )
+from valuecell.server.services.saas_access_service import TenantAccessService
 
 _MIN_INTERVAL_S = 60
 _SYNC_JOB_ID = "_scheduler_sync_running"
@@ -108,13 +109,15 @@ class StrategyScheduler:
         that passes a fresh session each time.
         """
         repository = RuleStrategyRepository(db_session=db_session)
-        running_strategies = repository.list_running()
+        running_strategies = [
+            strategy
+            for strategy in repository.list_running()
+            if TenantAccessService.access_for(db_session, strategy.tenant_id).active
+        ]
 
         wanted_ids: set[str] = {s.strategy_id for s in running_strategies}
         existing_job_ids: set[str] = {
-            job.id
-            for job in self._scheduler.get_jobs()
-            if job.id != _SYNC_JOB_ID
+            job.id for job in self._scheduler.get_jobs() if job.id != _SYNC_JOB_ID
         }
 
         # Remove jobs for strategies no longer running
@@ -174,6 +177,16 @@ class StrategyScheduler:
         config_dict: dict[str, Any],
     ) -> None:
         """Fetch OHLCV, evaluate rule engine, journal result — paper only."""
+        session = get_database_manager().get_session()
+        try:
+            if not TenantAccessService.access_for(session, tenant_id).active:
+                logger.info(
+                    "StrategyScheduler skipped inactive tenant strategy_id={}",
+                    strategy_id,
+                )
+                return
+        finally:
+            session.close()
         config = RuleStrategyConfig.model_validate(config_dict)
         symbols = config.symbols
         intervals = sorted(_required_intervals(config))
@@ -236,7 +249,10 @@ class StrategyScheduler:
                     ]
                     if candles:
                         candle_sets[interval] = candles
-                    if interval == config.interval and symbol_result.latest_price is not None:
+                    if (
+                        interval == config.interval
+                        and symbol_result.latest_price is not None
+                    ):
                         latest_price = symbol_result.latest_price
                 primary_candles = candle_sets.get(config.interval)
                 if not primary_candles:
@@ -280,27 +296,72 @@ class StrategyScheduler:
                 result.get("action"),
                 result.get("evaluation_id"),
             )
+            if result.get("action") in {"buy", "sell"}:
+                market = next(
+                    candidate_market
+                    for _, candidate_market in market_inputs
+                    if candidate_market.symbol == result["symbol"]
+                )
+                candle_input = next(
+                    raw_candles
+                    for raw_candles, candidate_market in market_inputs
+                    if candidate_market.symbol == result["symbol"]
+                )
+                candle_sets = (
+                    candle_input
+                    if isinstance(candle_input, dict)
+                    else {config.interval: candle_input}
+                )
+                candles = candle_sets.get(config.interval) or next(
+                    iter(candle_sets.values())
+                )
+                await self._execute_live_signal(
+                    tenant_id,
+                    strategy_id,
+                    result["symbol"],
+                    result["action"],
+                    Decimal(str(result["sizing"]["requested_quote"])),
+                    Decimal(str(market.price)),
+                    candles[-1].timestamp_ms,
+                    result["evaluation_id"],
+                )
 
     @staticmethod
     async def _execute_live_signal(
-        tenant_id: str, strategy_id: str, symbol: str, action: str,
-        quote_amount: Decimal, price: Decimal, candle_timestamp_ms: int,
+        tenant_id: str,
+        strategy_id: str,
+        symbol: str,
+        action: str,
+        quote_amount: Decimal,
+        price: Decimal,
+        candle_timestamp_ms: int,
         evaluation_id: str,
     ) -> dict[str, Any]:
         session = get_database_manager().get_session()
         execution: dict[str, Any]
         try:
             execution = await LiveExecutionService(session).execute_strategy_signal(
-                tenant_id, strategy_id, symbol, action, quote_amount, price,
+                tenant_id,
+                strategy_id,
+                symbol,
+                action,
+                quote_amount,
+                price,
                 candle_timestamp_ms,
             )
         except Exception:
             session.rollback()
             execution = {"execution": "blocked", "reason": "实盘执行服务不可用"}
         try:
-            journal = session.query(RuleStrategyEvaluationJournal).filter_by(
-                evaluation_id=evaluation_id, tenant_id=tenant_id, strategy_id=strategy_id
-            ).first()
+            journal = (
+                session.query(RuleStrategyEvaluationJournal)
+                .filter_by(
+                    evaluation_id=evaluation_id,
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                )
+                .first()
+            )
             if journal is not None:
                 entries = list(journal.trades or [])
                 if entries:

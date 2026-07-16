@@ -9,7 +9,12 @@ const STORAGE_KEY = "valuecell-system-store";
 interface SystemStoreState extends SystemInfo {
   setSystemInfo: (info: Partial<SystemInfo>) => void;
   clearSystemInfo: () => void;
-  setSaaSSession: (session: { access_token: string; user_id: string; tenant_id: string; email: string }) => void;
+  setSaaSSession: (session: {
+    access_token: string;
+    user_id: string;
+    tenant_id: string;
+    email: string;
+  }) => void;
 }
 
 const INITIAL_SYSTEM_INFO: SystemInfo = {

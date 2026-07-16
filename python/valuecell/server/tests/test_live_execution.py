@@ -1,6 +1,7 @@
 import base64
 from collections.abc import Generator
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -14,13 +15,17 @@ import valuecell.server.services.live_execution_service as live_service_module
 import valuecell.server.services.tenant_credential_service as credential_module
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers.live_execution import create_live_execution_router
+from valuecell.server.api.routers.saas_admin import create_saas_admin_router
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.base import Base
-from valuecell.server.services.live_execution_authorization import LiveAuthorizationManager
+from valuecell.server.db.models.saas_control import ServicePlan, TenantSubscription
+from valuecell.server.services.live_execution_authorization import (
+    LiveAuthorizationManager,
+)
 
-TEST_MASTER_KEY = base64.urlsafe_b64encode(
-    b"0123456789abcdef0123456789abcdef"
-).decode("ascii")
+TEST_MASTER_KEY = base64.urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode(
+    "ascii"
+)
 TEST_API_KEY = "live-test-api-key"
 TEST_API_SECRET = "live-test-api-secret"
 
@@ -45,10 +50,10 @@ def fake_exchange_class():
             self.calls.append("fetch_balance")
             return {"free": {"USDT": 1_000}}
 
-
         async def fetch_positions(self, symbols: list[str] | None = None) -> list[dict]:
             self.calls.append("fetch_positions")
             return []
+
         async def fetch_ticker(self, symbol: str) -> dict:
             assert symbol == "BTC/USDT"
             self.calls.append("fetch_ticker")
@@ -97,6 +102,29 @@ def live_client(
     )
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine)
+    setup_session = sessionmaker(bind=engine)()
+    try:
+        plan = ServicePlan(
+            code="live-test",
+            name="Live test",
+            commercial_model="subscription",
+            duration_days=30,
+            price_cents=0,
+        )
+        setup_session.add(plan)
+        setup_session.flush()
+        setup_session.add(
+            TenantSubscription(
+                tenant_id="tenant-a",
+                plan_id=plan.id,
+                starts_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                ends_at=datetime.now(timezone.utc) + timedelta(days=1),
+                granted_by_user_id="user-a",
+            )
+        )
+        setup_session.commit()
+    finally:
+        setup_session.close()
     principal = [CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")]
     live_enabled = [False]
     fake_exchange = fake_exchange_class()
@@ -108,8 +136,12 @@ def live_client(
     monkeypatch.setattr(credential_module, "get_settings", settings)
     monkeypatch.setattr(live_service_module, "get_settings", settings)
     monkeypatch.setattr(live_router_module, "get_settings", settings)
-    monkeypatch.setattr(live_service_module, "live_authorization_manager", authorization_manager)
-    monkeypatch.setattr(live_router_module, "live_authorization_manager", authorization_manager)
+    monkeypatch.setattr(
+        live_service_module, "live_authorization_manager", authorization_manager
+    )
+    monkeypatch.setattr(
+        live_router_module, "live_authorization_manager", authorization_manager
+    )
     monkeypatch.setattr(live_service_module.ccxtpro, "binance", fake_exchange)
     monkeypatch.setattr(live_service_module.ccxtpro, "okx", fake_exchange)
 
@@ -122,6 +154,7 @@ def live_client(
 
     app = FastAPI()
     app.include_router(create_live_execution_router(), prefix="/api/v1")
+    app.include_router(create_saas_admin_router(), prefix="/api/v1")
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_principal] = lambda: principal[0]
     try:
@@ -144,9 +177,10 @@ def connection_request() -> dict:
     }
 
 
-def create_connection(client: TestClient) -> str:
+def create_connection(client: TestClient, label: str = "primary-live-desk") -> str:
     response = client.post(
-        "/api/v1/saas/live-execution/connections", json=connection_request()
+        "/api/v1/saas/live-execution/connections",
+        json={**connection_request(), "label": label},
     )
     assert response.status_code == 201, response.text
     body = response.json()
@@ -178,7 +212,9 @@ def create_binding(client: TestClient, connection_id: str) -> str:
 
 
 def authorize(client: TestClient) -> None:
-    challenge = client.post("/api/v1/saas/live-execution/startup-authorization/challenge")
+    challenge = client.post(
+        "/api/v1/saas/live-execution/startup-authorization/challenge"
+    )
     assert challenge.status_code == 200, challenge.text
     confirmed = client.post(
         "/api/v1/saas/live-execution/startup-authorization/confirm",
@@ -187,7 +223,9 @@ def authorize(client: TestClient) -> None:
     assert confirmed.status_code == 200, confirmed.text
 
 
-def order_request(connection_id: str, idempotency_key: str = "live-order-key-0001") -> dict:
+def order_request(
+    connection_id: str, idempotency_key: str = "live-order-key-0001"
+) -> dict:
     return {
         "connection_id": connection_id,
         "symbol": "BTC/USDT",
@@ -217,7 +255,9 @@ def test_global_live_disable_rejects_before_any_order_exchange_call(live_client)
 
 def test_authorization_challenge_is_tenant_bound_and_revoke_disables_it(live_client):
     client, principal, _, _ = live_client
-    challenge = client.post("/api/v1/saas/live-execution/startup-authorization/challenge")
+    challenge = client.post(
+        "/api/v1/saas/live-execution/startup-authorization/challenge"
+    )
     assert challenge.status_code == 200
     challenge_code = challenge.json()["data"]["challenge_code"]
 
@@ -227,9 +267,12 @@ def test_authorization_challenge_is_tenant_bound_and_revoke_disables_it(live_cli
         json={"challenge_code": challenge_code},
     )
     assert wrong_tenant_confirmation.status_code == 422
-    assert client.get("/api/v1/saas/live-execution/status").json()["data"][
-        "authorization_active"
-    ] is False
+    assert (
+        client.get("/api/v1/saas/live-execution/status").json()["data"][
+            "authorization_active"
+        ]
+        is False
+    )
 
     principal[0] = CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")
     confirmed = client.post(
@@ -237,19 +280,27 @@ def test_authorization_challenge_is_tenant_bound_and_revoke_disables_it(live_cli
         json={"challenge_code": challenge_code},
     )
     assert confirmed.status_code == 200
-    assert client.get("/api/v1/saas/live-execution/status").json()["data"][
-        "authorization_active"
-    ] is True
+    assert (
+        client.get("/api/v1/saas/live-execution/status").json()["data"][
+            "authorization_active"
+        ]
+        is True
+    )
 
     revoked = client.post("/api/v1/saas/live-execution/startup-authorization/revoke")
     assert revoked.status_code == 200
     assert revoked.json()["data"] == {"authorization_active": False}
-    assert client.get("/api/v1/saas/live-execution/status").json()["data"][
-        "authorization_active"
-    ] is False
+    assert (
+        client.get("/api/v1/saas/live-execution/status").json()["data"][
+            "authorization_active"
+        ]
+        is False
+    )
 
 
-def test_binding_requires_tenant_policy_and_cross_tenant_connection_is_hidden(live_client):
+def test_binding_requires_tenant_policy_and_cross_tenant_connection_is_hidden(
+    live_client,
+):
     client, principal, _, _ = live_client
     connection_id = create_connection(client)
 
@@ -264,15 +315,20 @@ def test_binding_requires_tenant_policy_and_cross_tenant_connection_is_hidden(li
 
     principal[0] = CurrentPrincipal(user_id="user-b", tenant_id="tenant-b")
     assert client.get("/api/v1/saas/live-execution/connections").json()["data"] == []
-    assert client.get("/api/v1/saas/live-execution/risk-policies").json()["data"] is None
+    assert (
+        client.get("/api/v1/saas/live-execution/risk-policies").json()["data"] is None
+    )
     cross_tenant_binding = client.post(
         "/api/v1/saas/live-execution/bindings",
         json={"strategy_id": "strategy-b", "connection_id": connection_id},
     )
     assert cross_tenant_binding.status_code == 422
-    assert client.post(
-        f"/api/v1/saas/live-execution/bindings/{binding_id}/revoke"
-    ).status_code == 404
+    assert (
+        client.post(
+            f"/api/v1/saas/live-execution/bindings/{binding_id}/revoke"
+        ).status_code
+        == 404
+    )
 
 
 def test_idempotent_order_returns_original_audit_record_without_second_submission(
@@ -292,10 +348,22 @@ def test_idempotent_order_returns_original_audit_record_without_second_submissio
     assert first.status_code == second.status_code == 201
     assert first.json()["data"] == second.json()["data"]
     assert first.json()["data"]["exchange_order_id"] == "exchange-order-1"
-    assert sum(instance.calls.count("create_order") for instance in fake_exchange.instances) == 1
+    assert (
+        sum(
+            instance.calls.count("create_order") for instance in fake_exchange.instances
+        )
+        == 1
+    )
     serialized_responses = str((first.json(), second.json()))
     assert TEST_API_KEY not in serialized_responses
     assert TEST_API_SECRET not in serialized_responses
+    audit = client.get("/api/v1/saas/audit")
+    assert audit.status_code == 200
+    assert [event["action"] for event in audit.json()["data"]] == [
+        "live.order.submitted",
+        "live.binding.created",
+        "live.connection.created",
+    ]
 
 
 def test_revoked_binding_blocks_execution_before_order_submission(live_client):
@@ -305,9 +373,7 @@ def test_revoked_binding_blocks_execution_before_order_submission(live_client):
     binding_id = create_binding(client, connection_id)
     live_enabled[0] = True
     authorize(client)
-    revoked = client.post(
-        f"/api/v1/saas/live-execution/bindings/{binding_id}/revoke"
-    )
+    revoked = client.post(f"/api/v1/saas/live-execution/bindings/{binding_id}/revoke")
     assert revoked.status_code == 200
 
     rejected = client.post(
@@ -315,10 +381,18 @@ def test_revoked_binding_blocks_execution_before_order_submission(live_client):
     )
 
     assert rejected.status_code == 422
-    assert sum(instance.calls.count("create_order") for instance in fake_exchange.instances) == 0
+    assert (
+        sum(
+            instance.calls.count("create_order") for instance in fake_exchange.instances
+        )
+        == 0
+    )
+
 
 @pytest.mark.asyncio
-async def test_strategy_signal_without_binding_blocks_without_creating_order(live_client):
+async def test_strategy_signal_without_binding_blocks_without_creating_order(
+    live_client,
+):
     client, _, live_enabled, fake_exchange = live_client
     connection_id = create_connection(client)
     create_policy(client)
@@ -330,12 +404,23 @@ async def test_strategy_signal_without_binding_blocks_without_creating_order(liv
     db = client.app.dependency_overrides[get_db]().__next__()
     try:
         result = await LiveExecutionService(db).execute_strategy_signal(
-            "tenant-a", "strategy-a", "BTC/USDT", "buy", Decimal("100"), Decimal("50000"), 1234
+            "tenant-a",
+            "strategy-a",
+            "BTC/USDT",
+            "buy",
+            Decimal("100"),
+            Decimal("50000"),
+            1234,
         )
     finally:
         db.close()
     assert result["execution"] == "blocked"
-    assert sum(instance.calls.count("create_order") for instance in fake_exchange.instances) == 0
+    assert (
+        sum(
+            instance.calls.count("create_order") for instance in fake_exchange.instances
+        )
+        == 0
+    )
     assert connection_id
 
 
@@ -353,10 +438,72 @@ async def test_strategy_signal_is_idempotent_after_all_live_gates(live_client):
     db = client.app.dependency_overrides[get_db]().__next__()
     try:
         service = LiveExecutionService(db)
-        first = await service.execute_strategy_signal("tenant-a", "strategy-a", "BTC/USDT", "buy", Decimal("100"), Decimal("50000"), 1234)
-        second = await service.execute_strategy_signal("tenant-a", "strategy-a", "BTC/USDT", "buy", Decimal("100"), Decimal("50000"), 1234)
+        first = await service.execute_strategy_signal(
+            "tenant-a",
+            "strategy-a",
+            "BTC/USDT",
+            "buy",
+            Decimal("100"),
+            Decimal("50000"),
+            1234,
+        )
+        second = await service.execute_strategy_signal(
+            "tenant-a",
+            "strategy-a",
+            "BTC/USDT",
+            "buy",
+            Decimal("100"),
+            Decimal("50000"),
+            1234,
+        )
     finally:
         db.close()
-    assert first["execution"] == second["execution"] == "live_submitted", (first, second, [item.calls for item in fake_exchange.instances])
+    assert first["execution"] == second["execution"] == "live_submitted", (
+        first,
+        second,
+        [item.calls for item in fake_exchange.instances],
+    )
     assert first["order_id"] == second["order_id"]
-    assert sum(instance.calls.count("create_order") for instance in fake_exchange.instances) == 1
+    assert (
+        sum(
+            instance.calls.count("create_order") for instance in fake_exchange.instances
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_strategy_signal_dispatches_to_each_bound_funding_account(live_client):
+    client, _, live_enabled, fake_exchange = live_client
+    first_connection = create_connection(client, "primary-live-desk")
+    second_connection = create_connection(client, "secondary-live-desk")
+    create_policy(client)
+    create_binding(client, first_connection)
+    create_binding(client, second_connection)
+    live_enabled[0] = True
+    authorize(client)
+    from decimal import Decimal
+    from valuecell.server.services.live_execution_service import LiveExecutionService
+
+    db = client.app.dependency_overrides[get_db]().__next__()
+    try:
+        result = await LiveExecutionService(db).execute_strategy_signal(
+            "tenant-a",
+            "strategy-a",
+            "BTC/USDT",
+            "buy",
+            Decimal("100"),
+            Decimal("50000"),
+            5678,
+        )
+    finally:
+        db.close()
+
+    assert result["execution"] == "live_submitted"
+    assert {item["connection_id"] for item in result["orders"]} == {
+        first_connection,
+        second_connection,
+    }
+    assert (
+        sum(item.calls.count("create_order") for item in fake_exchange.instances) == 2
+    )

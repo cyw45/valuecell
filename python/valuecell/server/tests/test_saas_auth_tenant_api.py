@@ -18,12 +18,13 @@ from valuecell.server.db.models.base import Base
 
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
+
 @dataclass(frozen=True)
 class AuthSettingsFixture:
     JWT_SECRET: str = "test-jwt-signing-secret"
     JWT_ISSUER: str = "valuecell-saas-test"
     JWT_ACCESS_TOKEN_TTL_S: int = 3_600
-
+    PLATFORM_ADMIN_EMAILS: tuple[str, ...] = ("platform@example.test",)
 
 
 class InMemoryTenantStrategyRepository:
@@ -49,6 +50,9 @@ class InMemoryTenantStrategyRepository:
     def get(self, strategy_id: str, tenant_id: str):
         return self.strategies.get((tenant_id, strategy_id))
 
+    def get_evaluations(self, strategy_id: str, tenant_id: str, limit: int = 100):
+        return []
+
 
 def _rule_config() -> dict:
     return {
@@ -56,12 +60,12 @@ def _rule_config() -> dict:
         "confirmation_mode": "all",
         "rsi": {"enabled": True, "period": 2, "oversold": 30, "overbought": 70},
         "risk": {
-            "size_mode": "fixed_quote",
-            "size_value": 100,
+            "order_quote_amount": 100,
             "max_positions": 1,
             "leverage": 1,
         },
     }
+
 
 @pytest.fixture
 def auth_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
@@ -121,10 +125,15 @@ def test_register_and_login_issue_signed_tokens_for_the_registered_tenant(
         "/saas/auth/me", headers=_authorization(registration["access_token"])
     )
     assert registered_principal.status_code == 200
-    assert registered_principal.json()["data"] == {
-        "user_id": registration["user_id"],
-        "tenant_id": registration["tenant_id"],
-    }
+    assert (
+        registered_principal.json()["data"].items()
+        >= {
+            "user_id": registration["user_id"],
+            "tenant_id": registration["tenant_id"],
+            "role": "owner",
+            "access_status": "pending_activation",
+        }.items()
+    )
 
     logged_in = auth_client.post(
         "/saas/auth/login",
@@ -141,10 +150,15 @@ def test_register_and_login_issue_signed_tokens_for_the_registered_tenant(
         "/saas/auth/me", headers=_authorization(login["access_token"])
     )
     assert logged_in_principal.status_code == 200
-    assert logged_in_principal.json()["data"] == {
-        "user_id": registration["user_id"],
-        "tenant_id": registration["tenant_id"],
-    }
+    assert (
+        logged_in_principal.json()["data"].items()
+        >= {
+            "user_id": registration["user_id"],
+            "tenant_id": registration["tenant_id"],
+            "role": "owner",
+            "access_status": "pending_activation",
+        }.items()
+    )
 
     token_parts = registration["access_token"].split(".")
     token_parts[2] = "A" + token_parts[2][1:]
@@ -178,43 +192,80 @@ def test_auth_rejects_duplicate_canonical_email_and_wrong_password(
     assert rejected_login.status_code == 401
 
 
-def test_rule_strategies_require_a_registered_token_and_derive_tenant_scope(
+def test_registration_distinguishes_personal_and_enterprise_tenants(
     auth_client: TestClient,
 ):
-    unauthenticated = auth_client.get("/rule-strategies")
-    assert unauthenticated.status_code == 401
-
-    tenant_a = auth_client.post(
+    rejected = auth_client.post(
         "/saas/auth/register",
         json={
-            "email": "owner-a@example.test",
+            "email": "missing-org@example.test",
             "password": "correct-horse-battery-staple",
-            "workspace_name": "Tenant A",
+            "tenant_type": "enterprise",
+            "workspace_name": "Missing organization",
         },
-    ).json()["data"]
-    created = auth_client.post(
-        "/rule-strategies",
-        headers=_authorization(tenant_a["access_token"]),
-        json={"name": "Tenant A strategy", "config": _rule_config()},
     )
-    assert created.status_code == 201
-    strategy_id = created.json()["data"]["strategy_id"]
+    assert rejected.status_code == 422
 
-    tenant_b = auth_client.post(
+    enterprise = auth_client.post(
         "/saas/auth/register",
         json={
-            "email": "owner-b@example.test",
+            "email": "enterprise-owner@example.test",
             "password": "correct-horse-battery-staple",
-            "workspace_name": "Tenant B",
+            "tenant_type": "enterprise",
+            "workspace_name": "Quant Operations",
+            "organization_name": "ValueCell Enterprise Test",
+        },
+    )
+    assert enterprise.status_code == 201
+    registration = enterprise.json()["data"]
+    assert registration["tenant_type"] == "enterprise"
+    assert registration["organization_name"] == "ValueCell Enterprise Test"
+
+    workspaces = auth_client.get(
+        "/saas/auth/workspaces",
+        headers=_authorization(registration["access_token"]),
+    )
+    assert workspaces.status_code == 200
+    assert workspaces.json()["data"] == [
+        {
+            "tenant_id": registration["tenant_id"],
+            "name": "Quant Operations",
+            "tenant_type": "enterprise",
+            "organization_name": "ValueCell Enterprise Test",
+            "role": "owner",
+            "selected": True,
+        }
+    ]
+
+
+def test_platform_administrator_is_distinct_from_tenant_owner(
+    auth_client: TestClient,
+):
+    platform = auth_client.post(
+        "/saas/auth/register",
+        json={
+            "email": "platform@example.test",
+            "password": "correct-horse-battery-staple",
+            "workspace_name": "Platform workspace",
         },
     ).json()["data"]
-    tenant_b_list = auth_client.get(
-        "/rule-strategies", headers=_authorization(tenant_b["access_token"])
-    )
-    denied_lookup = auth_client.get(
-        f"/rule-strategies/{strategy_id}", headers=_authorization(tenant_b["access_token"])
-    )
+    tenant_owner = auth_client.post(
+        "/saas/auth/register",
+        json={
+            "email": "cyw@example.test",
+            "password": "correct-horse-battery-staple",
+            "workspace_name": "CYW workspace",
+        },
+    ).json()["data"]
 
-    assert tenant_b_list.status_code == 200
-    assert tenant_b_list.json()["data"] == []
-    assert denied_lookup.status_code == 404
+    platform_me = auth_client.get(
+        "/saas/auth/me", headers=_authorization(platform["access_token"])
+    ).json()["data"]
+    tenant_owner_me = auth_client.get(
+        "/saas/auth/me", headers=_authorization(tenant_owner["access_token"])
+    ).json()["data"]
+
+    assert platform_me["role"] == "owner"
+    assert platform_me["is_platform_admin"] is True
+    assert tenant_owner_me["role"] == "owner"
+    assert tenant_owner_me["is_platform_admin"] is False

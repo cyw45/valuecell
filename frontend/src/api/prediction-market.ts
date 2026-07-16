@@ -8,7 +8,6 @@ import type {
   PredictionReplayResult,
 } from "@/types/prediction-market";
 
-
 export const usePredictionMarketCatalog = (limit = 50) =>
   useQuery({
     queryKey: API_QUERY_KEYS.PREDICTION_MARKET.catalog([limit]),
@@ -26,7 +25,10 @@ export const usePredictionMarketSnapshot = (
   outcome?: string,
 ) =>
   useQuery({
-    queryKey: API_QUERY_KEYS.PREDICTION_MARKET.snapshot([marketId ?? "", outcome ?? ""]),
+    queryKey: API_QUERY_KEYS.PREDICTION_MARKET.snapshot([
+      marketId ?? "",
+      outcome ?? "",
+    ]),
     queryFn: () => {
       const params = new URLSearchParams({ outcome: outcome ?? "" });
       return apiClient.get<ApiResponse<PredictionMarketSnapshot>>(
@@ -68,10 +70,9 @@ export const usePredictionMarketSignal = (
 export const usePredictionReplayPreview = () =>
   useMutation({
     mutationFn: async (request: PredictionReplayRequest) => {
-      const response = await apiClient.post<ApiResponse<PredictionReplayResult>>(
-        "prediction-markets/replay/preview",
-        request,
-      );
+      const response = await apiClient.post<
+        ApiResponse<PredictionReplayResult>
+      >("prediction-markets/replay/preview", request);
       return response.data;
     },
   });

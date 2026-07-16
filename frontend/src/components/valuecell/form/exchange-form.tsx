@@ -164,7 +164,8 @@ export const ExchangeForm = withForm({
               Paper trading only
             </div>
             <p className="mt-1 text-muted-foreground text-sm">
-              New strategies run with simulated funds. Exchange credentials are not collected and real-money execution is unavailable.
+              New strategies run with simulated funds. Exchange credentials are
+              not collected and real-money execution is unavailable.
             </p>
           </div>
         ) : (
@@ -257,7 +258,9 @@ export const ExchangeForm = withForm({
                             <form.AppField name="private_key">
                               {(field) => (
                                 <field.PasswordField
-                                  label={t("strategy.form.exchanges.privateKey")}
+                                  label={t(
+                                    "strategy.form.exchanges.privateKey",
+                                  )}
                                   placeholder={getPlaceholder(
                                     exchangeId || "",
                                     "private_key",
@@ -320,7 +323,9 @@ export const ExchangeForm = withForm({
                       {testStatus && (
                         <p
                           className={`font-medium text-sm ${
-                            testStatus.success ? "text-green-600" : "text-red-600"
+                            testStatus.success
+                              ? "text-green-600"
+                              : "text-red-600"
                           }`}
                         >
                           {testStatus.message}

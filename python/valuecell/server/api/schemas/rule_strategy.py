@@ -143,19 +143,15 @@ class MomentumMacdRuleConfig(RuleStrategyModel):
 
 
 class RuleStrategyRiskConfig(RuleStrategyModel):
+    """Risk limits and one fixed quote amount for each new position."""
+
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
-    size_mode: Literal["fixed_quote", "equity_fraction", "equal_split"] = "fixed_quote"
-    size_value: float = Field(default=100.0, gt=0)
+    order_quote_amount: float = Field(default=100.0, gt=0, le=100_000_000)
     take_profit_pct: float | None = Field(default=None, gt=0, le=1)
     stop_loss_pct: float | None = Field(default=None, gt=0, le=1)
     max_positions: int = Field(default=1, ge=1, le=1_000)
     leverage: float = Field(default=1.0, ge=1, le=100)
-    @model_validator(mode="after")
-    def validate_size_value(self) -> RuleStrategyRiskConfig:
-        if self.size_mode == "equity_fraction" and self.size_value > 1:
-            raise ValueError("equity_fraction size_value must be at most 1")
-        return self
 
 
 class AdvancedMovingAverageRuleConfig(RuleStrategyModel):
@@ -336,7 +332,7 @@ class RuleStrategyIndicatorValues(BaseModel):
 class RuleStrategySizing(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["fixed_quote", "equity_fraction", "equal_split"]
+    mode: Literal["fixed_quote"] = "fixed_quote"
     requested_quote: float
     max_allowed_quote: float
     affordable_quote: float

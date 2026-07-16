@@ -1,6 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLocation, useNavigate } from "react-router";
+import {
+  Links,
+  Meta,
+  Outlet,
+  Scripts,
+  ScrollRestoration,
+  useLocation,
+  useNavigate,
+} from "react-router";
 import { useEffect, useState } from "react";
 import "@/i18n";
 import AppSidebar from "@/components/valuecell/app/app-sidebar";
@@ -59,7 +67,14 @@ import { TrackerProvider } from "./provider/tracker-provider";
 // Routes that are accessible without a SaaS session.
 const PUBLIC_PATHS: readonly string[] = ["/login"];
 // Legacy route prefixes that bypass the SaaS auth guard entirely.
-const LEGACY_PREFIXES: readonly string[] = ["/home", "/market", "/agent", "/setting", "/research", "/test"];
+const LEGACY_PREFIXES: readonly string[] = [
+  "/home",
+  "/market",
+  "/agent",
+  "/setting",
+  "/research",
+  "/test",
+];
 
 function SaaSGuard({ children }: { children: React.ReactNode }) {
   const { isLoggedIn } = useSaaSSession();
@@ -89,6 +104,25 @@ function SaaSGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+function ApplicationShell() {
+  const location = useLocation();
+  const isPublicRoute = PUBLIC_PATHS.includes(location.pathname);
+  return (
+    <SidebarProvider>
+      <div className="fixed flex size-full overflow-hidden">
+        {!isPublicRoute ? <AppSidebar /> : null}
+        <main
+          className="relative flex flex-1 overflow-hidden"
+          id="main-content"
+        >
+          <Outlet />
+        </main>
+        <Toaster />
+      </div>
+    </SidebarProvider>
+  );
+}
+
 export default function Root() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -102,18 +136,7 @@ export default function Root() {
         <BackendHealthCheck>
           <TrackerProvider>
             <SaaSGuard>
-              <SidebarProvider>
-                <div className="fixed flex size-full overflow-hidden">
-                  <AppSidebar />
-                  <main
-                    className="relative flex flex-1 overflow-hidden"
-                    id="main-content"
-                  >
-                    <Outlet />
-                  </main>
-                  <Toaster />
-                </div>
-              </SidebarProvider>
+              <ApplicationShell />
             </SaaSGuard>
           </TrackerProvider>
           <AutoUpdateCheck />

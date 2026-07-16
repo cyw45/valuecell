@@ -29,7 +29,11 @@ class RuleStrategyTextImportService:
             raise RuleStrategyTextImportUnavailableError(
                 "策略文本导入需要配置 HiCode OpenAI-compatible 模型"
             )
-        if provider_config is None or not provider_config.api_key or not provider_config.base_url:
+        if (
+            provider_config is None
+            or not provider_config.api_key
+            or not provider_config.base_url
+        ):
             raise RuleStrategyTextImportUnavailableError(
                 "策略文本导入不可用：HiCode 代理尚未配置"
             )
@@ -100,7 +104,7 @@ class RuleStrategyTextImportService:
       "momentum": {"enabled": true, "interval": "15m", "period": 14, "entry_comparator": "below", "entry_threshold": 20, "exit_enabled": true, "exit_comparator": "above", "exit_threshold": 85},
       "brar": {"enabled": true, "interval": "15m", "period": 26, "component": "br", "entry_comparator": "below", "entry_threshold": 30, "exit_enabled": false, "exit_comparator": "above", "exit_threshold": 85}
     },
-    "risk": {"size_mode": "equal_split", "size_value": 1, "take_profit_pct": null, "stop_loss_pct": null, "max_positions": 100, "leverage": 1}
+    "risk": {"order_quote_amount": 100, "take_profit_pct": null, "stop_loss_pct": null, "max_positions": 100, "leverage": 1}
   },
   "summary": "简体中文策略摘要",
   "unresolved_items": ["无法明确判断的规则"]

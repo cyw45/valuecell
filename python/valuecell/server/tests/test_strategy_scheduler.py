@@ -22,6 +22,11 @@ async def test_sync_does_not_postpone_unchanged_running_strategy(monkeypatch):
         "RuleStrategyRepository",
         lambda db_session: repository,
     )
+    monkeypatch.setattr(
+        strategy_scheduler.TenantAccessService,
+        "access_for",
+        lambda _db, _tenant_id: SimpleNamespace(active=True),
+    )
     scheduler = strategy_scheduler.StrategyScheduler()
     await scheduler.start()
     scheduler._scheduler.pause()

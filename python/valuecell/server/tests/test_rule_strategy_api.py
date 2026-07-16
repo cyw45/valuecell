@@ -11,7 +11,9 @@ from valuecell.server.services.rule_strategy_service import RuleStrategyService
 STRATEGY_ID = "rule_deterministic"
 EVALUATION_ID = "evaluation_deterministic"
 CREATED_AT = datetime(2026, 7, 10, tzinfo=timezone.utc)
-FIXED_PRINCIPAL = CurrentPrincipal(user_id="rule-test-user", tenant_id="rule-test-tenant")
+FIXED_PRINCIPAL = CurrentPrincipal(
+    user_id="rule-test-user", tenant_id="rule-test-tenant"
+)
 
 
 class InMemoryRuleStrategyRepository:
@@ -57,8 +59,7 @@ def _config() -> dict:
         "confirmation_mode": "all",
         "rsi": {"enabled": True, "period": 2, "oversold": 30, "overbought": 70},
         "risk": {
-            "size_mode": "fixed_quote",
-            "size_value": 100,
+            "order_quote_amount": 100,
             "max_positions": 1,
             "leverage": 1,
         },
@@ -141,8 +142,7 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
         "overbought": 70.0,
     }
     assert data["config"]["risk"] == {
-        "size_mode": "fixed_quote",
-        "size_value": 100.0,
+        "order_quote_amount": 100.0,
         "take_profit_pct": None,
         "stop_loss_pct": None,
         "max_positions": 1,
@@ -154,8 +154,7 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
         **_config(),
         "rsi": {"enabled": True, "period": 2, "oversold": 25, "overbought": 75},
         "risk": {
-            "size_mode": "fixed_quote",
-            "size_value": 250,
+            "order_quote_amount": 250,
             "max_positions": 1,
             "leverage": 1,
         },
@@ -169,7 +168,7 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
     assert updated.json()["data"]["name"] == "Deeper oversold recovery"
     assert updated.json()["data"]["mode"] == "paper"
     assert updated.json()["data"]["config"]["rsi"]["oversold"] == 25.0
-    assert updated.json()["data"]["config"]["risk"]["size_value"] == 250.0
+    assert updated.json()["data"]["config"]["risk"]["order_quote_amount"] == 250.0
 
     detail = client.get(f"/rule-strategies/{STRATEGY_ID}")
     assert detail.status_code == 200
@@ -307,7 +306,9 @@ def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None
     assert evaluated.status_code == 200
     result = evaluated.json()["data"]
 
-    history = client.get(f"/rule-strategies/{STRATEGY_ID}/evaluations", params={"limit": 1})
+    history = client.get(
+        f"/rule-strategies/{STRATEGY_ID}/evaluations", params={"limit": 1}
+    )
 
     assert history.status_code == 200
     body = history.json()

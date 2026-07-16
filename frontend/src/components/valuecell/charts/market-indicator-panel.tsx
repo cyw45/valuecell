@@ -62,24 +62,36 @@ export function MarketIndicatorPanelChart({
 
   const option: EChartsOption = useMemo(() => {
     const dates = data.map((point) =>
-      TimeUtils.formatUTC(new Date(point.ts).toISOString(), TIME_FORMATS.DATETIME_SHORT),
+      TimeUtils.formatUTC(
+        new Date(point.ts).toISOString(),
+        TIME_FORMATS.DATETIME_SHORT,
+      ),
     );
     const textColor = theme === "dark" ? "#a8b3cf" : "#64748b";
-    const gridColor = theme === "dark" ? "rgba(137, 160, 205, 0.16)" : "#e2e8f0";
-    const closeByTimestamp = new Map(candles.map((candle) => [candle.ts, candle.close]));
-    const bollingerValues = panel === "bollinger"
-      ? data.flatMap((point) => [
-          finiteValue(point.bollinger.upper),
-          finiteValue(point.bollinger.middle),
-          finiteValue(point.bollinger.lower),
-          finiteValue(closeByTimestamp.get(point.ts)),
-        ]).filter((value): value is number => value !== null)
-      : [];
-    const bollingerMin = bollingerValues.length > 0 ? Math.min(...bollingerValues) : undefined;
-    const bollingerMax = bollingerValues.length > 0 ? Math.max(...bollingerValues) : undefined;
-    const bollingerPadding = bollingerMin === undefined || bollingerMax === undefined
-      ? undefined
-      : Math.max((bollingerMax - bollingerMin) * 0.12, bollingerMax * 0.002);
+    const gridColor =
+      theme === "dark" ? "rgba(137, 160, 205, 0.16)" : "#e2e8f0";
+    const closeByTimestamp = new Map(
+      candles.map((candle) => [candle.ts, candle.close]),
+    );
+    const bollingerValues =
+      panel === "bollinger"
+        ? data
+            .flatMap((point) => [
+              finiteValue(point.bollinger.upper),
+              finiteValue(point.bollinger.middle),
+              finiteValue(point.bollinger.lower),
+              finiteValue(closeByTimestamp.get(point.ts)),
+            ])
+            .filter((value): value is number => value !== null)
+        : [];
+    const bollingerMin =
+      bollingerValues.length > 0 ? Math.min(...bollingerValues) : undefined;
+    const bollingerMax =
+      bollingerValues.length > 0 ? Math.max(...bollingerValues) : undefined;
+    const bollingerPadding =
+      bollingerMin === undefined || bollingerMax === undefined
+        ? undefined
+        : Math.max((bollingerMax - bollingerMin) * 0.12, bollingerMax * 0.002);
     const series: EChartsOption["series"] = [];
 
     if (panel === "rsi") {
@@ -158,7 +170,10 @@ export function MarketIndicatorPanelChart({
           data: data.map((point) => closeByTimestamp.get(point.ts) ?? null),
           showSymbol: false,
           smooth: true,
-          lineStyle: { color: theme === "dark" ? "#e2e8f0" : "#334155", width: 1.2 },
+          lineStyle: {
+            color: theme === "dark" ? "#e2e8f0" : "#334155",
+            width: 1.2,
+          },
         },
       );
     } else {
@@ -173,14 +188,15 @@ export function MarketIndicatorPanelChart({
         showSymbol: false,
         smooth: true,
         lineStyle: { color: "#0ea5e9", width: 1.8 },
-        markLine: panel === "momentum"
-          ? {
-              symbol: "none",
-              label: { show: false },
-              lineStyle: { color: "#a1a1aa", type: "dashed" },
-              data: [{ yAxis: 0 }],
-            }
-          : undefined,
+        markLine:
+          panel === "momentum"
+            ? {
+                symbol: "none",
+                label: { show: false },
+                lineStyle: { color: "#a1a1aa", type: "dashed" },
+                data: [{ yAxis: 0 }],
+              }
+            : undefined,
       });
     }
 
@@ -199,7 +215,8 @@ export function MarketIndicatorPanelChart({
           type: "bar",
           data: data.map((point) => finiteValue(point.macd_histogram)),
           itemStyle: {
-            color: (params) => Number(params.value) >= 0 ? "#26a69a" : "#ef5350",
+            color: (params) =>
+              Number(params.value) >= 0 ? "#26a69a" : "#ef5350",
           },
         },
       );
@@ -208,15 +225,17 @@ export function MarketIndicatorPanelChart({
     return {
       animation: false,
       grid: { top: 28, right: 22, bottom: 42, left: 56 },
-      legend: panel === "rsi" || panel === "bollinger" || panel === "macd"
-        ? {
-            data: panel === "bollinger"
-              ? ["布林上轨", "布林中线", "布林下轨", "收盘价"]
-              : undefined,
-            top: 2,
-            textStyle: { color: textColor, fontSize: 11 },
-          }
-        : undefined,
+      legend:
+        panel === "rsi" || panel === "bollinger" || panel === "macd"
+          ? {
+              data:
+                panel === "bollinger"
+                  ? ["布林上轨", "布林中线", "布林下轨", "收盘价"]
+                  : undefined,
+              top: 2,
+              textStyle: { color: textColor, fontSize: 11 },
+            }
+          : undefined,
       tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
       xAxis: {
         type: "category",
@@ -229,16 +248,18 @@ export function MarketIndicatorPanelChart({
       },
       yAxis: {
         type: "value",
-        min: panel === "rsi"
-          ? -20
-          : bollingerMin === undefined || bollingerPadding === undefined
-            ? undefined
-            : bollingerMin - bollingerPadding,
-        max: panel === "rsi"
-          ? 120
-          : bollingerMax === undefined || bollingerPadding === undefined
-            ? undefined
-            : bollingerMax + bollingerPadding,
+        min:
+          panel === "rsi"
+            ? -20
+            : bollingerMin === undefined || bollingerPadding === undefined
+              ? undefined
+              : bollingerMin - bollingerPadding,
+        max:
+          panel === "rsi"
+            ? 120
+            : bollingerMax === undefined || bollingerPadding === undefined
+              ? undefined
+              : bollingerMax + bollingerPadding,
         axisLabel: { color: textColor, fontSize: 11 },
         splitLine: { lineStyle: { color: gridColor } },
       },
@@ -265,5 +286,11 @@ export function MarketIndicatorPanelChart({
     chartInstance.current?.setOption(option, { notMerge: true });
   }, [option]);
 
-  return <div className={cn("w-full", className)} ref={chartRef} style={{ height }} />;
+  return (
+    <div
+      className={cn("w-full", className)}
+      ref={chartRef}
+      style={{ height }}
+    />
+  );
 }

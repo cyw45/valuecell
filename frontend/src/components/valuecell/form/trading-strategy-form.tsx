@@ -34,7 +34,12 @@ import {
 } from "@/components/ui/select";
 import { TRADING_SYMBOLS } from "@/constants/agent";
 import { withForm } from "@/hooks/use-form";
-import type { Strategy, StrategyConfigField, StrategyConfigSchema, StrategyPrompt } from "@/types/strategy";
+import type {
+  Strategy,
+  StrategyConfigField,
+  StrategyConfigSchema,
+  StrategyPrompt,
+} from "@/types/strategy";
 type TradingConfigFieldKey =
   | "symbols"
   | "initial_capital"
@@ -105,7 +110,10 @@ export const TradingStrategyForm = withForm({
       form.setFieldValue(
         "strategy_params",
         Object.fromEntries(
-          dynamicFields.map((field) => [field.key, defaults[field.key] ?? field.default]),
+          dynamicFields.map((field) => [
+            field.key,
+            defaults[field.key] ?? field.default,
+          ]),
         ),
       );
     }, [selectedSchema, dynamicFields, form, tradingConfigFields]);
@@ -123,10 +131,7 @@ export const TradingStrategyForm = withForm({
 
     const updateFieldValue = (field: StrategyConfigField, value: unknown) => {
       if (field.persistence_target === "trading_config") {
-        form.setFieldValue(
-          field.key as TradingConfigFieldKey,
-          value as never,
-        );
+        form.setFieldValue(field.key as TradingConfigFieldKey, value as never);
         return;
       }
       updateStrategyParam(field.key, value);
@@ -136,15 +141,25 @@ export const TradingStrategyForm = withForm({
       const value = fieldValue(field);
       if (field.field_type === "boolean") {
         return (
-          <Field key={field.key} orientation="horizontal" className="items-center justify-between rounded-lg border p-3">
+          <Field
+            key={field.key}
+            orientation="horizontal"
+            className="items-center justify-between rounded-lg border p-3"
+          >
             <div>
               <FieldLabel>{field.label}</FieldLabel>
-              {field.description && <p className="text-muted-foreground text-xs">{field.description}</p>}
+              {field.description && (
+                <p className="text-muted-foreground text-xs">
+                  {field.description}
+                </p>
+              )}
             </div>
             <input
               type="checkbox"
               checked={Boolean(value)}
-              onChange={(event) => updateFieldValue(field, event.target.checked)}
+              onChange={(event) =>
+                updateFieldValue(field, event.target.checked)
+              }
             />
           </Field>
         );
@@ -157,10 +172,15 @@ export const TradingStrategyForm = withForm({
               value={String(value ?? field.default ?? "")}
               onValueChange={(nextValue) => updateFieldValue(field, nextValue)}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 {field.options.map((option) => (
-                  <SelectItem key={String(option.value)} value={String(option.value)}>
+                  <SelectItem
+                    key={String(option.value)}
+                    value={String(option.value)}
+                  >
                     {option.label}
                   </SelectItem>
                 ))}
@@ -187,7 +207,11 @@ export const TradingStrategyForm = withForm({
                 )
               }
             />
-            {field.description && <p className="text-muted-foreground text-xs">{field.description}</p>}
+            {field.description && (
+              <p className="text-muted-foreground text-xs">
+                {field.description}
+              </p>
+            )}
           </Field>
         );
       }
@@ -210,7 +234,9 @@ export const TradingStrategyForm = withForm({
               )
             }
           />
-          {field.description && <p className="text-muted-foreground text-xs">{field.description}</p>}
+          {field.description && (
+            <p className="text-muted-foreground text-xs">{field.description}</p>
+          )}
         </Field>
       );
     };
@@ -266,8 +292,13 @@ export const TradingStrategyForm = withForm({
                 "strategy_params",
                 Object.fromEntries(
                   (schema?.fields ?? [])
-                    .filter((field) => field.persistence_target === "strategy_params")
-                    .map((field) => [field.key, defaults[field.key] ?? field.default]),
+                    .filter(
+                      (field) => field.persistence_target === "strategy_params",
+                    )
+                    .map((field) => [
+                      field.key,
+                      defaults[field.key] ?? field.default,
+                    ]),
                 ),
               );
             },
@@ -279,11 +310,20 @@ export const TradingStrategyForm = withForm({
               {(strategySchemas.length > 0
                 ? strategySchemas
                 : [
-                    { strategy_type: "PromptBasedStrategy", label: t("strategy.form.strategyType.promptBased") },
-                    { strategy_type: "GridStrategy", label: t("strategy.form.strategyType.grid") },
+                    {
+                      strategy_type: "PromptBasedStrategy",
+                      label: t("strategy.form.strategyType.promptBased"),
+                    },
+                    {
+                      strategy_type: "GridStrategy",
+                      label: t("strategy.form.strategyType.grid"),
+                    },
                   ]
               ).map((schema) => (
-                <SelectItem key={schema.strategy_type} value={schema.strategy_type}>
+                <SelectItem
+                  key={schema.strategy_type}
+                  value={schema.strategy_type}
+                >
                   {schema.label}
                 </SelectItem>
               ))}
@@ -312,19 +352,27 @@ export const TradingStrategyForm = withForm({
           {(field) => (
             <Field>
               <FieldLabel className="font-medium text-base text-foreground">
-                {selectedSchema?.fields.find((item) => item.key === "symbols")?.label ?? t("strategy.form.tradingSymbols.label")}
+                {selectedSchema?.fields.find((item) => item.key === "symbols")
+                  ?.label ?? t("strategy.form.tradingSymbols.label")}
               </FieldLabel>
               <MultiSelect
-                maxSelected={selectedSchema?.strategy_type === "GridStrategy" ? 1 : undefined}
+                maxSelected={
+                  selectedSchema?.strategy_type === "GridStrategy"
+                    ? 1
+                    : undefined
+                }
                 options={
                   selectedSchema?.fields
                     .find((item) => item.key === "symbols")
-                    ?.options.map((item) => String(item.value)) ?? TRADING_SYMBOLS
+                    ?.options.map((item) => String(item.value)) ??
+                  TRADING_SYMBOLS
                 }
                 value={field.state.value}
                 onValueChange={field.handleChange}
                 placeholder={t("strategy.form.tradingSymbols.placeholder")}
-                searchPlaceholder={t("strategy.form.tradingSymbols.searchPlaceholder")}
+                searchPlaceholder={t(
+                  "strategy.form.tradingSymbols.searchPlaceholder",
+                )}
                 emptyText={t("strategy.form.tradingSymbols.emptyText")}
                 maxDisplayed={5}
                 creatable

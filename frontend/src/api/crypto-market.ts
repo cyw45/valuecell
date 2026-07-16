@@ -39,10 +39,10 @@ export const useGetCryptoMarketIndicators = (
   const symbols = params.symbols.filter(Boolean);
   const providers = params.providers?.filter(Boolean) ?? [];
   const usesDefaultSnapshot =
-    providers.length === 0
-    && params.interval === "1h"
-    && (params.lookback ?? 240) <= 240
-    && symbols.every((symbol) => DEFAULT_SNAPSHOT_SYMBOLS.includes(symbol));
+    providers.length === 0 &&
+    params.interval === "1h" &&
+    (params.lookback ?? 240) <= 240 &&
+    symbols.every((symbol) => DEFAULT_SNAPSHOT_SYMBOLS.includes(symbol));
   const querySymbols = usesDefaultSnapshot ? DEFAULT_SNAPSHOT_SYMBOLS : symbols;
   const refetchInterval = getMarketDataRefreshIntervalMs(
     marketDataRefreshMode,
@@ -83,4 +83,3 @@ export const useGetCryptoMarketIndicators = (
     staleTime: 10_000,
   });
 };
-

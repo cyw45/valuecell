@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import Any
 from uuid import uuid4
 
@@ -63,6 +62,7 @@ class RuleStrategyService:
             )
         )
         return self._strategy_data(strategy)
+
     def list(self, tenant_id: str) -> list[dict[str, Any]]:
         return [
             self._strategy_data(strategy)
@@ -110,14 +110,18 @@ class RuleStrategyService:
 
         config = RuleStrategyConfig.model_validate(strategy.config)
         account_before = self._account_from_history(strategy, tenant_id, config)
-        engine_market = self._engine_market(account_before, market, config.risk.leverage)
+        engine_market = self._engine_market(
+            account_before, market, config.risk.leverage
+        )
         request = RuleStrategyEvaluationRequest(
             config=config,
             candles=candles,
             market=engine_market,
         )
         result = self.engine.evaluate(request)
-        account_after, fill = self._apply_result(account_before, market, result.model_dump())
+        account_after, fill = self._apply_result(
+            account_before, market, result.model_dump()
+        )
         result_data = result.model_dump(mode="json")
         result_data["account"] = account_after.model_dump(mode="json")
         journal = self.repository.append_evaluation(
@@ -144,13 +148,15 @@ class RuleStrategyService:
         self,
         strategy_id: str,
         tenant_id: str,
-        market_inputs: list[tuple[list[Any] | dict[str, list[Any]], RuleStrategyMarketSnapshot]],
+        market_inputs: list[
+            tuple[list[Any] | dict[str, list[Any]], RuleStrategyMarketSnapshot]
+        ],
     ) -> list[dict[str, Any]]:
-        """Evaluate one market cycle and split paper capital across buy candidates.
+        """Evaluate one market cycle using the configured fixed amount per entry.
 
-        All markets are assessed against the same opening account state. This
-        prevents a symbol's position in the configured watchlist from changing
-        which other symbols qualify during the same scheduler cycle.
+        Sells are applied before entries. Each later buy uses the account balance
+        left by earlier fills and is blocked by the rule engine when the full
+        configured amount is not affordable; partial paper fills are forbidden.
         """
         strategy = self._require_strategy(strategy_id, tenant_id)
         if strategy.status != "running":
@@ -163,9 +169,13 @@ class RuleStrategyService:
         evaluated: list[tuple[RuleStrategyMarketSnapshot, dict[str, Any]]] = []
         for candle_input, market in market_inputs:
             candle_sets = (
-                candle_input if isinstance(candle_input, dict) else {config.interval: candle_input}
+                candle_input
+                if isinstance(candle_input, dict)
+                else {config.interval: candle_input}
             )
-            candles = candle_sets.get(config.interval) or next(iter(candle_sets.values()))
+            candles = candle_sets.get(config.interval) or next(
+                iter(candle_sets.values())
+            )
             engine_market = self._engine_market(account, market, config.risk.leverage)
             result = self.engine.evaluate(
                 RuleStrategyEvaluationRequest(
@@ -178,55 +188,56 @@ class RuleStrategyService:
             evaluated.append((market, result.model_dump(mode="json")))
 
         sell_items = [item for item in evaluated if item[1]["action"] == "sell"]
-        buy_items = [item for item in evaluated if item[1]["action"] == "buy"]
-        other_items = [
-            item for item in evaluated if item[1]["action"] not in {"buy", "sell"}
-        ]
+        remaining_items = [item for item in evaluated if item[1]["action"] != "sell"]
         output: list[dict[str, Any]] = []
 
         for market, result_data in sell_items:
             account, fill = self._apply_result(account, market, result_data)
             output.append(
                 self._record_evaluation(
-                    strategy_id, tenant_id, strategy.config, market, result_data, account, fill
+                    strategy_id,
+                    tenant_id,
+                    strategy.config,
+                    market,
+                    result_data,
+                    account,
+                    fill,
                 )
             )
 
-        available_slots = max(config.risk.max_positions - len(account.positions), 0)
-        selected_buys = buy_items[:available_slots]
-        unselected_buys = buy_items[available_slots:]
-        # Each qualifying symbol receives an equal whole-USDT share of the
-        # available strategy capital. The total is never scaled by a per-trade
-        # setting: the candidate count is the only divisor.
-        equal_share = math.floor(account.quote_balance / len(selected_buys)) if selected_buys else 0
-
-        for market, result_data in selected_buys:
-            result_data["sizing"] = {
-                **result_data["sizing"],
-                "requested_quote": equal_share,
-                "affordable_quote": account.quote_balance,
-                "quantity": equal_share / market.price,
-            }
-            account, fill = self._apply_result(account, market, result_data)
-            output.append(
-                self._record_evaluation(
-                    strategy_id, tenant_id, strategy.config, market, result_data, account, fill
+        for market, _ in remaining_items:
+            engine_market = self._engine_market(account, market, config.risk.leverage)
+            candle_input = next(
+                raw_candles
+                for raw_candles, candidate_market in market_inputs
+                if candidate_market.symbol == market.symbol
+            )
+            candle_sets = (
+                candle_input
+                if isinstance(candle_input, dict)
+                else {config.interval: candle_input}
+            )
+            candles = candle_sets.get(config.interval) or next(
+                iter(candle_sets.values())
+            )
+            result_data = self.engine.evaluate(
+                RuleStrategyEvaluationRequest(
+                    config=config,
+                    candles=candles,
+                    candle_sets=candle_sets,
+                    market=engine_market,
                 )
-            )
-
-        for market, result_data in unselected_buys:
-            result_data.update(
-                action="no_op",
-                reason_code="max_positions",
-                reason="qualified entry skipped because the position limit was reached",
-            )
-            other_items.append((market, result_data))
-
-        for market, result_data in other_items:
+            ).model_dump(mode="json")
             account, fill = self._apply_result(account, market, result_data)
             output.append(
                 self._record_evaluation(
-                    strategy_id, tenant_id, strategy.config, market, result_data, account, fill
+                    strategy_id,
+                    tenant_id,
+                    strategy.config,
+                    market,
+                    result_data,
+                    account,
+                    fill,
                 )
             )
         return output
@@ -237,17 +248,15 @@ class RuleStrategyService:
         """Return complete, durable explanations for each paper evaluation."""
         self._require_strategy(strategy_id, tenant_id)
         entries: list[dict[str, Any]] = []
-        for journal in self.repository.get_evaluations(strategy_id, tenant_id, limit=limit):
+        for journal in self.repository.get_evaluations(
+            strategy_id, tenant_id, limit=limit
+        ):
             result = journal.result or {}
             entries.append(
                 {
                     "strategy_id": strategy_id,
                     "evaluation_id": journal.evaluation_id,
-                    **(
-                        {"symbol": result["symbol"]}
-                        if "symbol" in result
-                        else {}
-                    ),
+                    **({"symbol": result["symbol"]} if "symbol" in result else {}),
                     "evaluated_at": journal.created_at,
                     "action": result.get("action", "no_op"),
                     "reason_code": result.get("reason_code", "unknown"),
@@ -265,12 +274,16 @@ class RuleStrategyService:
     def account(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
         config = RuleStrategyConfig.model_validate(strategy.config)
-        return self._account_from_history(strategy, tenant_id, config).model_dump(mode="json")
+        return self._account_from_history(strategy, tenant_id, config).model_dump(
+            mode="json"
+        )
 
     def _account_from_history(
         self, strategy: RuleStrategy, tenant_id: str, config: RuleStrategyConfig
     ) -> RuleStrategyPaperAccount:
-        journals = self.repository.get_evaluations(strategy.strategy_id, tenant_id, limit=1)
+        journals = self.repository.get_evaluations(
+            strategy.strategy_id, tenant_id, limit=1
+        )
         if journals:
             raw_account = (journals[0].result or {}).get("account")
             if raw_account is not None:
@@ -325,10 +338,6 @@ class RuleStrategyService:
             else item
             for symbol, item in account.positions.items()
         }
-        unrealized = sum(
-            item.quantity * (item.mark_price - item.entry_price)
-            for item in marked_positions.values()
-        )
         equity = account.quote_balance + sum(
             item.quantity * item.mark_price for item in marked_positions.values()
         )
@@ -359,14 +368,21 @@ class RuleStrategyService:
         existing = positions.get(market.symbol)
 
         if result["action"] == "buy":
-            quote_amount = min(float(result["sizing"]["requested_quote"]), account.quote_balance)
+            quote_amount = float(result["sizing"]["requested_quote"])
+            if quote_amount > account.quote_balance:
+                raise ValueError("paper buy must be blocked before account mutation")
             quantity = quote_amount / market.price
             if quote_amount > 0 and existing is None:
                 positions[market.symbol] = RuleStrategyPaperPosition(
                     quantity=quantity, entry_price=market.price, mark_price=market.price
                 )
-                fill = {"symbol": market.symbol, "price": market.price, "quantity": quantity,
-                        "quote_amount": quote_amount, "realized_pnl_quote": 0.0}
+                fill = {
+                    "symbol": market.symbol,
+                    "price": market.price,
+                    "quantity": quantity,
+                    "quote_amount": quote_amount,
+                    "realized_pnl_quote": 0.0,
+                }
                 quote_balance = account.quote_balance - quote_amount
             else:
                 quote_balance = account.quote_balance
@@ -376,18 +392,29 @@ class RuleStrategyService:
             realized += realized_trade
             positions.pop(market.symbol)
             quote_balance = account.quote_balance + quote_amount
-            fill = {"symbol": market.symbol, "price": market.price, "quantity": existing.quantity,
-                    "quote_amount": quote_amount, "realized_pnl_quote": realized_trade}
+            fill = {
+                "symbol": market.symbol,
+                "price": market.price,
+                "quantity": existing.quantity,
+                "quote_amount": quote_amount,
+                "realized_pnl_quote": realized_trade,
+            }
         else:
             quote_balance = account.quote_balance
 
         positions = {
             symbol: item.model_copy(update={"mark_price": market.price})
-            if symbol == market.symbol else item
+            if symbol == market.symbol
+            else item
             for symbol, item in positions.items()
         }
-        unrealized = sum(item.quantity * (item.mark_price - item.entry_price) for item in positions.values())
-        equity = quote_balance + sum(item.quantity * item.mark_price for item in positions.values())
+        unrealized = sum(
+            item.quantity * (item.mark_price - item.entry_price)
+            for item in positions.values()
+        )
+        equity = quote_balance + sum(
+            item.quantity * item.mark_price for item in positions.values()
+        )
         return RuleStrategyPaperAccount(
             initial_capital_quote=account.initial_capital_quote,
             quote_balance=quote_balance,
@@ -440,9 +467,9 @@ class RuleStrategyService:
             "status": strategy.status,
             "mode": "paper",
             "config": strategy.config,
-            "account": self._account_from_history(strategy, strategy.tenant_id, config).model_dump(
-                mode="json"
-            ),
+            "account": self._account_from_history(
+                strategy, strategy.tenant_id, config
+            ).model_dump(mode="json"),
             "created_at": strategy.created_at,
             "updated_at": strategy.updated_at,
         }

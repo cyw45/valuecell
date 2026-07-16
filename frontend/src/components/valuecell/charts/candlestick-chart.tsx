@@ -49,8 +49,6 @@ export interface CandlestickMovingAverage {
   color?: string;
 }
 
-
-
 interface CandlestickChartProps {
   data: CandlestickData[];
   movingAverages?: CandlestickMovingAverage[];
@@ -113,18 +111,19 @@ function CandlestickChart({
           borderColor: stockColors.positive, // up candle border
           borderColor0: stockColors.negative, // down candle border
         },
-        markLine: currentPrice != null
-          ? {
-              symbol: "none",
-              lineStyle: { color: "#fbbf24", type: "dashed", width: 1 },
-              label: {
-                color: theme === "dark" ? "#fef3c7" : "#78350f",
-                formatter: `现价 ${currentPrice.toLocaleString()}`,
-                position: "end",
-              },
-              data: [{ yAxis: currentPrice }],
-            }
-          : undefined,
+        markLine:
+          currentPrice != null
+            ? {
+                symbol: "none",
+                lineStyle: { color: "#fbbf24", type: "dashed", width: 1 },
+                label: {
+                  color: theme === "dark" ? "#fef3c7" : "#78350f",
+                  formatter: `现价 ${currentPrice.toLocaleString()}`,
+                  position: "end",
+                },
+                data: [{ yAxis: currentPrice }],
+              }
+            : undefined,
       },
     ];
     for (const movingAverage of movingAverages) {
@@ -220,7 +219,10 @@ function CandlestickChart({
     }
 
     const textColor = theme === "dark" ? "#a8b3cf" : "#566075";
-    const gridColor = theme === "dark" ? "rgba(137, 160, 205, 0.12)" : "rgba(71, 85, 105, 0.12)";
+    const gridColor =
+      theme === "dark"
+        ? "rgba(137, 160, 205, 0.12)"
+        : "rgba(71, 85, 105, 0.12)";
     return {
       animation: false,
       legend: {
@@ -260,7 +262,15 @@ function CandlestickChart({
       ],
       series,
     };
-  }, [data, movingAverages, currentPrice, stockColors, showVolume, dateFormat, theme]);
+  }, [
+    data,
+    movingAverages,
+    currentPrice,
+    stockColors,
+    showVolume,
+    dateFormat,
+    theme,
+  ]);
 
   useChartResize(chartInstance);
 

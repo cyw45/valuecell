@@ -32,7 +32,9 @@ def _default_db_path() -> str:
 
 _SUPPORTED_MARKET_DATA_PROVIDERS = ("okx", "binance", "gate", "mexc")
 
-_SUPPORTED_MARKET_INTERVALS = frozenset({"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"})
+_SUPPORTED_MARKET_INTERVALS = frozenset(
+    {"1m", "3m", "5m", "15m", "30m", "1h", "4h", "1d"}
+)
 _SUPPORTED_MARKET_SYMBOLS = frozenset(
     {
         "BTC-USDT",
@@ -123,7 +125,11 @@ _SUPPORTED_MARKET_SYMBOLS = frozenset(
 
 
 def _parse_default_market_symbols(value: str) -> tuple[str, ...]:
-    symbols = tuple(item.strip().upper().replace("/", "-") for item in value.split(",") if item.strip())
+    symbols = tuple(
+        item.strip().upper().replace("/", "-")
+        for item in value.split(",")
+        if item.strip()
+    )
     if not symbols:
         raise ValueError("VALUECELL_MARKET_DEFAULT_SYMBOLS must include a symbol")
     invalid = sorted(set(symbols) - _SUPPORTED_MARKET_SYMBOLS)
@@ -138,7 +144,9 @@ def _parse_default_market_symbols(value: str) -> tuple[str, ...]:
 def _default_market_interval(value: str) -> str:
     interval = value.strip().lower()
     if interval not in _SUPPORTED_MARKET_INTERVALS:
-        raise ValueError(f"VALUECELL_MARKET_DEFAULT_INTERVAL has unsupported interval: {value}")
+        raise ValueError(
+            f"VALUECELL_MARKET_DEFAULT_INTERVAL has unsupported interval: {value}"
+        )
     return interval
 
 
@@ -169,6 +177,7 @@ def _positive_float_env(name: str, default: float) -> float:
         raise ValueError(f"{name} must be greater than 0")
     return value
 
+
 class Settings:
     """Server configuration settings."""
 
@@ -192,11 +201,31 @@ class Settings:
         self.CORS_ORIGINS = cors_origins.split(",") if cors_origins != "*" else ["*"]
 
         # SaaS authentication and local credential-vault configuration.
-        self.JWT_SECRET = os.getenv("VALUECELL_JWT_SECRET", "development-only-change-me")
+        self.JWT_SECRET = os.getenv(
+            "VALUECELL_JWT_SECRET", "development-only-change-me"
+        )
         self.JWT_ISSUER = os.getenv("VALUECELL_JWT_ISSUER", "valuecell-saas")
         self.JWT_ACCESS_TOKEN_TTL_S = int(
             os.getenv("VALUECELL_JWT_ACCESS_TOKEN_TTL_S", "3600")
         )
+        self.PLATFORM_ADMIN_EMAILS = tuple(
+            item.strip().lower()
+            for item in os.getenv("VALUECELL_PLATFORM_ADMIN_EMAILS", "").split(",")
+            if item.strip()
+        )
+        self.BOOTSTRAP_PLATFORM_ADMIN_EMAIL = os.getenv(
+            "VALUECELL_BOOTSTRAP_PLATFORM_ADMIN_EMAIL"
+        )
+        self.BOOTSTRAP_PLATFORM_ADMIN_PASSWORD = os.getenv(
+            "VALUECELL_BOOTSTRAP_PLATFORM_ADMIN_PASSWORD"
+        )
+        if (
+            self.APP_ENVIRONMENT.lower() in {"production", "prod"}
+            and not self.PLATFORM_ADMIN_EMAILS
+        ):
+            raise RuntimeError(
+                "VALUECELL_PLATFORM_ADMIN_EMAILS must configure a platform administrator"
+            )
         self.CREDENTIAL_MASTER_KEY = os.getenv("VALUECELL_CREDENTIAL_MASTER_KEY")
         if (
             self.APP_ENVIRONMENT.lower() in {"production", "prod"}
@@ -270,8 +299,6 @@ class Settings:
                 "VALUECELL_MARKET_DATA_FAILURE_COOLDOWN_MAX_S must be at least "
                 "VALUECELL_MARKET_DATA_FAILURE_COOLDOWN_BASE_S"
             )
-
-
 
     def get_database_config(self) -> dict:
         """Get database configuration."""

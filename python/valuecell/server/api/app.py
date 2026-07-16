@@ -22,6 +22,7 @@ from .routers.crypto_market import create_crypto_market_router
 from .routers.prediction_market import create_prediction_market_router
 from .routers.i18n import create_i18n_router
 from .routers.saas_auth import create_saas_auth_router
+from .routers.saas_admin import create_saas_admin_router
 from .routers.tenant_credential import create_tenant_credential_router
 from .routers.sandbox_exchange import create_sandbox_exchange_router
 from .routers.live_execution import create_live_execution_router
@@ -95,10 +96,12 @@ def create_app() -> FastAPI:
             f"ValueCell Server starting up on {settings.API_HOST}:{settings.API_PORT}..."
         )
 
-        # Quant-only deployments must not import legacy Agent assets or their
-        # optional dependencies. Their SaaS tables are provisioned explicitly.
+        # Quant-only deployments must not initialize legacy Agent dependencies.
         if settings.QUANT_ONLY_MODE:
-            logger.info("Skipping legacy database and adapter initialization in quant-only mode")
+            from ..db.connection import create_tables
+
+            logger.info("Provisioning SaaS database tables in quant-only mode")
+            create_tables()
         else:
             try:
                 from ...adapters.assets import get_adapter_manager
@@ -113,6 +116,34 @@ def create_app() -> FastAPI:
                 manager.configure_baostock()
             except Exception as exc:
                 logger.warning("Legacy initialization unavailable: {}", exc)
+
+        try:
+            from ..db.connection import get_database_manager
+            from ..db.migrations import (
+                migrate_fixed_order_amounts,
+                migrate_tenant_profiles,
+            )
+            from ..services.platform_bootstrap_service import (
+                bootstrap_platform_administrator,
+            )
+
+            session = get_database_manager().get_session()
+            try:
+                migrate_fixed_order_amounts(session)
+                migrate_tenant_profiles(session)
+                result = bootstrap_platform_administrator(
+                    session,
+                    settings.BOOTSTRAP_PLATFORM_ADMIN_EMAIL,
+                    settings.BOOTSTRAP_PLATFORM_ADMIN_PASSWORD,
+                )
+                if result.created:
+                    logger.info(
+                        "Bootstrapped platform administrator email={}", result.email
+                    )
+            finally:
+                session.close()
+        except Exception as exc:
+            logger.warning("SaaS data migration deferred: {}", exc)
 
         # Market data is a backend-owned dependency. Begin prewarming at startup
         # without blocking the API while an upstream exchange is unavailable.
@@ -242,6 +273,7 @@ def _add_routes(app: FastAPI, settings) -> None:
     app.include_router(create_system_router(), prefix=API_PREFIX)
 
     app.include_router(create_saas_auth_router(), prefix=API_PREFIX)
+    app.include_router(create_saas_admin_router(), prefix=API_PREFIX)
     app.include_router(create_tenant_credential_router(), prefix=API_PREFIX)
     app.include_router(create_sandbox_exchange_router(), prefix=API_PREFIX)
     app.include_router(create_live_execution_router(), prefix=API_PREFIX)

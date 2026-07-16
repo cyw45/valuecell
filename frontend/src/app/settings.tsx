@@ -13,7 +13,11 @@ export default function SettingsPage() {
             {t("settings.sandboxExchanges.link")}
           </Link>
         </Button>
-        <Button variant="outline" className="border-destructive/50 text-destructive hover:text-destructive" asChild>
+        <Button
+          variant="outline"
+          className="border-destructive/50 text-destructive hover:text-destructive"
+          asChild
+        >
           <Link to="/settings/live-execution">
             {t("settings.liveExecution.link")}
           </Link>

@@ -16,6 +16,10 @@ from valuecell.server.services.tenant_credential_service import (
     TenantCredentialService,
 )
 from valuecell.server.services.sandbox_exchange_service import SandboxExchangeService
+from valuecell.server.services.saas_access_service import (
+    require_active_tenant,
+    require_tenant_permission,
+)
 
 
 class CredentialCreateRequest(BaseModel):
@@ -28,7 +32,6 @@ class CredentialCreateRequest(BaseModel):
     label: str = Field(min_length=1, max_length=200)
     secret: dict[str, str] = Field(min_length=1)
     metadata: dict[str, Any] = Field(default_factory=dict)
-
 
 
 class SandboxCredentialValidationRequest(BaseModel):
@@ -47,6 +50,7 @@ class SandboxCredentialValidationRequest(BaseModel):
             raise ValueError("OKX sandbox validation requires a passphrase")
         return self
 
+
 def create_tenant_credential_router() -> APIRouter:
     """Create tenant-scoped vault metadata routes."""
     router = APIRouter(prefix="/saas/credentials", tags=["saas-credentials"])
@@ -57,6 +61,8 @@ def create_tenant_credential_router() -> APIRouter:
         principal: CurrentPrincipal = Depends(get_current_principal),
         db: Session = Depends(get_db),
     ) -> SuccessResponse[dict]:
+        require_active_tenant(principal)
+        require_tenant_permission(principal, "connection.manage")
         try:
             data = TenantCredentialService(db).create(
                 principal.tenant_id,
@@ -76,7 +82,8 @@ def create_tenant_credential_router() -> APIRouter:
         request: SandboxCredentialValidationRequest,
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[dict]:
-        del principal
+        require_active_tenant(principal)
+        require_tenant_permission(principal, "connection.manage")
         data = await SandboxExchangeService().validate(
             provider=request.provider,
             api_key=request.api_key,
@@ -90,6 +97,8 @@ def create_tenant_credential_router() -> APIRouter:
         principal: CurrentPrincipal = Depends(get_current_principal),
         db: Session = Depends(get_db),
     ) -> SuccessResponse[list[dict]]:
+        require_active_tenant(principal)
+        require_tenant_permission(principal, "tenant.read")
         return SuccessResponse.create(
             data=TenantCredentialService(db).list(principal.tenant_id),
             msg="Credential metadata retrieved",
@@ -101,6 +110,8 @@ def create_tenant_credential_router() -> APIRouter:
         principal: CurrentPrincipal = Depends(get_current_principal),
         db: Session = Depends(get_db),
     ) -> SuccessResponse[dict]:
+        require_active_tenant(principal)
+        require_tenant_permission(principal, "connection.manage")
         try:
             data = TenantCredentialService(db).revoke(
                 principal.tenant_id, credential_id

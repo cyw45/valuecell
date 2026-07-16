@@ -89,9 +89,15 @@ def test_moving_average_crossovers_produce_long_entry_and_exit(
     assert crossover.values["previous_moving_average_short"] == pytest.approx(10.0)
     assert crossover.values["previous_moving_average_long"] == pytest.approx(10.0)
     if expected_action == "buy":
-        assert result.indicators.moving_average_short > result.indicators.moving_average_long
+        assert (
+            result.indicators.moving_average_short
+            > result.indicators.moving_average_long
+        )
     else:
-        assert result.indicators.moving_average_short < result.indicators.moving_average_long
+        assert (
+            result.indicators.moving_average_short
+            < result.indicators.moving_average_long
+        )
 
 
 @pytest.mark.parametrize(
@@ -270,16 +276,13 @@ def test_buy_signals_are_blocked_by_position_collateral_and_leverage_limits(
     assert _condition(result, expected_block).state == "blocked"
 
 
-
-
-def test_contract_rejects_equity_fraction_size_above_one():
+def test_contract_rejects_legacy_dynamic_sizing_fields():
     with pytest.raises(ValidationError):
         _request(
             [10.0],
-            config={
-                "risk": {"size_mode": "equity_fraction", "size_value": 1.01}
-            },
+            config={"risk": {"size_mode": "equal_split", "size_value": 1}},
         )
+
 
 @pytest.mark.parametrize(
     "payload",
@@ -352,6 +355,7 @@ def test_contract_rejects_malformed_candles_and_invalid_rule_config(payload):
     with pytest.raises(ValidationError):
         RuleStrategyEvaluationRequest.model_validate(payload)
 
+
 def test_contract_rejects_non_finite_candle_close():
     payload = {
         "config": {},
@@ -374,7 +378,7 @@ def test_result_explains_conditions_sizing_and_projected_funding():
         [10.0, 9.0, 8.0],
         config={
             "rsi": {"enabled": True, "period": 2},
-            "risk": {"size_mode": "fixed_quote", "size_value": 100.0},
+            "risk": {"order_quote_amount": 100.0},
         },
         market={"funding_rate": 0.01},
     )

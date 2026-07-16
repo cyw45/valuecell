@@ -16,6 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.tenant import SaaSUser, TenantMembership
+from valuecell.server.services.saas_access_service import TenantAccessService
 from valuecell.server.config.settings import get_settings
 
 _bearer = HTTPBearer(auto_error=False)
@@ -23,17 +24,24 @@ _bearer = HTTPBearer(auto_error=False)
 
 @dataclass(frozen=True)
 class CurrentPrincipal:
-    """Verified user and workspace scope derived from a bearer token."""
+    """Verified identity, workspace role, and server-derived commercial access."""
 
     user_id: str
     tenant_id: str
+    role: str = "owner"
+    is_platform_admin: bool = False
+    access_status: str = "active"
+    commercial_model: str | None = None
+    access_expires_at: str | None = None
 
 
 def hash_password(password: str, salt: str | None = None) -> str:
     """Derive a password hash using scrypt and a per-user random salt."""
     if len(password) < 12:
         raise ValueError("Password must contain at least 12 characters")
-    raw_salt = secrets.token_bytes(16) if salt is None else base64.urlsafe_b64decode(salt)
+    raw_salt = (
+        secrets.token_bytes(16) if salt is None else base64.urlsafe_b64decode(salt)
+    )
     derived = hashlib.scrypt(password.encode("utf-8"), salt=raw_salt, n=2**14, r=8, p=1)
     return f"{base64.urlsafe_b64encode(raw_salt).decode()}${base64.urlsafe_b64encode(derived).decode()}"
 
@@ -88,9 +96,22 @@ def get_current_principal(
         )
         .first()
     )
-    if membership is None or db.query(SaaSUser).filter(SaaSUser.id == user_id).first() is None:
-        raise HTTPException(status_code=401, detail="Access token scope is no longer active")
-    return CurrentPrincipal(user_id=user_id, tenant_id=tenant_id)
+    user = db.query(SaaSUser).filter(SaaSUser.id == user_id).first()
+    if membership is None or user is None:
+        raise HTTPException(
+            status_code=401, detail="Access token scope is no longer active"
+        )
+    access = TenantAccessService.access_for(db, tenant_id)
+    admin_emails = set(getattr(settings, "PLATFORM_ADMIN_EMAILS", ()))
+    return CurrentPrincipal(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        role=membership.role,
+        is_platform_admin=user.email.lower() in admin_emails,
+        access_status=access.status,
+        commercial_model=access.commercial_model,
+        access_expires_at=access.expires_at.isoformat() if access.expires_at else None,
+    )
 
 
 def _encode_jwt(header: dict, payload: dict, secret: str) -> str:
@@ -99,6 +120,8 @@ def _encode_jwt(header: dict, payload: dict, secret: str) -> str:
     signed = f"{header_part}.{payload_part}".encode("ascii")
     signature = hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).digest()
     return f"{header_part}.{payload_part}.{_urlsafe_b64encode(signature)}"
+
+
 def _decode_jwt(token: str, secret: str) -> dict | None:
     try:
         header_part, payload_part, signature_part = token.split(".")

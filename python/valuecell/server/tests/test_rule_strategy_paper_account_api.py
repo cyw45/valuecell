@@ -62,14 +62,14 @@ class PaperAccountRepository:
         ]
         return list(reversed(matching[-limit:]))
 
+
 def _config() -> dict:
     return {
         "mode": "paper",
         "confirmation_mode": "all",
         "rsi": {"enabled": True, "period": 2, "oversold": 30, "overbought": 70},
         "risk": {
-            "size_mode": "fixed_quote",
-            "size_value": 100,
+            "order_quote_amount": 100,
             "max_positions": 1,
             "leverage": 1,
         },
@@ -127,7 +127,9 @@ def test_rule_strategy_defaults_and_persists_initial_paper_capital():
         json={"name": "Capital required", "config": _config()},
     )
     assert default_capital.status_code == 201
-    assert default_capital.json()["data"]["account"]["initial_capital_quote"] == 10_000.0
+    assert (
+        default_capital.json()["data"]["account"]["initial_capital_quote"] == 10_000.0
+    )
 
     created = client.post(
         "/rule-strategies",
@@ -218,7 +220,9 @@ def test_paper_evaluations_use_server_account_and_record_buy_then_sell_pnl():
         "paper_filled",
         "paper_filled",
     ]
-    assert [entry["realized_pnl_quote"] for entry in trades.json()["data"]["entries"]] == [
+    assert [
+        entry["realized_pnl_quote"] for entry in trades.json()["data"]["entries"]
+    ] == [
         25.0,
         0.0,
     ]
@@ -241,22 +245,22 @@ def test_paper_account_endpoint_is_tenant_scoped():
     assert account.json()["data"]["initial_capital_quote"] == 1_000.0
 
 
-def test_batch_cycle_equally_splits_capital_between_qualified_entries():
+def test_batch_cycle_uses_fixed_amount_and_blocks_unaffordable_entries():
     repository = PaperAccountRepository()
     service = RuleStrategyService(repository=repository)
     config = RuleStrategyConfig.model_validate(
         {
             **_config(),
+            "initial_capital_quote": 150,
             "symbols": ["BTC-USDT", "ETH-USDT", "SOL-USDT"],
             "risk": {
-                "size_mode": "equal_split",
-                "size_value": 0.1,
+                "order_quote_amount": 100,
                 "max_positions": 3,
                 "leverage": 1,
             },
         }
     )
-    created = service.create("tenant-a", "Equal split", None, config)
+    created = service.create("tenant-a", "Fixed amount", None, config)
     service.start(created["strategy_id"], "tenant-a")
 
     results = service.evaluate_batch(
@@ -268,8 +272,16 @@ def test_batch_cycle_equally_splits_capital_between_qualified_entries():
         ],
     )
 
-    assert [result["action"] for result in results] == ["buy", "buy", "buy"]
-    assert [result["sizing"]["requested_quote"] for result in results] == [3333, 3333, 3333]
+    assert [result["action"] for result in results] == ["buy", "no_op", "no_op"]
+    assert [result["sizing"]["requested_quote"] for result in results] == [
+        100,
+        100,
+        100,
+    ]
+    assert [result["reason_code"] for result in results[1:]] == [
+        "available_collateral",
+        "available_collateral",
+    ]
     account = results[-1]["account"]
-    assert account["quote_balance"] == 1.0
-    assert set(account["positions"]) == {"BTC-USDT", "ETH-USDT", "SOL-USDT"}
+    assert account["quote_balance"] == 50.0
+    assert set(account["positions"]) == {"BTC-USDT"}

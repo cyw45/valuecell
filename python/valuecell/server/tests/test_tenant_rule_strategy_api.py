@@ -65,8 +65,7 @@ def _config() -> dict:
         "confirmation_mode": "all",
         "rsi": {"enabled": True, "period": 2, "oversold": 30, "overbought": 70},
         "risk": {
-            "size_mode": "fixed_quote",
-            "size_value": 100,
+            "order_quote_amount": 100,
             "max_positions": 1,
             "leverage": 1,
         },
@@ -104,11 +103,7 @@ def _evaluation_input() -> dict:
         "market": {
             "symbol": "BTC-USDT",
             "price": 80,
-            "equity_quote": 1_000,
-            "quote_balance": 1_000,
-            "open_position_count": 0,
             "funding_rate": 0.001,
-            "position": {"quantity": 0},
         },
     }
 
@@ -149,12 +144,14 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
     assert rejected_user.status_code == 422
 
     strategy_id = _create_strategy(client, "Tenant A strategy")
-    assert [item["strategy_id"] for item in client.get("/rule-strategies").json()["data"]] == [
-        strategy_id
-    ]
+    assert [
+        item["strategy_id"] for item in client.get("/rule-strategies").json()["data"]
+    ] == [strategy_id]
 
     client.post(f"/rule-strategies/{strategy_id}/start")
-    exercised = client.post(f"/rule-strategies/{strategy_id}/evaluate", json=_evaluation_input())
+    exercised = client.post(
+        f"/rule-strategies/{strategy_id}/evaluate", json=_evaluation_input()
+    )
     assert exercised.status_code == 200
 
     principal[0] = CurrentPrincipal(user_id="user-b", tenant_id="tenant-b")
@@ -168,7 +165,9 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
     denied_responses = [
         client.get(f"/rule-strategies/{strategy_id}"),
         client.patch(f"/rule-strategies/{strategy_id}", json={"name": "not allowed"}),
-        client.post(f"/rule-strategies/{strategy_id}/evaluate", json=_evaluation_input()),
+        client.post(
+            f"/rule-strategies/{strategy_id}/evaluate", json=_evaluation_input()
+        ),
         *[
             client.get(f"/rule-strategies/{strategy_id}/{log_type}")
             for log_type in ("signals", "trades", "funding")
@@ -179,4 +178,6 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
     principal[0] = CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")
     tenant_a_list = client.get("/rule-strategies")
     assert tenant_a_list.status_code == 200
-    assert [item["strategy_id"] for item in tenant_a_list.json()["data"]] == [strategy_id]
+    assert [item["strategy_id"] for item in tenant_a_list.json()["data"]] == [
+        strategy_id
+    ]

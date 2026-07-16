@@ -10,7 +10,8 @@ interface ThresholdGaugeProps {
   className?: string;
 }
 
-const clampPercent = (value: number): number => Math.min(Math.max(value, 0), 100);
+const clampPercent = (value: number): number =>
+  Math.min(Math.max(value, 0), 100);
 
 export function ThresholdGauge({
   label,
@@ -43,7 +44,14 @@ export function ThresholdGauge({
           viewBox="0 0 160 92"
         >
           <defs>
-            <linearGradient gradientUnits="userSpaceOnUse" id={gradientId} x1="20" x2="140" y1="80" y2="80">
+            <linearGradient
+              gradientUnits="userSpaceOnUse"
+              id={gradientId}
+              x1="20"
+              x2="140"
+              y1="80"
+              y2="80"
+            >
               <stop offset="0%" stopColor="#10b981" />
               <stop offset="22%" stopColor="#84cc16" />
               <stop offset="45%" stopColor="#facc15" />

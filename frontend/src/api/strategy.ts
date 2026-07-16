@@ -100,7 +100,9 @@ export const useGetStrategySchemas = () => {
   return useQuery({
     queryKey: API_QUERY_KEYS.STRATEGY.strategySchemas,
     queryFn: () =>
-      apiClient.get<ApiResponse<StrategyConfigSchemaCatalog>>("/strategies/schemas"),
+      apiClient.get<ApiResponse<StrategyConfigSchemaCatalog>>(
+        "/strategies/schemas",
+      ),
     select: (data) => data.data,
     staleTime: 10 * 60 * 1000,
   });
