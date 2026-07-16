@@ -3,6 +3,8 @@ import { Building2, Save, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 import {
   useAdminTenants,
+  useAdminPlans,
+  useGrantSubscription,
   useSaaSAccess,
   useUpdateTenantProfile,
 } from "@/api/saas-control";
@@ -30,7 +32,9 @@ export default function AdminTenantsPage() {
   const access = useSaaSAccess();
   const enabled = access.data?.is_platform_admin === true;
   const tenants = useAdminTenants(enabled);
+  const plans = useAdminPlans(enabled);
   const updateProfile = useUpdateTenantProfile();
+  const grantSubscription = useGrantSubscription();
   const [selectedId, setSelectedId] = useState("");
   const selected = useMemo(
     () =>
@@ -42,6 +46,9 @@ export default function AdminTenantsPage() {
     "personal",
   );
   const [organizationName, setOrganizationName] = useState("");
+  const [planId, setPlanId] = useState("");
+  const [subscriptionEndsAt, setSubscriptionEndsAt] = useState("");
+  const [subscriptionNote, setSubscriptionNote] = useState("");
 
   if (!enabled)
     return (
@@ -74,6 +81,22 @@ export default function AdminTenantsPage() {
       toast.error(
         error instanceof Error ? error.message : "无法保存租户类型。",
       );
+    }
+  }
+
+  async function grantAccess() {
+    if (!selected || !planId || !subscriptionEndsAt) return;
+    try {
+      await grantSubscription.mutateAsync({
+        tenant_id: selected.id,
+        plan_id: planId,
+        ends_at: new Date(subscriptionEndsAt).toISOString(),
+        note: subscriptionNote.trim() || undefined,
+      });
+      toast.success("订阅已开通，用户重新登录后即可使用交易测试功能。");
+      setSubscriptionNote("");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "无法开通订阅。");
     }
   }
 
@@ -199,6 +222,59 @@ export default function AdminTenantsPage() {
                     <Save /> 保存租户身份
                   </Button>
                 </div>
+                <section className="grid gap-3 border-t pt-5">
+                  <div>
+                    <h2 className="font-medium">开通订阅</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      开通后，工作区才能保存策略、连接模拟交易所并提交测试订单。
+                    </p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>订阅套餐</Label>
+                    <Select value={planId} onValueChange={setPlanId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择已启用的套餐" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {plans.data
+                          ?.filter((plan) => plan.active === "active")
+                          .map((plan) => (
+                            <SelectItem key={plan.id} value={plan.id}>
+                              {plan.name}（{plan.duration_days} 天）
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="subscription-ends-at">到期时间</Label>
+                    <Input
+                      id="subscription-ends-at"
+                      onChange={(event) => setSubscriptionEndsAt(event.target.value)}
+                      required
+                      type="datetime-local"
+                      value={subscriptionEndsAt}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor="subscription-note">备注</Label>
+                    <Input
+                      id="subscription-note"
+                      maxLength={1000}
+                      onChange={(event) => setSubscriptionNote(event.target.value)}
+                      value={subscriptionNote}
+                    />
+                  </div>
+                  <Button
+                    disabled={
+                      grantSubscription.isPending || !planId || !subscriptionEndsAt
+                    }
+                    onClick={grantAccess}
+                    type="button"
+                  >
+                    开通订阅
+                  </Button>
+                </section>
               </>
             ) : (
               <p className="text-sm text-muted-foreground">请选择左侧租户。</p>
