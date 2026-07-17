@@ -1,4 +1,8 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -10,7 +14,10 @@ from valuecell.server.db.models.saas_control import (
     ServicePlan,
     TenantSubscription,
 )
-from valuecell.server.services.saas_access_service import TenantAccessService
+from valuecell.server.services.saas_access_service import (
+    TenantAccessService,
+    require_active_tenant,
+)
 
 
 def test_subscription_expiry_blocks_access_and_active_agreement_restores_it():
@@ -66,3 +73,19 @@ def test_subscription_expiry_blocks_access_and_active_agreement_restores_it():
         session.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+
+def test_platform_administrator_bypasses_workspace_activation() -> None:
+    platform_admin = SimpleNamespace(
+        is_platform_admin=True,
+        access_status="pending_activation",
+    )
+    pending_customer = SimpleNamespace(
+        is_platform_admin=False,
+        access_status="pending_activation",
+    )
+
+    require_active_tenant(platform_admin)
+
+    with pytest.raises(HTTPException, match="工作区尚未开通或服务已到期"):
+        require_active_tenant(pending_customer)

@@ -267,5 +267,6 @@ def test_platform_administrator_is_distinct_from_tenant_owner(
 
     assert platform_me["role"] == "owner"
     assert platform_me["is_platform_admin"] is True
+    assert platform_me["access_status"] == "active"
     assert tenant_owner_me["role"] == "owner"
     assert tenant_owner_me["is_platform_admin"] is False

@@ -103,12 +103,13 @@ def get_current_principal(
         )
     access = TenantAccessService.access_for(db, tenant_id)
     admin_emails = set(getattr(settings, "PLATFORM_ADMIN_EMAILS", ()))
+    is_platform_admin = user.email.lower() in admin_emails
     return CurrentPrincipal(
         user_id=user_id,
         tenant_id=tenant_id,
         role=membership.role,
-        is_platform_admin=user.email.lower() in admin_emails,
-        access_status=access.status,
+        is_platform_admin=is_platform_admin,
+        access_status="active" if is_platform_admin else access.status,
         commercial_model=access.commercial_model,
         access_expires_at=access.expires_at.isoformat() if access.expires_at else None,
     )

@@ -112,8 +112,10 @@ def require_tenant_permission(principal: object, permission: str) -> None:
 
 
 def require_active_tenant(principal: object) -> None:
-    """Block all tenant resource access after subscription or agreement expiry."""
+    """Block expired customer workspaces while preserving platform administration."""
 
+    if getattr(principal, "is_platform_admin", False):
+        return
     if getattr(principal, "access_status", "pending_activation") != "active":
         raise HTTPException(status_code=403, detail="工作区尚未开通或服务已到期")
 
