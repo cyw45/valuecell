@@ -95,8 +95,13 @@ def create_sandbox_exchange_router() -> APIRouter:
             request.provider, request.api_key, request.api_secret, request.passphrase
         )
         if not validation["validated"]:
+            error_code = validation.get("error_code", "credential_or_permission_error")
             raise HTTPException(
-                status_code=422, detail="Sandbox credentials could not be validated"
+                status_code=422,
+                detail={
+                    "code": "sandbox_validation_failed",
+                    "error_code": error_code,
+                },
             )
         secret = {"api_key": request.api_key, "api_secret": request.api_secret}
         if request.passphrase is not None:

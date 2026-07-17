@@ -294,8 +294,41 @@ def test_sandbox_validation_sanitizes_balance_failures_and_closes_exchange(
         "sandbox": True,
         "validated": False,
         "checked_at": response.json()["data"]["checked_at"],
+        "error_code": "credential_or_permission_error",
     }
     assert "failed-binance-key" not in str(response.json())
     assert "failed-binance-secret" not in str(response.json())
     assert fake_exchange.instances[0].calls == ["init", "sandbox", "fetch_balance", "close"]
     assert client.get("/saas/credentials").json()["data"] == []
+
+
+def test_sandbox_okx_validation_classifies_market_metadata_errors_without_leaking_credentials(
+    credential_client: tuple[TestClient, list[CurrentPrincipal]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    client, _ = credential_client
+    fake_exchange = _fake_exchange_class(fail_balance=True)
+
+    async def fail_with_market_metadata_error(self) -> dict:
+        self.calls.append("fetch_balance")
+        raise TypeError("'<' not supported between instances of 'NoneType' and 'str'")
+
+    fake_exchange.fetch_balance = fail_with_market_metadata_error
+    monkeypatch.setattr(sandbox_exchange_module.ccxtpro, "okx", fake_exchange)
+    response = client.post(
+        "/saas/credentials/sandbox/validate",
+        json={
+            "provider": "okx",
+            "api_key": "okx-key-must-not-leak",
+            "api_secret": "okx-secret-must-not-leak",
+            "passphrase": "okx-passphrase-must-not-leak",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["validated"] is False
+    assert response.json()["data"]["error_code"] == "market_metadata_error"
+    assert "okx-key-must-not-leak" not in str(response.json())
+    assert "okx-secret-must-not-leak" not in str(response.json())
+    assert "okx-passphrase-must-not-leak" not in str(response.json())
+    assert fake_exchange.instances[0].calls == ["init", "sandbox", "fetch_balance", "close"]

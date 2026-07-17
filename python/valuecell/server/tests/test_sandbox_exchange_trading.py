@@ -113,6 +113,30 @@ def test_validated_connection_is_encrypted_and_metadata_only(sandbox_client):
     assert "testnet-api-key" not in str(body)
 
 
+def test_connection_failure_returns_only_safe_error_codes(sandbox_client, monkeypatch: pytest.MonkeyPatch):
+    client, _, _ = sandbox_client
+
+    async def invalid_credentials(self) -> dict:
+        self._private("fetch_balance")
+        raise RuntimeError("invalid sandbox credentials")
+
+    monkeypatch.setattr(validation_module.ccxtpro.binance, "fetch_balance", invalid_credentials)
+    request = connection_request(
+        api_key="connection-failure-key",
+        api_secret="connection-failure-secret",
+    )
+
+    response = client.post("/saas/sandbox-exchanges/connections", json=request)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "sandbox_validation_failed",
+        "error_code": "credential_or_permission_error",
+    }
+    assert "connection-failure-key" not in response.text
+    assert "connection-failure-secret" not in response.text
+
+
 def test_balance_is_sanitized_and_private_calls_use_sandbox(sandbox_client):
     client, _, fake_exchange = sandbox_client
     credential_id = create_connection(client)

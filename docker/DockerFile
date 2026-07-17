@@ -7,9 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app/python
 
-# Reuse the previously built dependency environment and replace only runtime
-# source/config. This keeps local deploys working when external registries are
-# unreachable during a rebuild.
+# The lockfile is copied before source so dependency changes invalidate this layer.
+COPY python/pyproject.toml python/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project
+
+# Replace only runtime source/config after the locked dependency layer.
 RUN rm -rf /app/python/valuecell /app/python/configs /app/python/apscheduler
 COPY python/valuecell ./valuecell
 COPY python/configs ./configs
