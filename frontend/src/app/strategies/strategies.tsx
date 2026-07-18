@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { cn } from "@/lib/utils";
 import type {
   AdvancedRuleSetConfig,
@@ -634,9 +635,7 @@ export function RuleStrategyConfiguration({
 }) {
   const { t } = useTranslation();
   const [values, setValues] = useState<StrategyFormValues>(initialValues);
-  const [strategyId, setStrategyId] = useState(
-    () => localStorage.getItem("valuecell.rule-strategy-id") ?? "",
-  );
+  const [strategyId, setStrategyId] = useActiveRuleStrategyId();
   const [name, setName] = useState(() =>
     t("saas.operations.strategy.defaultName"),
   );
@@ -827,6 +826,34 @@ export function RuleStrategyConfiguration({
         "请输入 1 至 100,000,000 USDT 之间的单笔开仓金额。";
     if (values.leverage < 1 || values.leverage > 5)
       next.leverage = t("saas.operations.strategy.errors.leverageRange");
+    if (values.executionEnvironment === "okx_demo") {
+      if (!values.sandboxConnectionId)
+        next.sandboxConnectionId = "请选择已验证的 OKX Demo 连接。";
+      if (
+        !Number.isFinite(values.maxDemoOrderQuoteAmount) ||
+        values.maxDemoOrderQuoteAmount < 1 ||
+        values.maxDemoOrderQuoteAmount > 10_000
+      )
+        next.maxDemoOrderQuoteAmount = "单笔上限必须在 1 至 10,000 USDT 之间。";
+      if (
+        !Number.isFinite(values.maxDemoDailyQuoteAmount) ||
+        values.maxDemoDailyQuoteAmount < 1 ||
+        values.maxDemoDailyQuoteAmount > 100_000
+      )
+        next.maxDemoDailyQuoteAmount =
+          "每日上限必须在 1 至 100,000 USDT 之间。";
+      if (
+        !Number.isFinite(values.maxDemoTotalQuoteAmount) ||
+        values.maxDemoTotalQuoteAmount < 1 ||
+        values.maxDemoTotalQuoteAmount > 100_000
+      )
+        next.maxDemoTotalQuoteAmount =
+          "策略总额度必须在 1 至 100,000 USDT 之间。";
+      if (values.maxDemoOrderQuoteAmount > values.maxDemoDailyQuoteAmount)
+        next.maxDemoDailyQuoteAmount = "每日上限不得低于单笔上限。";
+      if (values.maxDemoOrderQuoteAmount > values.maxDemoTotalQuoteAmount)
+        next.maxDemoTotalQuoteAmount = "策略总额度不得低于单笔上限。";
+    }
     return next;
   }, [t, values]);
 
@@ -890,11 +917,24 @@ export function RuleStrategyConfiguration({
     stopStrategy.isPending ||
     parseStrategyText.isPending;
   const storedStrategy = strategyQuery.data;
+  const executionTargetLocked = storedStrategy?.status === "running";
   const savePending = createStrategy.isPending || updateStrategy.isPending;
   const selectionLimitReached = values.symbols.length >= 100;
   const ConfigurationHeading = embedded ? "h2" : "h1";
 
   const saveStrategy = async () => {
+    if (
+      executionTargetLocked &&
+      (storedStrategy.config.execution.environment !==
+        values.executionEnvironment ||
+        storedStrategy.config.execution.sandbox_connection_id !==
+          (values.executionEnvironment === "okx_demo"
+            ? values.sandboxConnectionId
+            : undefined))
+    ) {
+      toast.error("请先停止策略，再切换执行环境或 OKX Demo 连接。");
+      return;
+    }
     if (!isValid) return;
     const request = {
       name: name.trim() || t("saas.operations.strategy.defaultName"),
@@ -910,7 +950,6 @@ export function RuleStrategyConfiguration({
           });
       const saved = response.data;
       setStrategyId(saved.strategy_id);
-      localStorage.setItem("valuecell.rule-strategy-id", saved.strategy_id);
       if (saved.strategy_id === strategyId) {
         await strategyQuery.refetch();
       }
@@ -1041,12 +1080,13 @@ export function RuleStrategyConfiguration({
             <RuleHeading
               icon={ShieldCheck}
               title="执行环境"
-              description="纸面交易只写入 ValueCell 模拟账本；OKX Demo 会向已绑定的 OKX 模拟盘发送现货订单。"
+              description="执行路径固定为纸面验证 → OKX Demo 自动下单 → 独立实盘风控与人工授权；当前切换不会触发实盘。"
             />
             <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
               <div className="grid gap-1.5">
                 <Label htmlFor="execution-environment">执行模式</Label>
                 <Select
+                  disabled={executionTargetLocked}
                   value={values.executionEnvironment}
                   onValueChange={(value) => {
                     const environment = value as "paper" | "okx_demo";
@@ -1070,18 +1110,27 @@ export function RuleStrategyConfiguration({
                     </SelectItem>
                   </SelectContent>
                 </Select>
+                <p className="text-muted-foreground text-xs">
+                  {executionTargetLocked
+                    ? "策略运行中。请先停止，保存新的执行目标后再启动。"
+                    : "切换会保留策略规则与单笔金额，只替换订单执行目标。"}
+                </p>
               </div>
               {values.executionEnvironment === "okx_demo" ? (
                 <>
                   <div className="grid gap-1.5">
                     <Label htmlFor="okx-demo-connection">OKX Demo 连接</Label>
                     <Select
+                      disabled={executionTargetLocked}
                       value={values.sandboxConnectionId}
                       onValueChange={(value) =>
                         update("sandboxConnectionId", value)
                       }
                     >
-                      <SelectTrigger id="okx-demo-connection">
+                      <SelectTrigger
+                        aria-invalid={Boolean(errors.sandboxConnectionId)}
+                        id="okx-demo-connection"
+                      >
                         <SelectValue placeholder="选择已验证的 OKX Demo 连接" />
                       </SelectTrigger>
                       <SelectContent>
@@ -1092,6 +1141,11 @@ export function RuleStrategyConfiguration({
                         ))}
                       </SelectContent>
                     </Select>
+                    {errors.sandboxConnectionId ? (
+                      <p className="text-destructive text-xs" role="alert">
+                        {errors.sandboxConnectionId}
+                      </p>
+                    ) : null}
                     {okxDemoConnections.length === 0 ? (
                       <p className="text-destructive text-xs">
                         未发现已验证的 OKX Demo 现货连接，请先前往“设置 →
@@ -1100,6 +1154,7 @@ export function RuleStrategyConfiguration({
                     ) : null}
                   </div>
                   <NumericField
+                    error={errors.maxDemoOrderQuoteAmount}
                     id="okx-demo-order-limit"
                     label="OKX Demo 单笔最大金额"
                     value={values.maxDemoOrderQuoteAmount}
@@ -1111,6 +1166,19 @@ export function RuleStrategyConfiguration({
                     unit="USDT"
                   />
                   <NumericField
+                    error={errors.maxDemoDailyQuoteAmount}
+                    id="okx-demo-daily-limit"
+                    label="OKX Demo 每日最大金额"
+                    value={values.maxDemoDailyQuoteAmount}
+                    onChange={(value) =>
+                      update("maxDemoDailyQuoteAmount", value)
+                    }
+                    min={1}
+                    max={100_000}
+                    unit="USDT"
+                  />
+                  <NumericField
+                    error={errors.maxDemoTotalQuoteAmount}
                     id="okx-demo-total-limit"
                     label="OKX Demo 策略总额度上限"
                     value={values.maxDemoTotalQuoteAmount}
@@ -1129,6 +1197,15 @@ export function RuleStrategyConfiguration({
                       凭证发送订单。系统强制杠杆为
                       1、限价由以上额度控制，并以确定性订单号防止同一根 K
                       线重复下单；不会访问实盘账户。
+                    </AlertDescription>
+                  </Alert>
+                  <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
+                    <LockKeyhole />
+                    <AlertTitle>实盘过渡需要独立授权</AlertTitle>
+                    <AlertDescription>
+                      当前策略页不会把纸面或 Demo 策略自动切换为实盘。完成 Demo
+                      验证后，必须在 “设置 →
+                      实盘交易”单独配置交易所连接、服务端风控、策略绑定与启动授权。
                     </AlertDescription>
                   </Alert>
                 </>
@@ -2012,18 +2089,22 @@ export function RuleStrategyConfiguration({
           <Card className="gap-0 rounded-lg py-0 shadow-none">
             <CardHeader className="border-b px-4 py-4">
               <CardTitle className="flex items-center gap-2 text-base">
-                <CircleDollarSign />{" "}
-                {t("saas.operations.strategy.paperStrategy.title")}
+                <CircleDollarSign />
+                {storedStrategy?.config.execution.environment === "okx_demo"
+                  ? "OKX Demo 执行控制"
+                  : t("saas.operations.strategy.paperStrategy.title")}
               </CardTitle>
               <CardDescription>
-                {storedStrategy
-                  ? t("saas.operations.strategy.paperStrategy.status", {
-                      name: storedStrategy.name,
-                      status: storedStrategy.status,
-                    })
-                  : isValid
-                    ? t("saas.operations.strategy.paperStrategy.valid")
-                    : t("saas.operations.strategy.paperStrategy.resolve")}
+                {storedStrategy?.config.execution.environment === "okx_demo"
+                  ? "策略规则保持不变；停止后可切换回纸面账本或更换已验证的 Demo 连接。"
+                  : storedStrategy
+                    ? t("saas.operations.strategy.paperStrategy.status", {
+                        name: storedStrategy.name,
+                        status: storedStrategy.status,
+                      })
+                    : isValid
+                      ? t("saas.operations.strategy.paperStrategy.valid")
+                      : t("saas.operations.strategy.paperStrategy.resolve")}
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 px-4 py-4">

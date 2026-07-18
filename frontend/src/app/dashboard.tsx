@@ -41,6 +41,14 @@ import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -56,6 +64,7 @@ import {
 } from "@/components/valuecell/charts/market-indicator-panel";
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
 import { ThresholdGauge } from "@/components/valuecell/charts/threshold-gauge";
+import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { cn } from "@/lib/utils";
 
 const currency = new Intl.NumberFormat("en-US", {
@@ -67,6 +76,36 @@ const compactCurrency = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 2,
 });
+
+const MARKET_INTERVALS = [
+  "1m",
+  "3m",
+  "5m",
+  "15m",
+  "30m",
+  "1h",
+  "4h",
+  "1d",
+] as const;
+const MARKET_HISTORY_RANGES = [
+  { value: "10d", label: "10D", days: 10 },
+  { value: "30d", label: "30D", days: 30 },
+  { value: "90d", label: "90D", days: 90 },
+  { value: "1y", label: "1Y", days: 365 },
+] as const;
+const MARKET_INTERVAL_SECONDS: Record<
+  (typeof MARKET_INTERVALS)[number],
+  number
+> = {
+  "1m": 60,
+  "3m": 180,
+  "5m": 300,
+  "15m": 900,
+  "30m": 1_800,
+  "1h": 3_600,
+  "4h": 14_400,
+  "1d": 86_400,
+};
 
 function toDashboardSymbol(symbol: string) {
   return symbol.replace("-", "/");
@@ -196,7 +235,7 @@ function KpiCard({
 export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const strategyId = localStorage.getItem("valuecell.rule-strategy-id") ?? "";
+  const [strategyId] = useActiveRuleStrategyId();
   const { data: ruleStrategy } = useRuleStrategy(strategyId);
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
@@ -227,20 +266,63 @@ export default function DashboardPage() {
   const marketSymbols =
     activeSymbols.length > 0 ? activeSymbols : trackedSymbols;
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USDT");
+  const [marketInterval, setMarketInterval] =
+    useState<(typeof MARKET_INTERVALS)[number]>("1h");
+  const [historyRange, setHistoryRange] =
+    useState<(typeof MARKET_HISTORY_RANGES)[number]["value"]>("10d");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
   const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
   const selectedIsAvailable = marketSymbols.includes(selectedSymbol);
   const effectiveSymbol =
     selectedIsAvailable || marketSymbols.length === 0
       ? selectedSymbol
       : marketSymbols[0];
+  const fromTsMs = useMemo(() => {
+    if (fromDate) return new Date(`${fromDate}T00:00:00Z`).getTime();
+    const days =
+      MARKET_HISTORY_RANGES.find((range) => range.value === historyRange)
+        ?.days ?? 10;
+    return requestNowMs - days * 24 * 60 * 60 * 1000;
+  }, [fromDate, historyRange, requestNowMs]);
+  const toTsMs = useMemo(
+    () =>
+      toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : requestNowMs,
+    [requestNowMs, toDate],
+  );
+  const invalidDateRange = fromTsMs > toTsMs;
+  const useSharedSnapshot =
+    marketInterval === "1h" && historyRange === "10d" && !fromDate && !toDate;
+  const lookback = useMemo(
+    () =>
+      Math.min(
+        5_000,
+        Math.max(
+          1,
+          Math.ceil(
+            (toTsMs - fromTsMs) /
+              (MARKET_INTERVAL_SECONDS[marketInterval] * 1000),
+          ) + 2,
+        ),
+      ),
+    [fromTsMs, marketInterval, toTsMs],
+  );
+  useEffect(() => {
+    if (ruleStrategy?.config.interval)
+      setMarketInterval(ruleStrategy.config.interval);
+  }, [ruleStrategy?.config.interval]);
   const {
     data: marketData,
     isFetching: marketLoading,
     isError: marketError,
   } = useGetCryptoMarketIndicators({
     symbols: [effectiveSymbol],
-    interval: ruleStrategy?.config.interval ?? "1h",
-    lookback: 240,
+    interval: marketInterval,
+    lookback: useSharedSnapshot ? 240 : lookback,
+    fromTsMs: useSharedSnapshot ? undefined : fromTsMs,
+    toTsMs: useSharedSnapshot ? undefined : toTsMs,
+    enabled: !invalidDateRange,
   });
   const market = marketData?.symbols[0];
   const marketFailure = marketData?.failed_symbols[effectiveSymbol];
@@ -675,57 +757,155 @@ export default function DashboardPage() {
 
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.72fr)_minmax(300px,0.78fr)]">
           <Card className="dashboard-panel overflow-hidden rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-500/10 text-sky-500">
-                  <CandlestickChart className="size-4" />
-                </span>
-                <div className="min-w-0">
-                  <h2 className="font-semibold">
-                    {toDashboardSymbol(effectiveSymbol)} 市场走势
-                  </h2>
-                  <p className="text-muted-foreground text-xs">
-                    {market?.latest_price
-                      ? `${market.latest_price.toLocaleString()} USDT`
-                      : "等待市场价格"}
-                    ，
-                    {market?.interval ?? ruleStrategy?.config.interval ?? "1h"}{" "}
-                    K 线
-                  </p>
+            <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-500/10 text-sky-500">
+                    <CandlestickChart className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="font-semibold">
+                      {toDashboardSymbol(effectiveSymbol)} 市场走势
+                    </h2>
+                    <p className="text-muted-foreground text-xs">
+                      {market?.latest_price
+                        ? `${market.latest_price.toLocaleString()} USDT`
+                        : "等待市场价格"}
+                      ，{market?.interval ?? marketInterval} K 线
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                  <div className="min-w-[132px] text-right">
+                    <p className="terminal-label">当前价格</p>
+                    {market?.latest_price != null ? (
+                      <p className="mt-1 whitespace-nowrap text-amber-500 text-lg dark:text-amber-300">
+                        <TerminalValue value={market.latest_price} />{" "}
+                        <span className="text-xs">USDT</span>
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-muted-foreground text-sm">
+                        等待行情
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant={
+                        marketFailure || marketError ? "destructive" : "outline"
+                      }
+                      className="gap-1 text-[11px]"
+                    >
+                      <RadioTower className="size-3" />{" "}
+                      {market?.provider ?? "行情数据源"}
+                    </Badge>
+                    {market?.freshness_status === "stale" ? (
+                      <Badge variant="outline">数据延迟</Badge>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-              <div className="flex flex-wrap items-center gap-3 md:justify-end">
-                <div className="min-w-[132px] text-right">
-                  <p className="terminal-label">当前价格</p>
-                  {market?.latest_price != null ? (
-                    <p className="mt-1 whitespace-nowrap text-amber-500 text-lg dark:text-amber-300">
-                      <TerminalValue value={market.latest_price} />{" "}
-                      <span className="text-xs">USDT</span>
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-muted-foreground text-sm">
-                      等待行情
-                    </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge
-                    variant={
-                      marketFailure || marketError ? "destructive" : "outline"
-                    }
-                    className="gap-1 text-[11px]"
+              <div className="flex flex-col gap-2 border-border/60 border-t pt-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select
+                    value={effectiveSymbol}
+                    onValueChange={setSelectedSymbol}
                   >
-                    <RadioTower className="size-3" />{" "}
-                    {market?.provider ?? "行情数据源"}
-                  </Badge>
-                  {market?.freshness_status === "stale" ? (
-                    <Badge variant="outline">数据延迟</Badge>
-                  ) : null}
+                    <SelectTrigger
+                      aria-label="图表交易对"
+                      className="h-8 w-32 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from(new Set(["BTC-USDT", ...marketSymbols])).map(
+                        (symbol) => (
+                          <SelectItem key={symbol} value={symbol}>
+                            {toDashboardSymbol(symbol)}
+                          </SelectItem>
+                        ),
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={marketInterval}
+                    onValueChange={(value) =>
+                      setMarketInterval(
+                        value as (typeof MARKET_INTERVALS)[number],
+                      )
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label="K 线周期"
+                      className="h-8 w-20 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MARKET_INTERVALS.map((interval) => (
+                        <SelectItem key={interval} value={interval}>
+                          {interval}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <div
+                    className="flex items-center gap-1"
+                    aria-label="历史范围"
+                  >
+                    {MARKET_HISTORY_RANGES.map((range) => (
+                      <Button
+                        key={range.value}
+                        onClick={() => {
+                          setHistoryRange(range.value);
+                          setFromDate("");
+                          setToDate("");
+                          setRequestNowMs(Date.now());
+                        }}
+                        size="sm"
+                        type="button"
+                        variant={
+                          historyRange === range.value && !fromDate && !toDate
+                            ? "secondary"
+                            : "ghost"
+                        }
+                      >
+                        {range.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Input
+                    aria-label="图表开始日期"
+                    className="h-8 w-36"
+                    onChange={(event) => {
+                      setFromDate(event.target.value);
+                      setRequestNowMs(Date.now());
+                    }}
+                    type="date"
+                    value={fromDate}
+                  />
+                  <span className="text-muted-foreground">至</span>
+                  <Input
+                    aria-label="图表结束日期"
+                    className="h-8 w-36"
+                    onChange={(event) => {
+                      setToDate(event.target.value);
+                      setRequestNowMs(Date.now());
+                    }}
+                    type="date"
+                    value={toDate}
+                  />
                 </div>
               </div>
             </div>
             <CardContent className="p-0">
-              {marketError || marketFailure ? (
+              {invalidDateRange ? (
+                <p className="py-28 text-center text-destructive text-sm">
+                  开始日期不能晚于结束日期。
+                </p>
+              ) : marketError || marketFailure ? (
                 <p className="py-28 text-center text-destructive text-sm">
                   市场数据暂时不可用。
                 </p>

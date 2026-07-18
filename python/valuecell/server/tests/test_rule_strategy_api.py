@@ -284,6 +284,23 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
     assert started.status_code == 200
     assert started.json()["data"]["status"] == "running"
 
+    target_change = client.patch(
+        f"/rule-strategies/{STRATEGY_ID}",
+        json={
+            "config": {
+                **_config(),
+                "execution": {
+                    "environment": "okx_demo",
+                    "sandbox_connection_id": "demo-connection",
+                },
+            }
+        },
+    )
+    assert target_change.status_code == 409
+    assert target_change.json()["detail"] == (
+        "Stop the strategy before changing its execution target"
+    )
+
     evaluated = client.post(
         f"/rule-strategies/{STRATEGY_ID}/evaluate", json=_evaluation_input()
     )

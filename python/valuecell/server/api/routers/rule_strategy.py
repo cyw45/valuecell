@@ -186,6 +186,23 @@ def create_rule_strategy_router(
         db=Depends(get_db),
     ) -> SuccessResponse[dict[str, Any]]:
         require_strategy_manage(principal)
+        if request.config is not None:
+            try:
+                current_strategy = rule_service.get(strategy_id, principal.tenant_id)
+            except RuleStrategyNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            current_execution = current_strategy["config"].get("execution", {})
+            requested_execution = request.config.execution
+            if current_strategy["status"] == "running" and (
+                current_execution.get("environment", "paper")
+                != requested_execution.environment
+                or current_execution.get("sandbox_connection_id")
+                != requested_execution.sandbox_connection_id
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Stop the strategy before changing its execution target",
+                )
         if request.config is not None and request.config.execution.environment == "okx_demo":
             connection_id = request.config.execution.sandbox_connection_id or ""
             credential = db.query(TenantCredential).filter_by(

@@ -86,6 +86,7 @@ export default function ChartsPage() {
       toDate ? new Date(`${toDate}T23:59:59.999Z`).getTime() : requestNowMs,
     [requestNowMs, toDate],
   );
+  const invalidDateRange = fromTsMs > toTsMs;
   const useSharedSnapshot =
     interval === "1h" && historyRange === "10d" && !fromDate && !toDate;
   const lookback = useMemo(
@@ -103,6 +104,7 @@ export default function ChartsPage() {
     lookback: useSharedSnapshot ? 240 : lookback,
     fromTsMs: useSharedSnapshot ? undefined : fromTsMs,
     toTsMs: useSharedSnapshot ? undefined : toTsMs,
+    enabled: !invalidDateRange,
   });
   const market = data?.symbols.find((item) => item.symbol === symbol);
   const failedReason = data?.failed_symbols?.[symbol];
@@ -251,7 +253,11 @@ export default function ChartsPage() {
                 <Badge variant="outline">Data delayed</Badge>
               ) : null}
             </div>
-            {isError || failedReason ? (
+            {invalidDateRange ? (
+              <p className="px-6 py-28 text-center text-sm text-destructive">
+                开始日期不能晚于结束日期。
+              </p>
+            ) : isError || failedReason ? (
               <p className="px-6 py-28 text-center text-sm text-destructive">
                 {t("saas.charts.marketUnavailable")}
                 {failedReason ? `：${failedReason}` : ""}

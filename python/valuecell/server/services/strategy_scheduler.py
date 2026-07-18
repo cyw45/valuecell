@@ -21,7 +21,6 @@ from valuecell.server.api.schemas.rule_strategy import (
 from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
-from valuecell.server.services.live_execution_service import LiveExecutionService
 from valuecell.server.services.sandbox_exchange_trading_service import (
     SandboxExchangeTradingService,
 )
@@ -328,7 +327,6 @@ class StrategyScheduler:
                     Decimal(str(result["sizing"]["requested_quote"])),
                     Decimal(str(market.price)),
                     candles[-1].timestamp_ms,
-                    result["evaluation_id"],
                 )
                 if config.execution.environment == "okx_demo":
                     self._record_execution(tenant_id, strategy_id, result["evaluation_id"], execution)
@@ -362,31 +360,19 @@ class StrategyScheduler:
         quote_amount: Decimal,
         price: Decimal,
         candle_timestamp_ms: int,
-        evaluation_id: str,
     ) -> dict[str, Any]:
-        if config.execution.environment == "okx_demo":
-            execution = await StrategyScheduler._execute_okx_demo_signal(
-                tenant_id,
-                strategy_id,
-                config,
-                symbol,
-                action,
-                quote_amount,
-                price,
-                candle_timestamp_ms,
-            )
-        else:
-            execution = await StrategyScheduler._execute_live_signal(
-                tenant_id,
-                strategy_id,
-                symbol,
-                action,
-                quote_amount,
-                price,
-                candle_timestamp_ms,
-                evaluation_id,
-            )
-        return execution
+        if config.execution.environment == "paper":
+            return {"execution": "paper_filled", "sandbox": False}
+        return await StrategyScheduler._execute_okx_demo_signal(
+            tenant_id,
+            strategy_id,
+            config,
+            symbol,
+            action,
+            quote_amount,
+            price,
+            candle_timestamp_ms,
+        )
 
     @staticmethod
     async def _execute_okx_demo_signal(
@@ -453,51 +439,3 @@ class StrategyScheduler:
         finally:
             session.close()
 
-    @staticmethod
-    async def _execute_live_signal(
-        tenant_id: str,
-        strategy_id: str,
-        symbol: str,
-        action: str,
-        quote_amount: Decimal,
-        price: Decimal,
-        candle_timestamp_ms: int,
-        evaluation_id: str,
-    ) -> dict[str, Any]:
-        session = get_database_manager().get_session()
-        execution: dict[str, Any]
-        try:
-            execution = await LiveExecutionService(session).execute_strategy_signal(
-                tenant_id,
-                strategy_id,
-                symbol,
-                action,
-                quote_amount,
-                price,
-                candle_timestamp_ms,
-            )
-        except Exception:
-            session.rollback()
-            execution = {"execution": "blocked", "reason": "实盘执行服务不可用"}
-        try:
-            journal = (
-                session.query(RuleStrategyEvaluationJournal)
-                .filter_by(
-                    evaluation_id=evaluation_id,
-                    tenant_id=tenant_id,
-                    strategy_id=strategy_id,
-                )
-                .first()
-            )
-            if journal is not None:
-                entries = list(journal.trades or [])
-                if entries:
-                    entries[-1] = {**entries[-1], **execution}
-                    journal.trades = entries
-                    session.commit()
-            return execution
-        except Exception:
-            session.rollback()
-            return {"execution": "blocked", "reason": "实盘执行服务不可用"}
-        finally:
-            session.close()

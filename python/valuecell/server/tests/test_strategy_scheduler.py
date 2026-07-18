@@ -47,6 +47,24 @@ async def test_sync_does_not_postpone_unchanged_running_strategy(monkeypatch):
         await scheduler.stop()
 
 
+
+@pytest.mark.asyncio
+async def test_paper_execution_never_routes_to_a_live_connection() -> None:
+    config = RuleStrategyConfig(symbols=["BTC-USDT"])
+
+    result = await strategy_scheduler.StrategyScheduler._execute_signal(
+        "tenant-a",
+        "rule-a",
+        config,
+        "BTC-USDT",
+        "buy",
+        Decimal("100"),
+        Decimal("50000"),
+        1234,
+    )
+
+    assert result == {"execution": "paper_filled", "sandbox": False}
+
 @pytest.mark.asyncio
 async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministic_id(monkeypatch):
     calls = []
