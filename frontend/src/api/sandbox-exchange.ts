@@ -6,12 +6,15 @@ import type {
   SandboxConnection,
   SandboxConnectionBalance,
   SandboxOrder,
+  SandboxPositions,
 } from "@/types/sandbox-exchange";
 
 const sandboxExchangeKeys = {
   connections: ["sandbox-exchanges", "connections"] as const,
   balance: (connectionId: string) =>
     ["sandbox-exchanges", "connections", connectionId, "balance"] as const,
+  positions: (connectionId: string) =>
+    ["sandbox-exchanges", "connections", connectionId, "positions"] as const,
   orders: (connectionId?: string) =>
     ["sandbox-exchanges", "orders", connectionId ?? "all"] as const,
 };
@@ -47,7 +50,7 @@ export const useCreateSandboxConnection = () => {
   });
 };
 
-export const useSandboxBalance = (connectionId?: string) =>
+export const useSandboxBalance = (connectionId?: string, enabled = false) =>
   useQuery({
     queryKey: sandboxExchangeKeys.balance(connectionId ?? ""),
     queryFn: () =>
@@ -56,7 +59,21 @@ export const useSandboxBalance = (connectionId?: string) =>
         { requiresAuth: true },
       ),
     select: (response) => response.data,
-    enabled: false,
+    enabled: Boolean(connectionId) && enabled,
+    refetchInterval: enabled ? 30_000 : false,
+  });
+
+export const useSandboxPositions = (connectionId?: string, enabled = false) =>
+  useQuery({
+    queryKey: sandboxExchangeKeys.positions(connectionId ?? ""),
+    queryFn: () =>
+      apiClient.get<ApiResponse<SandboxPositions>>(
+        `${basePath}/connections/${connectionId}/positions`,
+        { requiresAuth: true },
+      ),
+    select: (response) => response.data,
+    enabled: Boolean(connectionId) && enabled,
+    refetchInterval: enabled ? 30_000 : false,
   });
 
 export const useSandboxOrders = (connectionId?: string) =>

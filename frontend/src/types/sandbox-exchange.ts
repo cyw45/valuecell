@@ -29,11 +29,34 @@ export interface SandboxBalance {
   currency: string;
   free: string | number;
   used: string | number;
+  frozen: string | number;
   total: string | number;
+  mark_price_usdt: number | null;
+  usdt_value: number | null;
+  valuation_status: "priced" | "unpriced";
 }
 
 export interface SandboxConnectionBalance {
+  source: "okx_demo" | "binance_demo";
   balances: SandboxBalance[];
+  total_usdt_value: number;
+  checked_at: string;
+}
+
+export interface SandboxPosition {
+  symbol: string;
+  base_currency: string;
+  quantity: number;
+  available_quantity: number;
+  frozen_quantity: number;
+  mark_price: number | null;
+  notional_usdt: number | null;
+  unrealized_pnl_usdt: null;
+}
+
+export interface SandboxPositions {
+  source: "okx_demo" | "binance_demo";
+  positions: SandboxPosition[];
   checked_at: string;
 }
 

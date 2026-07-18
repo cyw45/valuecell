@@ -47,23 +47,100 @@ class SandboxExchangeTradingService:
         return [self._connection_metadata(item) for item in credentials if self._is_sandbox_spot(item)]
 
     async def balance(self, tenant_id: str, credential_id: str) -> dict[str, Any]:
+        """Return the exchange's Demo spot balance, with conservative USDT valuation.
+
+        Assets without a direct active ``ASSET/USDT`` ticker are retained but marked
+        unpriced; they are never silently treated as zero-value positions.
+        """
         credential = self._active_sandbox_credential(tenant_id, credential_id)
         exchange = self._exchange_for(tenant_id, credential)
         try:
             exchange.set_sandbox_mode(True)
             raw = await exchange.fetch_balance()
+            totals = raw.get("total", {}) if isinstance(raw, dict) else {}
+            free = raw.get("free", {}) if isinstance(raw, dict) else {}
+            used = raw.get("used", {}) if isinstance(raw, dict) else {}
+            currencies = sorted(set(totals) | set(free) | set(used))
+            balances: list[dict[str, Any]] = []
+            total_value = Decimal("0")
+            for currency in currencies:
+                total = self._decimal_or_zero(totals.get(currency))
+                available = self._decimal_or_zero(free.get(currency))
+                held = self._decimal_or_zero(used.get(currency))
+                if not any(value != 0 for value in (total, available, held)):
+                    continue
+                mark_price: Decimal | None = Decimal("1") if currency == "USDT" else None
+                if currency != "USDT":
+                    try:
+                        ticker = await exchange.fetch_ticker(f"{currency}/USDT")
+                        mark_price = self._decimal(
+                            ticker.get("last") if isinstance(ticker, dict) else None,
+                            "Ticker price unavailable",
+                        )
+                    except Exception:
+                        mark_price = None
+                value = total * mark_price if mark_price is not None else None
+                if value is not None:
+                    total_value += value
+                balances.append(
+                    {
+                        "currency": currency,
+                        "total": float(total),
+                        "free": float(available),
+                        "used": float(held),
+                        "frozen": float(held),
+                        "mark_price_usdt": float(mark_price) if mark_price is not None else None,
+                        "usdt_value": float(value) if value is not None else None,
+                        "valuation_status": "priced" if value is not None else "unpriced",
+                    }
+                )
+            return {
+                "source": f"{credential.provider}_demo",
+                "balances": balances,
+                "total_usdt_value": float(total_value),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
         finally:
             await self._close(exchange)
-        totals = raw.get("total", {}) if isinstance(raw, dict) else {}
-        free = raw.get("free", {}) if isinstance(raw, dict) else {}
-        used = raw.get("used", {}) if isinstance(raw, dict) else {}
-        currencies = sorted(set(totals) | set(free) | set(used))
-        balances = []
-        for currency in currencies:
-            total, available, held = totals.get(currency), free.get(currency), used.get(currency)
-            if any(self._nonzero(value) for value in (total, available, held)):
-                balances.append({"currency": currency, "total": total or 0, "free": available or 0, "used": held or 0})
-        return {"balances": balances, "checked_at": datetime.now(timezone.utc).isoformat()}
+
+    async def positions(self, tenant_id: str, credential_id: str) -> dict[str, Any]:
+        """Derive real spot positions from the Demo account balance, not local orders."""
+        account = await self.balance(tenant_id, credential_id)
+        positions = []
+        for balance in account["balances"]:
+            if balance["currency"] == "USDT" or not self._nonzero(balance["total"]):
+                continue
+            positions.append(
+                {
+                    "symbol": f"{balance['currency']}/USDT",
+                    "base_currency": balance["currency"],
+                    "quantity": balance["total"],
+                    "available_quantity": balance["free"],
+                    "frozen_quantity": balance["used"],
+                    "mark_price": balance["mark_price_usdt"],
+                    "notional_usdt": balance["usdt_value"],
+                    "unrealized_pnl_usdt": None,
+                }
+            )
+        return {"source": account["source"], "positions": positions, "checked_at": account["checked_at"]}
+
+    async def tradable_symbols(self, tenant_id: str, credential_id: str) -> list[dict[str, Any]]:
+        """Return the broad, exchange-authoritative active USDT spot universe."""
+        credential = self.validate_strategy_connection(tenant_id, credential_id)
+        exchange = self._exchange_for(tenant_id, credential)
+        try:
+            exchange.set_sandbox_mode(True)
+            markets = await exchange.load_markets()
+            result = []
+            for symbol, market in markets.items():
+                if not isinstance(market, dict) or not market.get("spot") or market.get("active") is False:
+                    continue
+                if market.get("quote") != "USDT" or not market.get("base"):
+                    continue
+                result.append({"symbol": symbol, "base": market["base"], "quote": "USDT"})
+            return sorted(result, key=lambda item: item["symbol"])
+        finally:
+            await self._close(exchange)
 
     async def submit_order(
         self,
@@ -112,17 +189,55 @@ class SandboxExchangeTradingService:
         exchange = self._exchange_for(tenant_id, credential)
         try:
             exchange.set_sandbox_mode(True)
-            if quantity is None:
-                ticker = await exchange.fetch_ticker(symbol)
-                last = self._decimal(ticker.get("last") if isinstance(ticker, dict) else None, "Ticker price unavailable")
-                quantity = quote_amount / last
-                order.requested_quantity = str(quantity)
+            markets = await exchange.load_markets()
+            market = markets.get(symbol) if isinstance(markets, dict) else None
+            if (
+                not isinstance(market, dict)
+                or not market.get("spot")
+                or market.get("active") is False
+                or market.get("quote") != "USDT"
+            ):
+                raise SandboxTradingError("Symbol is not an active USDT spot market on OKX Demo")
+            ticker = await exchange.fetch_ticker(symbol)
+            market_price = self._decimal(
+                ticker.get("last") if isinstance(ticker, dict) else None,
+                "Ticker price unavailable",
+            )
+            effective_price = price or market_price
+            quantity = quote_amount / effective_price
+            precision = getattr(exchange, "amount_to_precision", None)
+            if callable(precision):
+                quantity = self._decimal(precision(symbol, float(quantity)), "Order amount unavailable")
+            limits = market.get("limits") or {}
+            min_amount = self._decimal_or_zero((limits.get("amount") or {}).get("min"))
+            min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
+            if quantity <= 0 or (min_amount > 0 and quantity < min_amount) or (min_cost > 0 and quote_amount < min_cost):
+                raise SandboxTradingError("Order does not satisfy OKX Demo minimum size")
+            raw_balance = await exchange.fetch_balance()
+            free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
+            required_currency = "USDT" if side == "buy" else str(market.get("base") or "")
+            required_amount = quote_amount if side == "buy" else quantity
+            if self._decimal_or_zero(free.get(required_currency)) < required_amount:
+                raise SandboxTradingError("Insufficient available Demo balance")
+            if order_type == "limit" and price is None:
+                raise SandboxTradingError("Limit orders require a price")
             exchange.set_sandbox_mode(True)
-            exchange_order = await exchange.create_order(symbol, order_type, side, float(quantity), float(price) if price is not None else None, {"clientOrderId": client_order_id})
+            exchange_order = await exchange.create_order(
+                symbol,
+                order_type,
+                side,
+                float(quantity),
+                float(price) if price is not None else None,
+                {"clientOrderId": client_order_id},
+            )
+            order.requested_quantity = str(quantity)
             order.status = str(exchange_order.get("status") or "submitted")
             exchange_id = exchange_order.get("id")
             order.exchange_order_id = str(exchange_id) if exchange_id is not None else None
             order.response_metadata = self._safe_exchange_metadata(exchange_order)
+        except SandboxTradingError:
+            order.status = "failed"
+            order.error_code = "sandbox_order_rejected"
         except Exception:
             order.status = "failed"
             order.error_code = "sandbox_order_rejected"
@@ -151,6 +266,27 @@ class SandboxExchangeTradingService:
         finally:
             await self._close(exchange)
         return self._order_metadata(order)
+
+    async def refresh_open_orders(
+        self, tenant_id: str, credential_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Poll non-terminal orders so UI and risk checks do not rely on stale pending states."""
+        query = self.db.query(SandboxExchangeOrder).filter_by(tenant_id=tenant_id)
+        if credential_id:
+            query = query.filter_by(credential_id=credential_id)
+        order_ids = [
+            order.id
+            for order in query.all()
+            if getattr(order, "exchange_order_id", None)
+            and order.status not in {"closed", "canceled", "cancelled", "failed", "rejected"}
+        ]
+        refreshed = []
+        for order_id in order_ids:
+            try:
+                refreshed.append(await self.fetch_order_status(tenant_id, order_id))
+            except SandboxTradingError:
+                continue
+        return refreshed
 
     def list_orders(self, tenant_id: str, credential_id: str | None = None) -> list[dict[str, Any]]:
         query = self.db.query(SandboxExchangeOrder).filter_by(tenant_id=tenant_id)
@@ -188,10 +324,15 @@ class SandboxExchangeTradingService:
         except Exception:
             pass
 
-    @classmethod
-    def _is_sandbox_spot(cls, credential: TenantCredential) -> bool:
+    def _is_sandbox_spot(self, credential: TenantCredential) -> bool:
         metadata = credential.metadata_json or {}
-        return credential.provider in cls._PROVIDERS and metadata.get("sandbox") is True and metadata.get("market_type") == "spot"
+        return credential.provider in self._PROVIDERS and metadata.get("sandbox") is True and metadata.get("market_type") == "spot"
+
+    def validate_strategy_connection(self, tenant_id: str, credential_id: str) -> TenantCredential:
+        credential = self._active_sandbox_credential(tenant_id, credential_id)
+        if credential.provider != "okx":
+            raise SandboxTradingError("Only an OKX Demo spot connection can execute a strategy")
+        return credential
 
     @staticmethod
     def _connection_metadata(credential: TenantCredential) -> dict[str, Any]:
@@ -206,6 +347,13 @@ class SandboxExchangeTradingService:
         if not isinstance(raw, dict):
             return {}
         return {key: raw[key] for key in ("id", "status", "symbol", "side", "type", "amount", "filled", "remaining", "price", "cost", "timestamp") if key in raw}
+
+    @staticmethod
+    def _decimal_or_zero(value: Any) -> Decimal:
+        try:
+            return Decimal(str(value or 0))
+        except (InvalidOperation, ValueError, TypeError):
+            return Decimal("0")
 
     @staticmethod
     def _nonzero(value: Any) -> bool:

@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
+from valuecell.server.db.connection import get_db
 
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
@@ -110,7 +113,82 @@ def _client() -> TestClient:
         )
     )
     app.dependency_overrides[get_current_principal] = lambda: FIXED_PRINCIPAL
+    app.dependency_overrides[get_db] = lambda: SimpleNamespace(query=lambda _model: SimpleNamespace(filter_by=lambda **_kwargs: SimpleNamespace(first=lambda: None)))
     return TestClient(app)
+
+
+def test_okx_demo_execution_config_requires_a_sandbox_connection_and_spot_risk_limits():
+    from pydantic import ValidationError
+    from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
+
+    with pytest.raises(ValidationError, match="sandbox_connection_id"):
+        RuleStrategyConfig.model_validate(
+            {**_config(), "execution": {"environment": "okx_demo"}}
+        )
+
+    with pytest.raises(ValidationError, match="leverage 1"):
+        RuleStrategyConfig.model_validate(
+            {
+                **_config(),
+                "risk": {**_config()["risk"], "leverage": 2},
+                "execution": {
+                    "environment": "okx_demo",
+                    "sandbox_connection_id": "sandbox-okx-1",
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError, match="max_daily_quote_amount"):
+        RuleStrategyConfig.model_validate(
+            {
+                **_config(),
+                "execution": {
+                    "environment": "okx_demo",
+                    "sandbox_connection_id": "sandbox-okx-1",
+                    "max_order_quote_amount": 500,
+                    "max_daily_quote_amount": 100,
+                },
+            }
+        )
+
+    config = RuleStrategyConfig.model_validate(
+        {
+            **_config(),
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "sandbox-okx-1",
+                "max_order_quote_amount": 250,
+                "max_daily_quote_amount": 750,
+            },
+        }
+    )
+    assert config.execution.environment == "okx_demo"
+    assert config.execution.sandbox_connection_id == "sandbox-okx-1"
+    assert config.execution.max_order_quote_amount == 250
+    assert config.execution.max_daily_quote_amount == 750
+
+
+
+def test_rule_strategy_api_rejects_unverified_okx_demo_connection_without_leaking_details():
+    client = _client()
+    response = client.post(
+        "/rule-strategies",
+        json={
+            "name": "Demo strategy",
+            "config": {
+                **_config(),
+                "execution": {
+                    "environment": "okx_demo",
+                    "sandbox_connection_id": "not-owned-or-not-demo",
+                },
+            },
+        },
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "okx_demo_connection_invalid",
+        "error_code": "credential_or_permission_error",
+    }
 
 
 def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
