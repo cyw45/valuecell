@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.schemas.base import SuccessResponse
+from valuecell.server.db.connection import get_db
+from valuecell.server.db.models.tenant_credential import TenantCredential
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
@@ -38,7 +40,7 @@ from valuecell.server.services.saas_access_service import (
 
 
 class RuleStrategyCreateRequest(BaseModel):
-    """Create a stored rule strategy that can only run in paper mode."""
+    """Create a stored deterministic strategy with paper or validated OKX Demo execution."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -84,7 +86,7 @@ class RuleStrategyTextImportRequest(BaseModel):
 def create_rule_strategy_router(
     service: RuleStrategyService | None = None,
 ) -> APIRouter:
-    """Create the independent paper-only rule strategy API router."""
+    """Create the deterministic strategy API router with isolated Demo execution validation."""
 
     router = APIRouter(prefix="/rule-strategies", tags=["rule-strategies"])
     rule_service = service or RuleStrategyService()
@@ -118,8 +120,26 @@ def create_rule_strategy_router(
     async def create_rule_strategy(
         request: RuleStrategyCreateRequest,
         principal: CurrentPrincipal = Depends(get_current_principal),
+        db=Depends(get_db),
     ) -> SuccessResponse[dict[str, Any]]:
         require_strategy_manage(principal)
+        if request.config.execution.environment == "okx_demo":
+            connection_id = request.config.execution.sandbox_connection_id or ""
+            credential = db.query(TenantCredential).filter_by(
+                id=connection_id, tenant_id=principal.tenant_id, revoked=False
+            ).first()
+            metadata = credential.metadata_json if credential is not None else {}
+            if (
+                credential is None
+                or credential.kind != "exchange"
+                or credential.provider != "okx"
+                or metadata.get("sandbox") is not True
+                or metadata.get("market_type") != "spot"
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "okx_demo_connection_invalid", "error_code": "credential_or_permission_error"},
+                )
         return SuccessResponse.create(
             data=rule_service.create(
                 principal.tenant_id,
@@ -129,7 +149,11 @@ def create_rule_strategy_router(
                     update={"initial_capital_quote": request.initial_capital_quote}
                 ),
             ),
-            msg="Paper rule strategy created",
+            msg=(
+                "OKX Demo rule strategy created"
+                if request.config.execution.environment == "okx_demo"
+                else "Paper rule strategy created"
+            ),
         )
 
     @router.get("", response_model=SuccessResponse[list[dict[str, Any]]])
@@ -159,8 +183,26 @@ def create_rule_strategy_router(
         strategy_id: str,
         request: RuleStrategyUpdateRequest,
         principal: CurrentPrincipal = Depends(get_current_principal),
+        db=Depends(get_db),
     ) -> SuccessResponse[dict[str, Any]]:
         require_strategy_manage(principal)
+        if request.config is not None and request.config.execution.environment == "okx_demo":
+            connection_id = request.config.execution.sandbox_connection_id or ""
+            credential = db.query(TenantCredential).filter_by(
+                id=connection_id, tenant_id=principal.tenant_id, revoked=False
+            ).first()
+            metadata = credential.metadata_json if credential is not None else {}
+            if (
+                credential is None
+                or credential.kind != "exchange"
+                or credential.provider != "okx"
+                or metadata.get("sandbox") is not True
+                or metadata.get("market_type") != "spot"
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "okx_demo_connection_invalid", "error_code": "credential_or_permission_error"},
+                )
         try:
             data = rule_service.update(
                 strategy_id,

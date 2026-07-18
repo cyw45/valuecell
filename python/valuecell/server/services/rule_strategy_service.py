@@ -465,7 +465,7 @@ class RuleStrategyService:
             "name": strategy.name,
             "description": strategy.description,
             "status": strategy.status,
-            "mode": "paper",
+            "mode": config.execution.environment,
             "config": strategy.config,
             "account": self._account_from_history(
                 strategy, strategy.tenant_id, config

@@ -2,8 +2,8 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
-  CandlestickChart,
   BrainCircuit,
+  CandlestickChart,
   CircleDollarSign,
   FileText,
   Gauge,
@@ -16,8 +16,8 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router";
 import { toast } from "sonner";
 import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
@@ -28,6 +28,7 @@ import {
   useStopRuleStrategy,
   useUpdateRuleStrategy,
 } from "@/api/rule-strategy";
+import { useSandboxConnections } from "@/api/sandbox-exchange";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,12 +50,12 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import type {
   AdvancedRuleSetConfig,
   RuleStrategyConfig,
   RuleStrategyInterval,
 } from "@/types/rule-strategy";
-import { cn } from "@/lib/utils";
 
 const TIMEFRAME_OPTIONS: RuleStrategyInterval[] = [
   "1m",
@@ -174,6 +175,11 @@ type StrategyFormValues = {
   stopLoss: number;
   maximumPositions: number;
   leverage: number;
+  executionEnvironment: "paper" | "okx_demo";
+  sandboxConnectionId: string;
+  maxDemoOrderQuoteAmount: number;
+  maxDemoDailyQuoteAmount: number;
+  maxDemoTotalQuoteAmount: number;
 };
 
 type AdvancedIndicatorKey = Exclude<
@@ -263,6 +269,11 @@ const initialValues: StrategyFormValues = {
   stopLoss: 2,
   maximumPositions: 100,
   leverage: 1,
+  executionEnvironment: "paper",
+  sandboxConnectionId: "",
+  maxDemoOrderQuoteAmount: 100,
+  maxDemoDailyQuoteAmount: 500,
+  maxDemoTotalQuoteAmount: 1_000,
 };
 
 function NumericField({
@@ -595,6 +606,15 @@ function toRuleStrategyConfig(values: StrategyFormValues): RuleStrategyConfig {
       macd_signal_window: values.macdSignal,
     },
     advanced_rules: values.advancedRules,
+    execution: {
+      environment: values.executionEnvironment,
+      ...(values.executionEnvironment === "okx_demo"
+        ? { sandbox_connection_id: values.sandboxConnectionId }
+        : {}),
+      max_order_quote_amount: values.maxDemoOrderQuoteAmount,
+      max_daily_quote_amount: values.maxDemoDailyQuoteAmount,
+      max_total_quote_amount: values.maxDemoTotalQuoteAmount,
+    },
     risk: {
       order_quote_amount: values.orderQuoteAmount,
       take_profit_pct: values.takeProfitEnabled
@@ -631,6 +651,11 @@ export function RuleStrategyConfiguration({
   const startStrategy = useStartRuleStrategy(strategyId);
   const stopStrategy = useStopRuleStrategy(strategyId);
   const parseStrategyText = useParseRuleStrategyText();
+  const sandboxConnections = useSandboxConnections();
+  const okxDemoConnections = (sandboxConnections.data ?? []).filter(
+    (connection) =>
+      connection.provider === "okx" && connection.metadata.sandbox,
+  );
   const symbolOptions =
     symbolsQuery.data?.symbols.map((symbol) => symbol.replace("-", "/")) ?? [];
 
@@ -647,6 +672,19 @@ export function RuleStrategyConfiguration({
       timeframe: strategyQuery.data.config.interval ?? initialValues.timeframe,
       advancedRules:
         strategyQuery.data.config.advanced_rules ?? initialValues.advancedRules,
+      executionEnvironment:
+        strategyQuery.data.config.execution?.environment ?? "paper",
+      sandboxConnectionId:
+        strategyQuery.data.config.execution?.sandbox_connection_id ?? "",
+      maxDemoOrderQuoteAmount:
+        strategyQuery.data.config.execution?.max_order_quote_amount ??
+        current.maxDemoOrderQuoteAmount,
+      maxDemoDailyQuoteAmount:
+        strategyQuery.data.config.execution?.max_daily_quote_amount ??
+        current.maxDemoDailyQuoteAmount,
+      maxDemoTotalQuoteAmount:
+        strategyQuery.data.config.execution?.max_total_quote_amount ??
+        current.maxDemoTotalQuoteAmount,
       takeProfitEnabled:
         strategyQuery.data.config.risk.take_profit_pct !== undefined,
       takeProfit:
@@ -968,7 +1006,7 @@ export function RuleStrategyConfiguration({
       <div
         className={cn(
           "mx-auto grid w-full max-w-[1600px] gap-4 p-4 sm:p-6 xl:grid-cols-[minmax(0,1fr)_360px]",
-          embedded && "max-w-none px-0 pb-0 pt-4 sm:px-0 sm:pb-0 sm:pt-4",
+          embedded && "max-w-none px-0 pt-4 pb-0 sm:px-0 sm:pt-4 sm:pb-0",
         )}
       >
         <form className="grid min-w-0 gap-4" noValidate>
@@ -999,6 +1037,105 @@ export function RuleStrategyConfiguration({
               </Button>
             </AlertDescription>
           </Alert>
+          <Card className="gap-0 rounded-lg py-0 shadow-none">
+            <RuleHeading
+              icon={ShieldCheck}
+              title="执行环境"
+              description="纸面交易只写入 ValueCell 模拟账本；OKX Demo 会向已绑定的 OKX 模拟盘发送现货订单。"
+            />
+            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
+              <div className="grid gap-1.5">
+                <Label htmlFor="execution-environment">执行模式</Label>
+                <Select
+                  value={values.executionEnvironment}
+                  onValueChange={(value) => {
+                    const environment = value as "paper" | "okx_demo";
+                    setValues((current) => ({
+                      ...current,
+                      executionEnvironment: environment,
+                      leverage:
+                        environment === "okx_demo" ? 1 : current.leverage,
+                    }));
+                  }}
+                >
+                  <SelectTrigger id="execution-environment">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="paper">
+                      纸面交易（不向交易所下单）
+                    </SelectItem>
+                    <SelectItem value="okx_demo">
+                      OKX Demo 模拟币（现货自动下单）
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {values.executionEnvironment === "okx_demo" ? (
+                <>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="okx-demo-connection">OKX Demo 连接</Label>
+                    <Select
+                      value={values.sandboxConnectionId}
+                      onValueChange={(value) =>
+                        update("sandboxConnectionId", value)
+                      }
+                    >
+                      <SelectTrigger id="okx-demo-connection">
+                        <SelectValue placeholder="选择已验证的 OKX Demo 连接" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {okxDemoConnections.map((connection) => (
+                          <SelectItem key={connection.id} value={connection.id}>
+                            {connection.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {okxDemoConnections.length === 0 ? (
+                      <p className="text-destructive text-xs">
+                        未发现已验证的 OKX Demo 现货连接，请先前往“设置 →
+                        模拟交易所”保存并验证。
+                      </p>
+                    ) : null}
+                  </div>
+                  <NumericField
+                    id="okx-demo-order-limit"
+                    label="OKX Demo 单笔最大金额"
+                    value={values.maxDemoOrderQuoteAmount}
+                    onChange={(value) =>
+                      update("maxDemoOrderQuoteAmount", value)
+                    }
+                    min={1}
+                    max={10_000}
+                    unit="USDT"
+                  />
+                  <NumericField
+                    id="okx-demo-total-limit"
+                    label="OKX Demo 策略总额度上限"
+                    value={values.maxDemoTotalQuoteAmount}
+                    onChange={(value) =>
+                      update("maxDemoTotalQuoteAmount", value)
+                    }
+                    min={1}
+                    max={100_000}
+                    unit="USDT"
+                  />
+                  <Alert className="border-amber-500/35 bg-amber-500/5 sm:col-span-2">
+                    <AlertTriangle />
+                    <AlertTitle>仅 OKX Demo 现货</AlertTitle>
+                    <AlertDescription>
+                      启动后，买卖信号会通过加密保存的 Demo
+                      凭证发送订单。系统强制杠杆为
+                      1、限价由以上额度控制，并以确定性订单号防止同一根 K
+                      线重复下单；不会访问实盘账户。
+                    </AlertDescription>
+                  </Alert>
+                </>
+              ) : null}
+            </CardContent>
+          </Card>
+
           <Card className="gap-0 rounded-lg py-0 shadow-none">
             <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
               <div className="grid gap-1.5">

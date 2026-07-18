@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -44,3 +45,137 @@ async def test_sync_does_not_postpone_unchanged_running_strategy(monkeypatch):
         assert synced_job.next_run_time == first_next_run
     finally:
         await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministic_id(monkeypatch):
+    calls = []
+
+    class FakeQuery:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def all(self):
+            return []
+
+    class FakeSession:
+        def query(self, _model):
+            return FakeQuery()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeService:
+        def __init__(self, session):
+            assert isinstance(session, FakeSession)
+
+        async def submit_order(self, tenant_id, credential_id, client_order_id, symbol, side, order_type, quote_amount, price):
+            calls.append((tenant_id, credential_id, client_order_id, symbol, side, order_type, quote_amount, price))
+            return {"id": "demo-order", "status": "open", "sandbox": True}
+
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", FakeService)
+    monkeypatch.setattr(
+        strategy_scheduler, "get_database_manager", lambda: SimpleNamespace(get_session=FakeSession)
+    )
+
+    config = RuleStrategyConfig.model_validate({
+        "symbols": ["BTC-USDT"],
+        "execution": {"environment": "okx_demo", "sandbox_connection_id": "okx-demo-connection"},
+    })
+    first = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "rule-a", config, "BTC-USDT", "buy", Decimal("100"), Decimal("50000"), 1234
+    )
+    second = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "rule-a", config, "BTC-USDT", "buy", Decimal("100"), Decimal("50000"), 1234
+    )
+
+    assert first["execution"] == "okx_demo_submitted"
+    assert second["execution"] == "okx_demo_submitted"
+    assert len(calls) == 2
+    assert calls[0][1] == "okx-demo-connection"
+    assert calls[0][2] == calls[1][2]
+    assert calls[0][2].startswith("vc-demo-")
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_execution_blocks_when_strategy_total_limit_is_reached(monkeypatch):
+    class FakeQuery:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def all(self):
+            return [SimpleNamespace(requested_quote="100", status="open")]
+
+    class FakeSession:
+        def query(self, _model):
+            return FakeQuery()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        strategy_scheduler, "get_database_manager", lambda: SimpleNamespace(get_session=FakeSession)
+    )
+    config = RuleStrategyConfig.model_validate({
+        "symbols": ["BTC-USDT"],
+        "execution": {
+            "environment": "okx_demo",
+            "sandbox_connection_id": "okx-demo-connection",
+            "max_order_quote_amount": 100,
+            "max_total_quote_amount": 150,
+        },
+    })
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "rule-a", config, "BTC-USDT", "buy", Decimal("100"), Decimal("50000"), 1234
+    )
+    assert result["execution"] == "blocked"
+    assert "total limit" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_execution_blocks_when_daily_limit_is_reached(monkeypatch):
+    class FakeQuery:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def all(self):
+            return [
+                SimpleNamespace(
+                    requested_quote="100", status="open", created_at=datetime.now(timezone.utc)
+                )
+            ]
+
+    class FakeSession:
+        def query(self, _model):
+            return FakeQuery()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        strategy_scheduler, "get_database_manager", lambda: SimpleNamespace(get_session=FakeSession)
+    )
+    config = RuleStrategyConfig.model_validate({
+        "symbols": ["BTC-USDT"],
+        "execution": {
+            "environment": "okx_demo",
+            "sandbox_connection_id": "okx-demo-connection",
+            "max_order_quote_amount": 100,
+            "max_daily_quote_amount": 150,
+            "max_total_quote_amount": 500,
+        },
+    })
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "rule-a", config, "BTC-USDT", "buy", Decimal("100"), Decimal("50000"), 1234
+    )
+    assert result["execution"] == "blocked"
+    assert "daily limit" in result["reason"]

@@ -188,10 +188,15 @@ class SandboxExchangeTradingService:
         except Exception:
             pass
 
-    @classmethod
-    def _is_sandbox_spot(cls, credential: TenantCredential) -> bool:
+    def _is_sandbox_spot(self, credential: TenantCredential) -> bool:
         metadata = credential.metadata_json or {}
-        return credential.provider in cls._PROVIDERS and metadata.get("sandbox") is True and metadata.get("market_type") == "spot"
+        return credential.provider in self._PROVIDERS and metadata.get("sandbox") is True and metadata.get("market_type") == "spot"
+
+    def validate_strategy_connection(self, tenant_id: str, credential_id: str) -> TenantCredential:
+        credential = self._active_sandbox_credential(tenant_id, credential_id)
+        if credential.provider != "okx":
+            raise SandboxTradingError("Only an OKX Demo spot connection can execute a strategy")
+        return credential
 
     @staticmethod
     def _connection_metadata(credential: TenantCredential) -> dict[str, Any]:

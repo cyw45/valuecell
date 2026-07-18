@@ -235,8 +235,30 @@ class AdvancedRuleSetConfig(RuleStrategyModel):
     brar: AdvancedBrarRuleConfig = Field(default_factory=AdvancedBrarRuleConfig)
 
 
+class RuleStrategyExecutionConfig(RuleStrategyModel):
+    """Explicit execution target; only OKX Demo spot can leave the paper ledger."""
+
+    environment: Literal["paper", "okx_demo"] = "paper"
+    sandbox_connection_id: str | None = Field(default=None, min_length=1, max_length=36)
+    max_order_quote_amount: float = Field(default=10_000.0, gt=0, le=10_000)
+    max_daily_quote_amount: float = Field(default=10_000.0, gt=0, le=100_000)
+    max_total_quote_amount: float = Field(default=10_000.0, gt=0, le=100_000)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "RuleStrategyExecutionConfig":
+        if self.environment == "okx_demo" and not self.sandbox_connection_id:
+            raise ValueError("sandbox_connection_id is required for okx_demo execution")
+        if self.environment == "paper" and self.sandbox_connection_id is not None:
+            raise ValueError("sandbox_connection_id is only allowed for okx_demo execution")
+        if self.max_order_quote_amount > self.max_daily_quote_amount:
+            raise ValueError("max_order_quote_amount cannot exceed max_daily_quote_amount")
+        if self.max_order_quote_amount > self.max_total_quote_amount:
+            raise ValueError("max_order_quote_amount cannot exceed max_total_quote_amount")
+        return self
+
+
 class RuleStrategyConfig(RuleStrategyModel):
-    """Paper-only rules and their normalized public-market evaluation scope."""
+    """Rule evaluation configuration with a paper or explicitly bound OKX Demo target."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -254,9 +276,12 @@ class RuleStrategyConfig(RuleStrategyModel):
     momentum_macd: MomentumMacdRuleConfig = Field(default_factory=MomentumMacdRuleConfig)
     advanced_rules: AdvancedRuleSetConfig = Field(default_factory=AdvancedRuleSetConfig)
     risk: RuleStrategyRiskConfig = Field(default_factory=RuleStrategyRiskConfig)
+    execution: RuleStrategyExecutionConfig = Field(default_factory=RuleStrategyExecutionConfig)
 
     @model_validator(mode="after")
     def normalize_symbols(self) -> RuleStrategyConfig:
+        if self.execution.environment == "okx_demo" and self.risk.leverage != 1:
+            raise ValueError("OKX Demo spot execution requires leverage 1")
         normalized: list[str] = []
         for raw_symbol in self.symbols:
             symbol = raw_symbol.strip().upper().replace("/", "-")

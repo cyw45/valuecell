@@ -1,8 +1,8 @@
-"""Auto-scheduler: drives paper rule strategy evaluations on a background clock."""
+"""Auto-scheduler: drives paper or explicitly bound OKX Demo rule-strategy evaluations."""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import asyncio
@@ -20,7 +20,11 @@ from valuecell.server.api.schemas.rule_strategy import (
 )
 from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
+from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.services.live_execution_service import LiveExecutionService
+from valuecell.server.services.sandbox_exchange_trading_service import (
+    SandboxExchangeTradingService,
+)
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
 )
@@ -80,7 +84,7 @@ def _required_lookback(config: RuleStrategyConfig) -> int:
 
 
 class StrategyScheduler:
-    """Wraps AsyncIOScheduler to drive paper rule strategy evaluations."""
+    """Wraps AsyncIOScheduler to drive paper or explicitly bound OKX Demo strategies."""
 
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()
@@ -176,7 +180,7 @@ class StrategyScheduler:
         tenant_id: str,
         config_dict: dict[str, Any],
     ) -> None:
-        """Fetch OHLCV, evaluate rule engine, journal result — paper only."""
+        """Fetch OHLCV, evaluate rules, journal results, and safely route the chosen execution target."""
         session = get_database_manager().get_session()
         try:
             if not TenantAccessService.access_for(session, tenant_id).active:
@@ -315,9 +319,10 @@ class StrategyScheduler:
                 candles = candle_sets.get(config.interval) or next(
                     iter(candle_sets.values())
                 )
-                await self._execute_live_signal(
+                execution = await self._execute_signal(
                     tenant_id,
                     strategy_id,
+                    config,
                     result["symbol"],
                     result["action"],
                     Decimal(str(result["sizing"]["requested_quote"])),
@@ -325,6 +330,128 @@ class StrategyScheduler:
                     candles[-1].timestamp_ms,
                     result["evaluation_id"],
                 )
+                if config.execution.environment == "okx_demo":
+                    self._record_execution(tenant_id, strategy_id, result["evaluation_id"], execution)
+
+    @staticmethod
+    def _record_execution(
+        tenant_id: str, strategy_id: str, evaluation_id: str, execution: dict[str, Any]
+    ) -> None:
+        session = get_database_manager().get_session()
+        try:
+            journal = session.query(RuleStrategyEvaluationJournal).filter_by(
+                evaluation_id=evaluation_id, tenant_id=tenant_id, strategy_id=strategy_id
+            ).first()
+            if journal is not None and journal.trades:
+                entries = list(journal.trades)
+                entries[-1] = {**entries[-1], **execution}
+                journal.trades = entries
+                session.commit()
+        except Exception:
+            session.rollback()
+        finally:
+            session.close()
+
+    @staticmethod
+    async def _execute_signal(
+        tenant_id: str,
+        strategy_id: str,
+        config: RuleStrategyConfig,
+        symbol: str,
+        action: str,
+        quote_amount: Decimal,
+        price: Decimal,
+        candle_timestamp_ms: int,
+        evaluation_id: str,
+    ) -> dict[str, Any]:
+        if config.execution.environment == "okx_demo":
+            execution = await StrategyScheduler._execute_okx_demo_signal(
+                tenant_id,
+                strategy_id,
+                config,
+                symbol,
+                action,
+                quote_amount,
+                price,
+                candle_timestamp_ms,
+            )
+        else:
+            execution = await StrategyScheduler._execute_live_signal(
+                tenant_id,
+                strategy_id,
+                symbol,
+                action,
+                quote_amount,
+                price,
+                candle_timestamp_ms,
+                evaluation_id,
+            )
+        return execution
+
+    @staticmethod
+    async def _execute_okx_demo_signal(
+        tenant_id: str,
+        strategy_id: str,
+        config: RuleStrategyConfig,
+        symbol: str,
+        action: str,
+        quote_amount: Decimal,
+        price: Decimal,
+        candle_timestamp_ms: int,
+    ) -> dict[str, Any]:
+        """Submit an idempotent, bounded order through an encrypted OKX Demo connection."""
+        execution_config = config.execution
+        if execution_config.environment != "okx_demo" or not execution_config.sandbox_connection_id:
+            return {"execution": "blocked", "reason": "OKX Demo execution is not configured"}
+        if action not in {"buy", "sell"}:
+            return {"execution": "blocked", "reason": "Signal is not executable"}
+        requested_quote = min(quote_amount, Decimal(str(execution_config.max_order_quote_amount)))
+        session = get_database_manager().get_session()
+        try:
+            orders = session.query(SandboxExchangeOrder).filter_by(
+                tenant_id=tenant_id,
+                credential_id=execution_config.sandbox_connection_id,
+                sandbox=True,
+            ).all()
+            active_orders = [row for row in orders if row.status not in {"failed", "rejected"}]
+            existing_total = sum(Decimal(str(row.requested_quote)) for row in active_orders)
+            daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+            daily_total = sum(
+                Decimal(str(row.requested_quote))
+                for row in active_orders
+                if getattr(row, "created_at", None) is None
+                or row.created_at.replace(tzinfo=timezone.utc) >= daily_cutoff
+            )
+            if daily_total + requested_quote > Decimal(str(execution_config.max_daily_quote_amount)):
+                return {"execution": "blocked", "sandbox": True, "reason": "OKX Demo strategy daily limit reached"}
+            if existing_total + requested_quote > Decimal(str(execution_config.max_total_quote_amount)):
+                return {"execution": "blocked", "sandbox": True, "reason": "OKX Demo strategy total limit reached"}
+            material = f"{strategy_id}:{candle_timestamp_ms}:{symbol.upper()}:{action}"
+            client_order_id = "vc-demo-" + __import__("hashlib").sha256(material.encode("utf-8")).hexdigest()[:48]
+            order = await SandboxExchangeTradingService(session).submit_order(
+                tenant_id,
+                execution_config.sandbox_connection_id,
+                client_order_id,
+                symbol.replace("-", "/"),
+                action,
+                "market",
+                requested_quote,
+                None,
+            )
+            return {
+                "execution": "okx_demo_submitted"
+                if order.get("status") not in {"failed", "rejected"}
+                else "blocked",
+                "sandbox": True,
+                "order_id": order.get("id"),
+                "status": order.get("status"),
+                "error_code": order.get("error_code"),
+            }
+        except Exception:
+            session.rollback()
+            return {"execution": "blocked", "sandbox": True, "reason": "OKX Demo order was rejected"}
+        finally:
+            session.close()
 
     @staticmethod
     async def _execute_live_signal(

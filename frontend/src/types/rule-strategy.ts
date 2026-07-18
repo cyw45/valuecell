@@ -140,6 +140,14 @@ export interface RuleStrategyRiskConfig {
 
 export type RuleStrategyInterval = RuleStrategyCandleInterval;
 
+export interface RuleStrategyExecutionConfig {
+  environment: "paper" | "okx_demo";
+  sandbox_connection_id?: string;
+  max_order_quote_amount: number;
+  max_daily_quote_amount: number;
+  max_total_quote_amount: number;
+}
+
 export interface RuleStrategyConfig {
   mode: "paper";
   initial_capital_quote: number;
@@ -152,6 +160,7 @@ export interface RuleStrategyConfig {
   bollinger: BollingerRuleConfig;
   momentum_macd: MomentumMacdRuleConfig;
   advanced_rules: AdvancedRuleSetConfig;
+  execution: RuleStrategyExecutionConfig;
   risk: RuleStrategyRiskConfig;
 }
 
