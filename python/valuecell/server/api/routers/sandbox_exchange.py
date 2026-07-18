@@ -160,6 +160,40 @@ def create_sandbox_exchange_router() -> APIRouter:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Sandbox balance retrieved")
 
+    @router.get(
+        "/connections/{credential_id}/positions", response_model=SuccessResponse[dict]
+    )
+    async def connection_positions(
+        credential_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[dict]:
+        require_sandbox_read(principal)
+        try:
+            data = await SandboxExchangeTradingService(db).positions(
+                principal.tenant_id, credential_id
+            )
+        except SandboxTradingError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Sandbox spot positions retrieved")
+
+    @router.get(
+        "/connections/{credential_id}/symbols", response_model=SuccessResponse[list[dict]]
+    )
+    async def connection_symbols(
+        credential_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[list[dict]]:
+        require_sandbox_read(principal)
+        try:
+            data = await SandboxExchangeTradingService(db).tradable_symbols(
+                principal.tenant_id, credential_id
+            )
+        except SandboxTradingError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Tradable OKX Demo spot symbols retrieved")
+
     @router.post("/orders", response_model=SuccessResponse[dict], status_code=201)
     async def create_order(
         request: SandboxOrderRequest,
@@ -216,13 +250,15 @@ def create_sandbox_exchange_router() -> APIRouter:
     @router.get("/orders", response_model=SuccessResponse[list[dict]])
     async def list_orders(
         credential_id: str | None = None,
+        refresh: bool = False,
         principal: CurrentPrincipal = Depends(get_current_principal),
         db: Session = Depends(get_db),
     ) -> SuccessResponse[list[dict]]:
         require_sandbox_read(principal)
-        data = SandboxExchangeTradingService(db).list_orders(
-            principal.tenant_id, credential_id
-        )
+        service = SandboxExchangeTradingService(db)
+        if refresh:
+            await service.refresh_open_orders(principal.tenant_id, credential_id)
+        data = service.list_orders(principal.tenant_id, credential_id)
         return SuccessResponse.create(data=data, msg="Sandbox orders retrieved")
 
     return router

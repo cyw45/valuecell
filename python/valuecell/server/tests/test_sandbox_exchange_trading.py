@@ -45,11 +45,42 @@ def fake_exchange_class():
 
         async def fetch_balance(self) -> dict:
             self._private("fetch_balance")
-            return {"total": {"USDT": 25, "BTC": 0}, "free": {"USDT": 20}, "used": {"USDT": 5}}
+            return {"total": {"USDT": 250, "BTC": 0}, "free": {"USDT": 200}, "used": {"USDT": 50}}
+
+        async def load_markets(self) -> dict:
+            return {
+                "BTC/USDT": {
+                    "spot": True,
+                    "active": True,
+                    "base": "BTC",
+                    "quote": "USDT",
+                    "precision": {"amount": 6},
+                    "limits": {"amount": {"min": 0.0001}, "cost": {"min": 10}},
+                }
+            }
+
+        def amount_to_precision(self, _symbol: str, amount: float) -> str:
+            return f"{amount:.6f}"
 
         async def fetch_ticker(self, symbol: str) -> dict:
             assert symbol == "BTC/USDT"
             return {"last": 50000}
+
+        async def fetch_order(self, order_id: str, symbol: str) -> dict:
+            self._private("fetch_order")
+            assert order_id == "test-order-1"
+            assert symbol == "BTC/USDT"
+            return {
+                "id": order_id,
+                "status": "closed",
+                "symbol": symbol,
+                "side": "buy",
+                "type": "market",
+                "amount": 0.002,
+                "filled": 0.002,
+                "remaining": 0,
+                "cost": 100,
+            }
 
         async def create_order(self, symbol: str, type_: str, side: str, amount: float, price, params: dict) -> dict:
             self._private("create_order")
@@ -142,7 +173,62 @@ def test_balance_is_sanitized_and_private_calls_use_sandbox(sandbox_client):
     credential_id = create_connection(client)
     response = client.get(f"/saas/sandbox-exchanges/connections/{credential_id}/balance")
     assert response.status_code == 200
-    assert response.json()["data"]["balances"] == [{"currency": "USDT", "total": 25, "free": 20, "used": 5}]
+    assert response.json()["data"]["balances"] == [
+        {
+            "currency": "USDT",
+            "total": 250,
+            "free": 200,
+            "used": 50,
+            "frozen": 50,
+            "mark_price_usdt": 1,
+            "usdt_value": 250,
+            "valuation_status": "priced",
+        }
+    ]
+    assert fake_exchange.instances[-1].calls == ["sandbox", "fetch_balance", "close"]
+
+
+def test_demo_balance_is_valued_and_exposes_spot_positions(sandbox_client, monkeypatch: pytest.MonkeyPatch):
+    client, _, fake_exchange = sandbox_client
+    response = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase", label="okx-demo"),
+    )
+    assert response.status_code == 201, response.text
+    credential_id = response.json()["data"]["id"]
+
+    async def btc_balance(self) -> dict:
+        self._private("fetch_balance")
+        return {
+            "total": {"USDT": 25, "BTC": 0.01},
+            "free": {"USDT": 20, "BTC": 0.008},
+            "used": {"USDT": 5, "BTC": 0.002},
+        }
+
+    monkeypatch.setattr(fake_exchange, "fetch_balance", btc_balance)
+    response = client.get(f"/saas/sandbox-exchanges/connections/{credential_id}/balance")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["source"] == "okx_demo"
+    assert data["total_usdt_value"] == 525
+    assert {item["currency"]: item for item in data["balances"]}["BTC"]["usdt_value"] == 500
+    positions = client.get(
+        f"/saas/sandbox-exchanges/connections/{credential_id}/positions"
+    )
+    assert positions.status_code == 200
+    assert positions.json()["data"]["positions"] == [
+        {
+            "symbol": "BTC/USDT",
+            "base_currency": "BTC",
+            "quantity": 0.01,
+            "available_quantity": 0.008,
+            "frozen_quantity": 0.002,
+            "mark_price": 50000,
+            "notional_usdt": 500,
+            "unrealized_pnl_usdt": None,
+        }
+    ]
     assert fake_exchange.instances[-1].calls == ["sandbox", "fetch_balance", "close"]
 
 
@@ -156,7 +242,34 @@ def test_order_is_idempotent_and_sanitizes_exchange_payload(sandbox_client):
     assert first.json()["data"]["exchange_order_id"] == "test-order-1"
     assert second.json()["data"]["id"] == first.json()["data"]["id"]
     assert "secret" not in str(first.json())
-    assert fake_exchange.instances[-1].calls == ["sandbox", "sandbox", "create_order", "close"]
+    assert fake_exchange.instances[-1].calls == [
+        "sandbox",
+        "fetch_balance",
+        "sandbox",
+        "create_order",
+        "close",
+    ]
+
+
+def test_list_orders_refreshes_non_terminal_exchange_statuses(sandbox_client):
+    client, _, _ = sandbox_client
+    credential_id = create_connection(client)
+    request = {
+        "credential_id": credential_id,
+        "symbol": "BTC/USDT",
+        "side": "buy",
+        "type": "market",
+        "quote_amount": "100",
+        "idempotency_key": "poll-order-key-012345",
+        "sandbox": True,
+    }
+    created = client.post("/saas/sandbox-exchanges/orders", json=request).json()["data"]
+    assert created["status"] == "open"
+    orders = client.get(
+        f"/saas/sandbox-exchanges/orders?credential_id={credential_id}&refresh=true"
+    )
+    assert orders.status_code == 200
+    assert orders.json()["data"][0]["status"] == "closed"
 
 
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):

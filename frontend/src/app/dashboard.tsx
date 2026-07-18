@@ -1,5 +1,3 @@
-import { useTheme } from "next-themes";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   BarChart3,
@@ -10,21 +8,35 @@ import {
   Crosshair,
   Layers3,
   Moon,
-  RefreshCw,
   RadioTower,
+  RefreshCw,
   Settings2,
   Sun,
   TrendingDown,
   TrendingUp,
   WalletCards,
 } from "lucide-react";
+import { useTheme } from "next-themes";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
 import {
   useRuleStrategy,
   useRuleStrategyEvaluations,
   useRuleStrategyPnlCurve,
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
-import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
+import {
+  useSandboxBalance,
+  useSandboxConnections,
+  useSandboxPositions,
+} from "@/api/sandbox-exchange";
 import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -186,8 +198,27 @@ export default function DashboardPage() {
   const isDark = resolvedTheme === "dark";
   const strategyId = localStorage.getItem("valuecell.rule-strategy-id") ?? "";
   const { data: ruleStrategy } = useRuleStrategy(strategyId);
-  const { data: pnlCurve } = useRuleStrategyPnlCurve(strategyId || undefined);
-  const { data: trades = [] } = useRuleStrategyTrades(strategyId || undefined);
+  const execution = ruleStrategy?.config.execution;
+  const isOkxDemo = execution?.environment === "okx_demo";
+  const connectionId = isOkxDemo ? execution?.sandbox_connection_id : undefined;
+  const { data: sandboxConnections = [] } = useSandboxConnections();
+  const demoConnection = sandboxConnections.find(
+    (connection) => connection.id === connectionId,
+  );
+  const {
+    data: demoBalance,
+    isError: demoBalanceError,
+    isFetching: demoBalanceLoading,
+  } = useSandboxBalance(connectionId, isOkxDemo);
+  const { data: demoPositionsData, isError: demoPositionsError } =
+    useSandboxPositions(connectionId, isOkxDemo);
+  const demoPositions = demoPositionsData?.positions ?? [];
+  const { data: pnlCurve } = useRuleStrategyPnlCurve(
+    isOkxDemo ? undefined : strategyId || undefined,
+  );
+  const { data: trades = [] } = useRuleStrategyTrades(
+    isOkxDemo ? undefined : strategyId || undefined,
+  );
   const { data: evaluations = [] } = useRuleStrategyEvaluations(
     strategyId || undefined,
   );
@@ -231,13 +262,46 @@ export default function DashboardPage() {
       }))
     : [];
   const account = ruleStrategy?.account;
+  const demoUsdt = Number(
+    demoBalance?.balances.find((balance) => balance.currency === "USDT")
+      ?.free ?? 0,
+  );
+  const displayEquity = isOkxDemo
+    ? (demoBalance?.total_usdt_value ?? 0)
+    : (account?.equity_quote ?? 0);
+  const displayCash = isOkxDemo ? demoUsdt : (account?.quote_balance ?? 0);
+  const holdingRows = useMemo(
+    () =>
+      isOkxDemo
+        ? demoPositions.map((position) => ({
+            symbol: position.symbol.replace("/", "-"),
+            position: {
+              quantity: position.quantity,
+              entry_price: position.mark_price ?? 0,
+              mark_price: position.mark_price ?? 0,
+            },
+            value: position.notional_usdt ?? 0,
+            profit: 0,
+          }))
+        : Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
+            const value = position.quantity * position.mark_price;
+            const profit =
+              position.quantity * (position.mark_price - position.entry_price);
+            return { symbol, position, value, profit };
+          }),
+    [account?.positions, demoPositions, isOkxDemo],
+  );
   const pnl =
     (account?.realized_pnl_quote ?? 0) + (account?.unrealized_pnl_quote ?? 0);
   const pnlPercent =
     account && account.initial_capital_quote > 0
       ? (pnl / account.initial_capital_quote) * 100
       : 0;
-  const invested = account ? account.equity_quote - account.quote_balance : 0;
+  const invested = isOkxDemo
+    ? Math.max(displayEquity - displayCash, 0)
+    : account
+      ? account.equity_quote - account.quote_balance
+      : 0;
   const latestRsi =
     market?.indicators[market.indicators.length - 1]?.rsi ?? null;
   const rsiDescription =
@@ -249,24 +313,17 @@ export default function DashboardPage() {
           ? "超买区：高于 70"
           : "中性区：30–70";
   const capitalUtilization =
-    account && account.equity_quote > 0
+    displayEquity > 0
       ? Math.min(
-          Math.max((Math.max(invested, 0) / account.equity_quote) * 100, 0),
+          Math.max((Math.max(invested, 0) / displayEquity) * 100, 0),
           100,
         )
       : null;
-  const utilizationDescription =
-    capitalUtilization === null ? "等待策略账户" : "已投入资金 ÷ 当前组合权益";
-  const holdingRows = useMemo(
-    () =>
-      Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
-        const value = position.quantity * position.mark_price;
-        const profit =
-          position.quantity * (position.mark_price - position.entry_price);
-        return { symbol, position, value, profit };
-      }),
-    [account?.positions],
-  );
+  const utilizationDescription = isOkxDemo
+    ? "OKX Demo 已估值资产中非可用 USDT 的比例"
+    : capitalUtilization === null
+      ? "等待策略账户"
+      : "已投入资金 ÷ 当前组合权益";
   const recentSignals = evaluations
     .filter((item) => item.action !== "no_op")
     .slice(0, 5);
@@ -288,18 +345,18 @@ export default function DashboardPage() {
   const recentlyScanned = evaluations.slice(0, 8);
   const requestedCapital = latestEvaluation?.sizing.requested_quote ?? 0;
 
-  const scrollToStrategyConfiguration = () => {
+  const scrollToStrategyConfiguration = useCallback(() => {
     document.getElementById("strategy-configuration")?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
-  };
+  }, []);
 
   useEffect(() => {
     if (window.location.hash !== "#strategy-configuration") return;
     const frameId = window.requestAnimationFrame(scrollToStrategyConfiguration);
     return () => window.cancelAnimationFrame(frameId);
-  }, []);
+  }, [scrollToStrategyConfiguration]);
 
   return (
     <div className="scroll-container dashboard-shell flex size-full flex-col">
@@ -309,13 +366,21 @@ export default function DashboardPage() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="live-pulse size-2 rounded-full bg-emerald-400" />
               <span className="font-semibold text-[11px] text-sky-500 tracking-[0.14em] dark:text-sky-300">
-                模拟交易终端
+                {isOkxDemo ? "OKX DEMO 模拟盘终端" : "纸面交易终端"}
               </span>
               <Badge
                 variant="outline"
                 className="border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300"
               >
-                {ruleStrategy?.status === "running" ? "策略扫描中" : "策略待命"}
+                {isOkxDemo
+                  ? demoBalanceError || demoPositionsError
+                    ? "OKX Demo 数据读取失败"
+                    : demoBalanceLoading
+                      ? "同步 OKX Demo 账户中"
+                      : `OKX Demo · ${demoConnection?.label ?? "已绑定连接"}`
+                  : ruleStrategy?.status === "running"
+                    ? "策略扫描中"
+                    : "策略待命"}
               </Badge>
             </div>
             <h1 className="dashboard-title mt-2 font-semibold text-2xl tracking-[0.02em]">
@@ -363,28 +428,36 @@ export default function DashboardPage() {
             label="组合权益"
             value={
               <>
-                <TerminalValue value={account?.equity_quote ?? 0} /> USDT
+                <TerminalValue value={displayEquity} /> USDT
               </>
             }
-            detail={`初始资金 ${currency.format(account?.initial_capital_quote ?? 10_000)} USDT`}
+            detail={
+              isOkxDemo
+                ? `OKX Demo 实时估值 · ${demoBalance?.checked_at ? new Date(demoBalance.checked_at).toLocaleTimeString() : "等待账户同步"}`
+                : `初始资金 ${currency.format(account?.initial_capital_quote ?? 10_000)} USDT`
+            }
           />
           <KpiCard
             icon={pnl >= 0 ? TrendingUp : TrendingDown}
-            label="总收益与亏损"
+            label={isOkxDemo ? "账户盈亏" : "总收益与亏损"}
             value={
               <>
-                <TerminalValue signed value={pnl} /> USDT
+                <TerminalValue signed value={isOkxDemo ? 0 : pnl} /> USDT
               </>
             }
-            detail={`策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`}
-            trend={pnl >= 0 ? "positive" : "negative"}
+            detail={
+              isOkxDemo
+                ? "OKX Demo 未提供可靠成本基准；不展示估算盈亏"
+                : `策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`
+            }
+            trend={isOkxDemo ? "neutral" : pnl >= 0 ? "positive" : "negative"}
           />
           <KpiCard
             icon={CircleDollarSign}
             label="可用资金"
             value={
               <>
-                <TerminalValue value={account?.quote_balance ?? 0} /> USDT
+                <TerminalValue value={displayCash} /> USDT
               </>
             }
             detail={`已投入 ${currency.format(Math.max(invested, 0))} USDT`}
@@ -763,10 +836,9 @@ export default function DashboardPage() {
                     ))}
                 </div>
               </div>
-              <div
+              <fieldset
                 aria-label="RSI 与布林带显示方式"
                 className="flex w-fit rounded-md border border-cyan-500/25 bg-cyan-500/5 p-0.5"
-                role="group"
               >
                 <button
                   aria-pressed={rsiMode === "rsi"}
@@ -807,7 +879,7 @@ export default function DashboardPage() {
                 >
                   同时显示
                 </button>
-              </div>
+              </fieldset>
             </div>
             <CardContent className="grid gap-px overflow-hidden bg-border/60 p-px md:grid-cols-2">
               <div className="flex flex-col gap-2 bg-card p-2">
