@@ -18,6 +18,7 @@ from valuecell.server.api.routers.live_execution import create_live_execution_ro
 from valuecell.server.api.routers.saas_admin import create_saas_admin_router
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.base import Base
+from valuecell.server.db.models.rule_strategy import RuleStrategy
 from valuecell.server.db.models.saas_control import ServicePlan, TenantSubscription
 from valuecell.server.services.live_execution_authorization import (
     LiveAuthorizationManager,
@@ -157,6 +158,7 @@ def live_client(
     app.include_router(create_saas_admin_router(), prefix="/api/v1")
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_principal] = lambda: principal[0]
+
     try:
         with TestClient(app) as client:
             yield client, principal, live_enabled, fake_exchange
@@ -203,6 +205,25 @@ def create_policy(client: TestClient) -> None:
 
 
 def create_binding(client: TestClient, connection_id: str) -> str:
+    db = client.app.dependency_overrides[get_db]().__next__()
+    try:
+        if (
+            db.query(RuleStrategy)
+            .filter_by(strategy_id="strategy-a", tenant_id="tenant-a")
+            .first()
+            is None
+        ):
+            db.add(
+                RuleStrategy(
+                    strategy_id="strategy-a",
+                    tenant_id="tenant-a",
+                    name="strategy-a",
+                    config={},
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
     response = client.post(
         "/api/v1/saas/live-execution/bindings",
         json={"strategy_id": "strategy-a", "connection_id": connection_id},
@@ -211,16 +232,25 @@ def create_binding(client: TestClient, connection_id: str) -> str:
     return response.json()["data"]["id"]
 
 
-def authorize(client: TestClient) -> None:
+def authorize(client: TestClient, principal: list[CurrentPrincipal]) -> None:
+    requester = principal[0]
     challenge = client.post(
         "/api/v1/saas/live-execution/startup-authorization/challenge"
     )
     assert challenge.status_code == 200, challenge.text
-    confirmed = client.post(
-        "/api/v1/saas/live-execution/startup-authorization/confirm",
-        json={"challenge_code": challenge.json()["data"]["challenge_code"]},
+    principal[0] = CurrentPrincipal(
+        user_id="qualified-approver",
+        tenant_id=requester.tenant_id,
+        role="admin",
     )
-    assert confirmed.status_code == 200, confirmed.text
+    try:
+        confirmed = client.post(
+            "/api/v1/saas/live-execution/startup-authorization/confirm",
+            json={"challenge_code": challenge.json()["data"]["challenge_code"]},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+    finally:
+        principal[0] = requester
 
 
 def order_request(
@@ -237,11 +267,11 @@ def order_request(
 
 
 def test_global_live_disable_rejects_before_any_order_exchange_call(live_client):
-    client, _, _, fake_exchange = live_client
+    client, principal, _, fake_exchange = live_client
     connection_id = create_connection(client)
     create_policy(client)
     create_binding(client, connection_id)
-    authorize(client)
+    authorize(client, principal)
 
     response = client.post(
         "/api/v1/saas/live-execution/orders", json=order_request(connection_id)
@@ -274,7 +304,9 @@ def test_authorization_challenge_is_tenant_bound_and_revoke_disables_it(live_cli
         is False
     )
 
-    principal[0] = CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")
+    principal[0] = CurrentPrincipal(
+        user_id="user-c", tenant_id="tenant-a", role="owner"
+    )
     confirmed = client.post(
         "/api/v1/saas/live-execution/startup-authorization/confirm",
         json={"challenge_code": challenge_code},
@@ -331,15 +363,72 @@ def test_binding_requires_tenant_policy_and_cross_tenant_connection_is_hidden(
     )
 
 
+def test_binding_rejects_missing_and_cross_tenant_rule_strategy(live_client):
+    client, _, _, _ = live_client
+    connection_id = create_connection(client)
+    create_policy(client)
+    for strategy_id, tenant_id in (("missing", None), ("foreign", "tenant-b")):
+        if tenant_id:
+            db = client.app.dependency_overrides[get_db]().__next__()
+            try:
+                db.add(
+                    RuleStrategy(
+                        strategy_id=strategy_id,
+                        tenant_id=tenant_id,
+                        name=strategy_id,
+                        config={},
+                    )
+                )
+                db.commit()
+            finally:
+                db.close()
+        response = client.post(
+            "/api/v1/saas/live-execution/bindings",
+            json={"strategy_id": strategy_id, "connection_id": connection_id},
+        )
+        assert response.status_code == 422
+
+
+def test_authorization_rejects_self_approval_and_requires_owner_or_admin(live_client):
+    client, principal, _, _ = live_client
+    challenge = client.post(
+        "/api/v1/saas/live-execution/startup-authorization/challenge"
+    )
+    code = challenge.json()["data"]["challenge_code"]
+    assert (
+        client.post(
+            "/api/v1/saas/live-execution/startup-authorization/confirm",
+            json={"challenge_code": code},
+        ).status_code
+        == 422
+    )
+
+    challenge = client.post(
+        "/api/v1/saas/live-execution/startup-authorization/challenge"
+    )
+    # A trader has trade.execute, so this reaches the approver-role gate rather
+    # than failing the endpoint's generic permission dependency first.
+    principal[0] = CurrentPrincipal(
+        user_id="user-b", tenant_id="tenant-a", role="trader"
+    )
+    assert (
+        client.post(
+            "/api/v1/saas/live-execution/startup-authorization/confirm",
+            json={"challenge_code": challenge.json()["data"]["challenge_code"]},
+        ).status_code
+        == 403
+    )
+
+
 def test_idempotent_order_returns_original_audit_record_without_second_submission(
     live_client,
 ):
-    client, _, live_enabled, fake_exchange = live_client
+    client, principal, live_enabled, fake_exchange = live_client
     connection_id = create_connection(client)
     create_policy(client)
     create_binding(client, connection_id)
     live_enabled[0] = True
-    authorize(client)
+    authorize(client, principal)
     request = order_request(connection_id)
 
     first = client.post("/api/v1/saas/live-execution/orders", json=request)
@@ -367,12 +456,12 @@ def test_idempotent_order_returns_original_audit_record_without_second_submissio
 
 
 def test_revoked_binding_blocks_execution_before_order_submission(live_client):
-    client, _, live_enabled, fake_exchange = live_client
+    client, principal, live_enabled, fake_exchange = live_client
     connection_id = create_connection(client)
     create_policy(client)
     binding_id = create_binding(client, connection_id)
     live_enabled[0] = True
-    authorize(client)
+    authorize(client, principal)
     revoked = client.post(f"/api/v1/saas/live-execution/bindings/{binding_id}/revoke")
     assert revoked.status_code == 200
 
@@ -393,12 +482,13 @@ def test_revoked_binding_blocks_execution_before_order_submission(live_client):
 async def test_strategy_signal_without_binding_blocks_without_creating_order(
     live_client,
 ):
-    client, _, live_enabled, fake_exchange = live_client
+    client, principal, live_enabled, fake_exchange = live_client
     connection_id = create_connection(client)
     create_policy(client)
     live_enabled[0] = True
-    authorize(client)
+    authorize(client, principal)
     from decimal import Decimal
+
     from valuecell.server.services.live_execution_service import LiveExecutionService
 
     db = client.app.dependency_overrides[get_db]().__next__()
@@ -426,13 +516,14 @@ async def test_strategy_signal_without_binding_blocks_without_creating_order(
 
 @pytest.mark.asyncio
 async def test_strategy_signal_is_idempotent_after_all_live_gates(live_client):
-    client, _, live_enabled, fake_exchange = live_client
+    client, principal, live_enabled, fake_exchange = live_client
     connection_id = create_connection(client)
     create_policy(client)
     create_binding(client, connection_id)
     live_enabled[0] = True
-    authorize(client)
+    authorize(client, principal)
     from decimal import Decimal
+
     from valuecell.server.services.live_execution_service import LiveExecutionService
 
     db = client.app.dependency_overrides[get_db]().__next__()
@@ -474,15 +565,16 @@ async def test_strategy_signal_is_idempotent_after_all_live_gates(live_client):
 
 @pytest.mark.asyncio
 async def test_strategy_signal_dispatches_to_each_bound_funding_account(live_client):
-    client, _, live_enabled, fake_exchange = live_client
+    client, principal, live_enabled, fake_exchange = live_client
     first_connection = create_connection(client, "primary-live-desk")
     second_connection = create_connection(client, "secondary-live-desk")
     create_policy(client)
     create_binding(client, first_connection)
     create_binding(client, second_connection)
     live_enabled[0] = True
-    authorize(client)
+    authorize(client, principal)
     from decimal import Decimal
+
     from valuecell.server.services.live_execution_service import LiveExecutionService
 
     db = client.app.dependency_overrides[get_db]().__next__()

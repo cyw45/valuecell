@@ -8,10 +8,12 @@ on:
     branches: ["main"]
     paths:
       - "frontend/**"
+      - ".github/workflows/frontend.yml"
   pull_request:
     branches: ["*"]
     paths:
       - "frontend/**"
+      - ".github/workflows/frontend.yml"
 
 jobs:
   biome:
@@ -22,14 +24,30 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Biome
         uses: biomejs/setup-biome@v2
         with:
           version: latest
 
-      - name: Run Biome checks
-        run: biome ci --diagnostic-level=error ./src
+      - name: Run Biome checks on changed frontend source
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_SHA="HEAD^"
+          fi
+          mapfile -d '' files < <(
+            git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=ACMR -z "$BASE_SHA" HEAD -- frontend/src \
+              | sed -z 's#^frontend/##'
+          )
+          if ((${#files[@]})); then
+            biome ci --diagnostic-level=error "${files[@]}"
+          else
+            echo "No changed frontend source files to check."
+          fi
 
   typecheck:
     runs-on: ubuntu-latest
@@ -50,6 +68,9 @@ jobs:
 
       - name: Run type checking
         run: bun run typecheck
+
+      - name: Run frontend tests
+        run: bun test
 
   build:
     runs-on: ubuntu-latest

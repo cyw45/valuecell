@@ -8,10 +8,12 @@ on:
     branches: ["main"]
     paths:
       - "python/**"
+      - ".github/workflows/python.yml"
   pull_request:
     branches: ["*"]
     paths:
       - "python/**"
+      - ".github/workflows/python.yml"
 
 jobs:
   lint:
@@ -36,6 +38,8 @@ jobs:
         working-directory: ./python
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -44,15 +48,33 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
-      
+
       - name: Install style dependencies
         run: uv sync --locked --only-group style
-      
+
+      - name: Find changed Python files
+        id: changed-python
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            BASE_SHA="HEAD^"
+          fi
+          git -C "$GITHUB_WORKSPACE" diff --name-only --diff-filter=ACMR "$BASE_SHA" HEAD -- 'python/**/*.py' \
+            | sed 's#^python/##' > /tmp/changed-python-files
+          if [[ -s /tmp/changed-python-files ]]; then
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run format style check
-        run: uv run --directory . ruff format --check --config ./pyproject.toml .
-      
+        if: steps.changed-python.outputs.any == 'true'
+        run: xargs uv run --directory . ruff format --check --config ./pyproject.toml < /tmp/changed-python-files
+
       - name: Run isort style check
-        run: uv run --directory . isort --check .
+        if: steps.changed-python.outputs.any == 'true'
+        run: xargs uv run --directory . isort --check < /tmp/changed-python-files
 
   test:
     runs-on: ubuntu-latest
@@ -82,3 +104,30 @@ jobs:
       - name: Check coverage
         run: |
           uv run diff-cover coverage.xml --fail-under=90
+
+  server-security-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./python
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version-file: "./python/pyproject.toml"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install the project
+        run: uv sync --locked --all-extras --dev
+
+      - name: Run server security regressions
+        run: >-
+          uv run pytest -q
+          valuecell/server/tests/test_tenant_credential_api.py
+          valuecell/server/tests/test_live_execution.py
+          valuecell/server/tests/test_strategy_scheduler.py

@@ -231,7 +231,9 @@ def create_live_execution_router() -> APIRouter:
     ) -> SuccessResponse[dict]:
         require_live_manage(principal)
         data = live_authorization_manager.issue_challenge(
-            principal.tenant_id, get_settings().LIVE_AUTHORIZATION_TTL_S
+            principal.tenant_id,
+            principal.user_id,
+            get_settings().LIVE_AUTHORIZATION_TTL_S,
         )
         return SuccessResponse.create(
             data=data, msg="Live authorization challenge issued"
@@ -243,8 +245,11 @@ def create_live_execution_router() -> APIRouter:
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[dict]:
         require_live_manage(principal)
+        if principal.role not in {"owner", "admin"} and not principal.is_platform_admin:
+            raise HTTPException(status_code=403, detail="实盘授权确认仅限租户管理员")
         expires_at = live_authorization_manager.confirm(
             principal.tenant_id,
+            principal.user_id,
             request.challenge_code,
             get_settings().LIVE_AUTHORIZATION_TTL_S,
         )

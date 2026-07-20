@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-
-import asyncio
 from typing import Any
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from loguru import logger
 from sqlalchemy.orm import Session
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
     RuleStrategyMarketSnapshot,
 )
 from valuecell.server.db.connection import get_database_manager
-from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
-from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
-from valuecell.server.services.sandbox_exchange_trading_service import (
-    SandboxExchangeTradingService,
+from valuecell.server.db.models.rule_strategy import (
+    RuleStrategy,
+    RuleStrategyEvaluationJournal,
+    RuleStrategyExecutionIntent,
 )
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
@@ -32,6 +31,9 @@ from valuecell.server.services.rule_strategy_service import (
     RuleStrategyService,
 )
 from valuecell.server.services.saas_access_service import TenantAccessService
+from valuecell.server.services.sandbox_exchange_trading_service import (
+    SandboxExchangeTradingService,
+)
 
 _MIN_INTERVAL_S = 60
 _DEMO_SUBMISSION_TIMEOUT_S = 15
@@ -363,6 +365,13 @@ class StrategyScheduler:
                     # The durable intent/order is the execution audit trail; never
                     # mutate the paper journal's trade JSON for exchange routing.
                     result["execution"] = execution
+                else:
+                    self._record_execution(
+                        tenant_id,
+                        strategy_id,
+                        result["evaluation_id"],
+                        execution,
+                    )
 
     @staticmethod
     def _record_execution(
@@ -370,16 +379,30 @@ class StrategyScheduler:
     ) -> None:
         session = get_database_manager().get_session()
         try:
-            journal = session.query(RuleStrategyEvaluationJournal).filter_by(
-                evaluation_id=evaluation_id, tenant_id=tenant_id, strategy_id=strategy_id
-            ).first()
-            if journal is not None and journal.trades:
-                entries = list(journal.trades)
-                entries[-1] = {**entries[-1], **execution}
-                journal.trades = entries
-                session.commit()
+            journal = (
+                session.query(RuleStrategyEvaluationJournal)
+                .filter_by(
+                    evaluation_id=evaluation_id,
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                )
+                .first()
+            )
+            if journal is None:
+                raise RuntimeError(
+                    "Evaluation journal was not found for execution recording"
+                )
+            if not journal.trades:
+                raise RuntimeError(
+                    "Evaluation journal has no target trade for execution recording"
+                )
+            entries = list(journal.trades)
+            entries[-1] = {**entries[-1], **execution}
+            journal.trades = entries
+            session.commit()
         except Exception:
             session.rollback()
+            raise
         finally:
             session.close()
 
@@ -440,11 +463,19 @@ class StrategyScheduler:
         there is no post-commit reread window in which an old job can submit.
         """
         execution_config = config.execution
-        if execution_config.environment != "okx_demo" or not execution_config.sandbox_connection_id:
-            return {"execution": "blocked", "reason": "OKX Demo execution is not configured"}
+        if (
+            execution_config.environment != "okx_demo"
+            or not execution_config.sandbox_connection_id
+        ):
+            return {
+                "execution": "blocked",
+                "reason": "OKX Demo execution is not configured",
+            }
         if action not in {"buy", "sell"}:
             return {"execution": "blocked", "reason": "Signal is not executable"}
-        requested_quote = min(quote_amount, Decimal(str(execution_config.max_order_quote_amount)))
+        requested_quote = min(
+            quote_amount, Decimal(str(execution_config.max_order_quote_amount))
+        )
         # An exchange route is valid only when it can be attributed to the
         # durable evaluation which produced it.  Never retain a direct-call
         # compatibility path here: it would bypass the intent/fencing protocol.
@@ -465,43 +496,107 @@ class StrategyScheduler:
                 .first()
             )
             if strategy is None or strategy.status != "running":
-                return {"execution": "blocked", "sandbox": True, "reason": "strategy is no longer running"}
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "strategy is no longer running",
+                }
             fresh_config = RuleStrategyConfig.model_validate(strategy.config)
             fresh_execution = fresh_config.execution
-            if fresh_execution.environment != "okx_demo" or fresh_execution.sandbox_connection_id != execution_config.sandbox_connection_id:
-                return {"execution": "blocked", "sandbox": True, "reason": "strategy execution configuration changed"}
-            requested_quote = min(quote_amount, Decimal(str(fresh_execution.max_order_quote_amount)))
-            intents = session.query(RuleStrategyExecutionIntent).filter_by(
-                tenant_id=tenant_id, strategy_id=strategy_id,
-                credential_id=fresh_execution.sandbox_connection_id,
-            ).all()
+            if (
+                fresh_execution.environment != "okx_demo"
+                or fresh_execution.sandbox_connection_id
+                != execution_config.sandbox_connection_id
+            ):
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "strategy execution configuration changed",
+                }
+            requested_quote = min(
+                quote_amount, Decimal(str(fresh_execution.max_order_quote_amount))
+            )
+            intents = (
+                session.query(RuleStrategyExecutionIntent)
+                .filter_by(
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                    credential_id=fresh_execution.sandbox_connection_id,
+                )
+                .all()
+            )
             # Daily throughput reserves every non-rejected/non-stale strategy
             # intent, including filled/closed records.  Total is active exposure
             # only, but conservatively includes pending/submitting/unknown.
-            active_statuses = {"pending", "submitting", "submission_unknown", "submitted", "open", "partially_filled"}
-            existing_total = sum(Decimal(str(row.requested_quote)) for row in intents if row.status in active_statuses)
+            active_statuses = {
+                "pending",
+                "submitting",
+                "submission_unknown",
+                "submitted",
+                "open",
+                "partially_filled",
+            }
+            existing_total = sum(
+                Decimal(str(row.requested_quote))
+                for row in intents
+                if row.status in active_statuses
+            )
             daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
             daily_total = sum(
-                Decimal(str(row.requested_quote)) for row in intents
+                Decimal(str(row.requested_quote))
+                for row in intents
                 if row.status not in {"rejected", "stale"}
-                and (getattr(row, "created_at", None) is None or row.created_at.replace(tzinfo=timezone.utc) >= daily_cutoff)
+                and (
+                    getattr(row, "created_at", None) is None
+                    or row.created_at.replace(tzinfo=timezone.utc) >= daily_cutoff
+                )
             )
-            if daily_total + requested_quote > Decimal(str(fresh_execution.max_daily_quote_amount)):
-                return {"execution": "blocked", "sandbox": True, "reason": "OKX Demo strategy daily limit reached"}
-            if existing_total + requested_quote > Decimal(str(fresh_execution.max_total_quote_amount)):
-                return {"execution": "blocked", "sandbox": True, "reason": "OKX Demo strategy total limit reached"}
+            if daily_total + requested_quote > Decimal(
+                str(fresh_execution.max_daily_quote_amount)
+            ):
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "OKX Demo strategy daily limit reached",
+                }
+            if existing_total + requested_quote > Decimal(
+                str(fresh_execution.max_total_quote_amount)
+            ):
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "OKX Demo strategy total limit reached",
+                }
             material = f"{strategy_id}:{candle_timestamp_ms}:{symbol.upper()}:{action}"
-            key = "vc-demo-" + __import__("hashlib").sha256(material.encode("utf-8")).hexdigest()[:48]
-            intent = session.query(RuleStrategyExecutionIntent).filter_by(
-                strategy_id=strategy_id, evaluation_id=evaluation_id, execution_generation=strategy.execution_generation
-            ).first()
+            key = (
+                "vc-demo-"
+                + __import__("hashlib")
+                .sha256(material.encode("utf-8"))
+                .hexdigest()[:48]
+            )
+            intent = (
+                session.query(RuleStrategyExecutionIntent)
+                .filter_by(
+                    strategy_id=strategy_id,
+                    evaluation_id=evaluation_id,
+                    execution_generation=strategy.execution_generation,
+                )
+                .first()
+            )
             if intent is None:
                 intent = RuleStrategyExecutionIntent(
-                    strategy_id=strategy_id, evaluation_id=evaluation_id,
-                    execution_generation=strategy.execution_generation, execution_source="rule_strategy",
-                    tenant_id=tenant_id, credential_id=fresh_execution.sandbox_connection_id,
-                    idempotency_key=key, symbol=symbol.replace("-", "/"), side=action,
-                    order_type="market", requested_quote=str(requested_quote), status="pending",
+                    strategy_id=strategy_id,
+                    evaluation_id=evaluation_id,
+                    execution_generation=strategy.execution_generation,
+                    execution_source="rule_strategy",
+                    tenant_id=tenant_id,
+                    credential_id=fresh_execution.sandbox_connection_id,
+                    idempotency_key=key,
+                    symbol=symbol.replace("-", "/"),
+                    side=action,
+                    order_type="market",
+                    requested_quote=str(requested_quote),
+                    status="pending",
                     request_payload={"candle_timestamp_ms": candle_timestamp_ms},
                 )
                 session.add(intent)
@@ -511,13 +606,21 @@ class StrategyScheduler:
             # idempotency key. The strategy lock is intentionally reacquired
             # below for the final no-stale-submit critical section.
             session.commit()
-            intent = session.query(RuleStrategyExecutionIntent).filter_by(
-                strategy_id=strategy_id,
-                evaluation_id=evaluation_id,
-                execution_generation=strategy.execution_generation,
-            ).first()
+            intent = (
+                session.query(RuleStrategyExecutionIntent)
+                .filter_by(
+                    strategy_id=strategy_id,
+                    evaluation_id=evaluation_id,
+                    execution_generation=strategy.execution_generation,
+                )
+                .first()
+            )
             if intent is None:
-                return {"execution": "blocked", "sandbox": True, "reason": "execution intent unavailable"}
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "execution intent unavailable",
+                }
             # Persist the conservative in-flight state before remote I/O. A
             # restart will reconcile it; it is never automatically re-submitted.
             if intent.status == "pending":
@@ -531,20 +634,35 @@ class StrategyScheduler:
                 .with_for_update()
                 .first()
             )
-            if strategy is None or strategy.status != "running" or strategy.execution_generation != intent.execution_generation:
+            if (
+                strategy is None
+                or strategy.status != "running"
+                or strategy.execution_generation != intent.execution_generation
+            ):
                 intent.status = "stale"
                 intent.error_code = "stale_generation"
                 intent.terminal_at = datetime.now(timezone.utc)
                 session.commit()
-                return {"execution": "blocked", "sandbox": True, "reason": "strategy execution generation changed"}
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "strategy execution generation changed",
+                }
             fresh_config = RuleStrategyConfig.model_validate(strategy.config)
             fresh_execution = fresh_config.execution
-            if fresh_execution.environment != "okx_demo" or fresh_execution.sandbox_connection_id != intent.credential_id:
+            if (
+                fresh_execution.environment != "okx_demo"
+                or fresh_execution.sandbox_connection_id != intent.credential_id
+            ):
                 intent.status = "stale"
                 intent.error_code = "stale_execution_configuration"
                 intent.terminal_at = datetime.now(timezone.utc)
                 session.commit()
-                return {"execution": "blocked", "sandbox": True, "reason": "strategy execution configuration changed"}
+                return {
+                    "execution": "blocked",
+                    "sandbox": True,
+                    "reason": "strategy execution configuration changed",
+                }
             # The service owns the deadline so it can commit submission_unknown
             # before returning. An outer wait_for here would cancel it and let
             # this session's rollback erase a request that may reach the venue.
@@ -553,15 +671,34 @@ class StrategyScheduler:
             # cannot interleave after this lock is acquired and before the bounded
             # exchange create call returns.
             order = await SandboxExchangeTradingService(session).submit_order(
-                tenant_id, fresh_execution.sandbox_connection_id, key, symbol.replace("-", "/"), action,
-                "market", requested_quote, None, intent=intent, fenced=True,
+                tenant_id,
+                fresh_execution.sandbox_connection_id,
+                key,
+                symbol.replace("-", "/"),
+                action,
+                "market",
+                requested_quote,
+                None,
+                intent=intent,
+                fenced=True,
                 submission_timeout_s=_DEMO_SUBMISSION_TIMEOUT_S,
             )
-            return {"execution": "okx_demo_submitted" if order.get("status") not in {"failed", "rejected", "stale"} else "blocked", "sandbox": True,
-                    "execution_intent_id": intent.id, "order_id": order.get("id"), "status": order.get("status"), "error_code": order.get("error_code")}
+            return {
+                "execution": "okx_demo_submitted"
+                if order.get("status") not in {"failed", "rejected", "stale"}
+                else "blocked",
+                "sandbox": True,
+                "execution_intent_id": intent.id,
+                "order_id": order.get("id"),
+                "status": order.get("status"),
+                "error_code": order.get("error_code"),
+            }
         except Exception:
             session.rollback()
-            return {"execution": "blocked", "sandbox": True, "reason": "OKX Demo order was rejected"}
+            return {
+                "execution": "blocked",
+                "sandbox": True,
+                "reason": "OKX Demo order was rejected",
+            }
         finally:
             session.close()
-

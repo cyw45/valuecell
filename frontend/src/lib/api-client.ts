@@ -38,14 +38,23 @@ type Session = Pick<
 type ApiClientDependencies = {
   fetch?: typeof fetch;
   getSession?: () => Session;
-  refreshLegacySession?: () => Promise<void>;
+  refreshLegacySession?: (
+    session: Session,
+  ) => Promise<Partial<SystemInfo> | void>;
+  setSession?: (session: Partial<SystemInfo>) => void;
+  clearSession?: () => void;
   notifyError?: (message: string) => void;
 };
 
 export class ApiClient {
   private fetcher: typeof fetch;
   private getSession: () => Session;
-  private refreshLegacySession: () => Promise<void>;
+  private refreshLegacySession: (
+    session: Session,
+  ) => Promise<Partial<SystemInfo> | void>;
+  private legacyRefreshFlights = new Map<string, Promise<void>>();
+  private setSession: (session: Partial<SystemInfo>) => void;
+  private clearSession: () => void;
   private notifyError: (message: string) => void;
 
   constructor(dependencies: ApiClientDependencies = {}) {
@@ -53,13 +62,20 @@ export class ApiClient {
     this.getSession =
       dependencies.getSession ?? (() => useSystemStore.getState());
     this.refreshLegacySession =
-      dependencies.refreshLegacySession ?? (() => this.refreshLegacy());
+      dependencies.refreshLegacySession ??
+      ((session) => this.refreshLegacy(session));
+    this.setSession =
+      dependencies.setSession ??
+      ((session) => useSystemStore.getState().setSystemInfo(session));
+    this.clearSession =
+      dependencies.clearSession ??
+      (() => useSystemStore.getState().clearSystemInfo());
     this.notifyError =
       dependencies.notifyError ?? ((message) => toast.error(message));
   }
 
-  private async refreshLegacy() {
-    const { refresh_token } = this.getSession();
+  private async refreshLegacy(session: Session) {
+    const { refresh_token } = session;
     const {
       data: { access_token, refresh_token: nextRefreshToken },
     } = await this.post<
@@ -72,16 +88,17 @@ export class ApiClient {
     if (!access_token || !nextRefreshToken) return;
     const userInfo = await getUserInfo(access_token);
     if (userInfo)
-      useSystemStore.getState().setSystemInfo({
+      return {
         access_token,
         refresh_token: nextRefreshToken,
         ...userInfo,
-      });
+      };
   }
 
   private async handleResponse<T>(
     response: Response,
     wrapError: boolean,
+    requestSession?: Session,
   ): Promise<T> {
     if (wrapError && !response.ok) {
       const errorData = await response.json().catch(() => ({}));
@@ -92,14 +109,32 @@ export class ApiClient {
           `HTTP ${response.status}`,
       );
       if (response.status === 401) {
+        if (!requestSession || !this.isCurrentSession(requestSession)) {
+          throw new ApiError(message, response.status, errorData);
+        }
         // SaaS tokens are issued and refreshed by the SaaS auth boundary, not /refresh.
-        if (this.getSession().refresh_token) {
+        if (requestSession.refresh_token) {
           try {
-            await this.refreshLegacySession();
+            const flightKey = this.sessionKey(requestSession);
+            let flight = this.legacyRefreshFlights.get(flightKey);
+            if (!flight) {
+              flight = this.refreshLegacySession(requestSession)
+                .then((refreshedSession) => {
+                  if (refreshedSession && this.isCurrentSession(requestSession))
+                    this.setSession(refreshedSession);
+                })
+                .finally(() => {
+                  this.legacyRefreshFlights.delete(flightKey);
+                });
+              this.legacyRefreshFlights.set(flightKey, flight);
+            }
+            await flight;
           } catch (error) {
             this.notifyError(JSON.stringify(error));
-            useSystemStore.getState().clearSystemInfo();
+            if (this.isCurrentSession(requestSession)) this.clearSession();
           }
+        } else if (requestSession.access_token) {
+          this.clearSession();
         }
       } else this.notifyError(message);
       throw new ApiError(message, response.status, errorData);
@@ -107,6 +142,25 @@ export class ApiClient {
     return response.headers.get("content-type")?.includes("application/json")
       ? response.json()
       : (response.text() as unknown as T);
+  }
+
+  private isCurrentSession(requestSession: Session) {
+    const current = this.getSession();
+    return (
+      current.access_token === requestSession.access_token &&
+      current.refresh_token === requestSession.refresh_token &&
+      current.id === requestSession.id &&
+      current.tenant_id === requestSession.tenant_id
+    );
+  }
+
+  private sessionKey(session: Session) {
+    return JSON.stringify([
+      session.id,
+      session.tenant_id,
+      session.access_token,
+      session.refresh_token,
+    ]);
   }
 
   private async request<T>(
@@ -120,10 +174,11 @@ export class ApiClient {
       "Content-Type": "application/json",
       ...config.headers,
     };
-    if (config.requiresAuth) {
-      const token = this.getSession().access_token;
-      if (token) headers.Authorization = `Bearer ${token}`;
-    }
+    const requestSession = config.requiresAuth
+      ? { ...this.getSession() }
+      : undefined;
+    if (requestSession?.access_token)
+      headers.Authorization = `Bearer ${requestSession.access_token}`;
     const requestConfig: RequestInit = {
       method,
       headers,
@@ -147,6 +202,7 @@ export class ApiClient {
     return this.handleResponse<T>(
       await fetcher.call(receiver, getServerUrl(endpoint), requestConfig),
       config.wrapError ?? true,
+      requestSession,
     );
   }
   get<T>(endpoint: string, config?: RequestConfig) {

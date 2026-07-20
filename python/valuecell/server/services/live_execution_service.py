@@ -20,16 +20,17 @@ from valuecell.server.db.models.live_execution import (
     LiveRiskPolicy,
     LiveStrategyBinding,
 )
+from valuecell.server.db.models.rule_strategy import RuleStrategy
 from valuecell.server.db.models.tenant_credential import TenantCredential
+from valuecell.server.services.audit_service import record_audit_event
 from valuecell.server.services.live_execution_authorization import (
     live_authorization_manager,
 )
+from valuecell.server.services.saas_access_service import TenantAccessService
 from valuecell.server.services.tenant_credential_service import (
     CredentialVaultError,
     TenantCredentialService,
 )
-from valuecell.server.services.saas_access_service import TenantAccessService
-from valuecell.server.services.audit_service import record_audit_event
 
 
 class LiveExecutionError(ValueError):
@@ -114,6 +115,7 @@ class LiveExecutionService:
                 label,
                 secret,
                 metadata,
+                allow_live_metadata=True,
             )
         except CredentialVaultError as exc:
             raise LiveExecutionError("实盘凭据无法安全保存") from exc
@@ -195,6 +197,13 @@ class LiveExecutionService:
         self, tenant_id: str, strategy_id: str, connection_id: str
     ) -> dict[str, Any]:
         self.connection(tenant_id, connection_id)
+        strategy = (
+            self.db.query(RuleStrategy)
+            .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+            .first()
+        )
+        if strategy is None:
+            raise LiveExecutionError("租户范围内的规则策略不存在")
         policy = self.active_policy(tenant_id)
         if policy is None:
             raise LiveExecutionError("创建实盘策略绑定前必须配置风控策略")

@@ -10,21 +10,29 @@ class LiveAuthorizationManager:
     """Keeps live authorization in memory so it disappears on process restart."""
 
     def __init__(self) -> None:
-        self._challenges: dict[str, tuple[str, datetime]] = {}
+        self._challenges: dict[str, tuple[str, datetime, str]] = {}
         self._authorizations: dict[str, datetime] = {}
 
-    def issue_challenge(self, tenant_id: str, ttl_s: int) -> dict[str, str]:
+    def issue_challenge(
+        self, tenant_id: str, requester_user_id: str, ttl_s: int
+    ) -> dict[str, str]:
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_s)
         code = secrets.token_urlsafe(12)
-        self._challenges[tenant_id] = (code, expires_at)
+        self._challenges[tenant_id] = (code, expires_at, requester_user_id)
         return {"challenge_code": code, "expires_at": expires_at.isoformat()}
 
-    def confirm(self, tenant_id: str, code: str, ttl_s: int) -> datetime | None:
+    def confirm(
+        self, tenant_id: str, approver_user_id: str, code: str, ttl_s: int
+    ) -> datetime | None:
         challenge = self._challenges.pop(tenant_id, None)
         if challenge is None:
             return None
-        expected, expires_at = challenge
-        if expires_at <= datetime.now(timezone.utc) or not secrets.compare_digest(expected, code):
+        expected, expires_at, requester_user_id = challenge
+        if (
+            requester_user_id == approver_user_id
+            or expires_at <= datetime.now(timezone.utc)
+            or not secrets.compare_digest(expected, code)
+        ):
             return None
         authorization_expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_s)
         self._authorizations[tenant_id] = authorization_expires_at

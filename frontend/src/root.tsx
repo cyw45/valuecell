@@ -1,10 +1,6 @@
-import {
-  QueryClient,
-  QueryClientProvider,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Links,
   Meta,
@@ -19,6 +15,9 @@ import AppSidebar from "@/components/valuecell/app/app-sidebar";
 import { useLanguage } from "@/store/settings-store";
 import { useSaaSSession } from "@/store/system-store";
 import { Toaster } from "./components/ui/sonner";
+import { queryClient } from "./query-client";
+import { isSaaSPublicRoute, SaaSGuardBoundary } from "./saas-guard";
+import { SessionCacheBoundary } from "./session-cache-boundary";
 import "./global.css";
 import { SidebarProvider } from "./components/ui/sidebar";
 
@@ -51,35 +50,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 5 * 60 * 1000, // Global default 5 minutes fresh time
-      gcTime: 30 * 60 * 1000, // Global default 30 minutes garbage collection time
-      refetchOnWindowFocus: false, // Don't refetch on window focus by default
-      retry: 1, // Default retry 1 times on failure
-    },
-    mutations: {
-      retry: 1, // Default retry 1 time for mutations
-    },
-  },
-});
-
 import { AutoUpdateCheck } from "@/components/valuecell/app/auto-update-check";
 import { BackendHealthCheck } from "@/components/valuecell/app/backend-health-check";
 import { TrackerProvider } from "./provider/tracker-provider";
-
-// Routes that are accessible without a SaaS session.
-const PUBLIC_PATHS: readonly string[] = ["/login"];
-// Legacy route prefixes that bypass the SaaS auth guard entirely.
-const LEGACY_PREFIXES: readonly string[] = [
-  "/home",
-  "/market",
-  "/agent",
-  "/setting",
-  "/research",
-  "/test",
-];
 
 function SaaSGuard({ children }: { children: React.ReactNode }) {
   const { isLoggedIn } = useSaaSSession();
@@ -96,30 +69,27 @@ function SaaSGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!hydrated) return;
     const path = location.pathname;
-    if (
-      isLoggedIn ||
-      PUBLIC_PATHS.includes(path) ||
-      LEGACY_PREFIXES.some((prefix) => path.startsWith(prefix))
-    ) {
+    if (isLoggedIn || isSaaSPublicRoute(path)) {
       return;
     }
     navigate("/login", { replace: true, state: { from: path } });
   }, [hydrated, isLoggedIn, location.pathname, navigate]);
 
-  return <>{children}</>;
+  const isPublicRoute = isSaaSPublicRoute(location.pathname);
+  return (
+    <SaaSGuardBoundary
+      hydrated={hydrated}
+      isLoggedIn={isLoggedIn}
+      isPublicRoute={isPublicRoute}
+    >
+      {children}
+    </SaaSGuardBoundary>
+  );
 }
 
 function ApplicationShell() {
-  const queryClient = useQueryClient();
-  const { userId, tenantId } = useSaaSSession();
-  const previousBoundary = useRef(`${userId}:${tenantId}`);
-  useEffect(() => {
-    const boundary = `${userId}:${tenantId}`;
-    if (previousBoundary.current !== boundary) queryClient.clear();
-    previousBoundary.current = boundary;
-  }, [queryClient, tenantId, userId]);
   const location = useLocation();
-  const isPublicRoute = PUBLIC_PATHS.includes(location.pathname);
+  const isPublicRoute = location.pathname === "/login";
   return (
     <SidebarProvider>
       <div className="fixed flex size-full overflow-hidden">
@@ -136,25 +106,36 @@ function ApplicationShell() {
   );
 }
 
+function SessionCacheProvider({ children }: { children: React.ReactNode }) {
+  const { userId, tenantId } = useSaaSSession();
+  return (
+    <SessionCacheBoundary boundary={`${userId}:${tenantId}`}>
+      {children}
+    </SessionCacheBoundary>
+  );
+}
+
 export default function Root() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider
-        attribute="class"
-        defaultTheme="system"
-        enableSystem
-        enableColorScheme
-        storageKey="valuecell-theme"
-      >
-        <BackendHealthCheck>
-          <TrackerProvider>
-            <SaaSGuard>
-              <ApplicationShell />
-            </SaaSGuard>
-          </TrackerProvider>
-          <AutoUpdateCheck />
-        </BackendHealthCheck>
-      </ThemeProvider>
+      <SessionCacheProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          enableColorScheme
+          storageKey="valuecell-theme"
+        >
+          <BackendHealthCheck>
+            <TrackerProvider>
+              <SaaSGuard>
+                <ApplicationShell />
+              </SaaSGuard>
+            </TrackerProvider>
+            <AutoUpdateCheck />
+          </BackendHealthCheck>
+        </ThemeProvider>
+      </SessionCacheProvider>
     </QueryClientProvider>
   );
 }

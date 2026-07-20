@@ -1,6 +1,5 @@
 import { type FC, memo } from "react";
 import ReactMarkdown from "react-markdown";
-import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import { cn } from "@/lib/utils";
 import type { MarkdownRendererProps } from "@/types/renderer";
@@ -17,9 +16,7 @@ const MarkdownRenderer: FC<MarkdownRendererProps> = ({
         className,
       )}
     >
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-        {content}
-      </ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   );
 };

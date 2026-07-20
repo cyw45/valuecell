@@ -1,4 +1,5 @@
 import base64
+import math
 from collections.abc import Generator
 from dataclasses import dataclass
 
@@ -9,10 +10,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-import valuecell.server.services.tenant_credential_service as credential_module
 import valuecell.server.services.sandbox_exchange_service as sandbox_exchange_module
+import valuecell.server.services.tenant_credential_service as credential_module
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
-from valuecell.server.api.routers.tenant_credential import create_tenant_credential_router
+from valuecell.server.api.routers.tenant_credential import (
+    create_tenant_credential_router,
+)
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.tenant_credential import TenantCredential
@@ -21,7 +24,9 @@ from valuecell.server.services.tenant_credential_service import (
     TenantCredentialService,
 )
 
-TEST_MASTER_KEY = base64.urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("ascii")
+TEST_MASTER_KEY = base64.urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode(
+    "ascii"
+)
 SECRET = {"api_key": "test-api-key-not-for-production", "api_secret": "test-api-secret"}
 
 
@@ -59,7 +64,9 @@ def credential_client(
     Base.metadata.create_all(engine)
     session_factory = sessionmaker(bind=engine)
     principal = [CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")]
-    monkeypatch.setattr(credential_module, "get_settings", lambda: CredentialSettingsFixture())
+    monkeypatch.setattr(
+        credential_module, "get_settings", lambda: CredentialSettingsFixture()
+    )
 
     def override_db() -> Generator[Session, None, None]:
         session = session_factory()
@@ -161,7 +168,9 @@ def test_vault_rejects_missing_and_malformed_master_keys(
     credential_database: Session, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(
-        credential_module, "get_settings", lambda: CredentialSettingsFixture(CREDENTIAL_MASTER_KEY=None)
+        credential_module,
+        "get_settings",
+        lambda: CredentialSettingsFixture(CREDENTIAL_MASTER_KEY=None),
     )
     with pytest.raises(CredentialVaultError, match="not configured"):
         TenantCredentialService(credential_database)
@@ -172,6 +181,97 @@ def test_vault_rejects_missing_and_malformed_master_keys(
     ):
         with pytest.raises(CredentialVaultError, match=expected_message):
             TenantCredentialService(credential_database, master_key=master_key)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"nested": {"API-Key": "leaked"}},
+        {"nested": [{"apiSecret": "leaked"}]},
+        {"nested": {"Private Key": "leaked"}},
+        {"nested": {"access_token": "leaked"}},
+        {"client_secret": "leaked"},
+        {"authorization": "leaked"},
+        {"credential": "leaked"},
+        {"ＣＬＩＥＮＴ＿ＳＥＣＲＥＴ": "leaked"},
+        {"Ａｕｔｈｏｒｉｚａｔｉｏｎ": "leaked"},
+    ],
+)
+def test_credential_metadata_recursively_rejects_sensitive_key_variants(
+    credential_client, metadata
+):
+    client, _ = credential_client
+    response = client.post(
+        "/saas/credentials", json={**_credential_request(), "metadata": metadata}
+    )
+    assert response.status_code == 422
+    assert "leaked" not in str(response.json())
+    assert client.get("/saas/credentials").json()["data"] == []
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"a": {"b": {"c": {"d": {"e": {"f": "too deep"}}}}}},
+        {f"key-{index}": index for index in range(65)},
+        {"description": "x" * 9000},
+    ],
+)
+def test_credential_metadata_rejects_excessive_depth_keys_and_size(
+    credential_client, metadata
+):
+    client, _ = credential_client
+    response = client.post(
+        "/saas/credentials", json={**_credential_request(), "metadata": metadata}
+    )
+    assert response.status_code == 422
+    assert client.get("/saas/credentials").json()["data"] == []
+
+
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
+def test_credential_metadata_rejects_non_finite_numbers_recursively(
+    credential_database: Session, value: float
+):
+    service = TenantCredentialService(credential_database, master_key=TEST_MASTER_KEY)
+    with pytest.raises(CredentialVaultError, match="finite"):
+        service.create(
+            tenant_id="tenant-a",
+            user_id="user-a",
+            kind="exchange",
+            provider="paper-exchange",
+            label="unsafe",
+            secret=SECRET,
+            metadata={"environment": ["paper", {"active": value}]},
+        )
+
+
+def test_credential_metadata_uses_kind_specific_key_allowlist(credential_client):
+    client, _ = credential_client
+    response = client.post(
+        "/saas/credentials",
+        json={**_credential_request(), "metadata": {"arbitrary_public_field": "value"}},
+    )
+    assert response.status_code == 422
+    assert client.get("/saas/credentials").json()["data"] == []
+
+
+def test_generic_credential_route_cannot_forge_executable_live_exchange_connection(
+    credential_client,
+):
+    client, _ = credential_client
+    response = client.post(
+        "/saas/credentials",
+        json={
+            **_credential_request(),
+            "provider": "binance",
+            "metadata": {"environment": "live", "market_type": "spot", "active": True},
+        },
+    )
+    assert response.status_code == 201
+    metadata = response.json()["data"]["metadata"]
+    assert metadata["environment"] == "unverified"
+    assert metadata["active"] is False
+    assert metadata["verified"] is False
 
 
 def _fake_exchange_class(*, fail_balance: bool = False):
@@ -298,7 +398,12 @@ def test_sandbox_validation_sanitizes_balance_failures_and_closes_exchange(
     }
     assert "failed-binance-key" not in str(response.json())
     assert "failed-binance-secret" not in str(response.json())
-    assert fake_exchange.instances[0].calls == ["init", "sandbox", "fetch_balance", "close"]
+    assert fake_exchange.instances[0].calls == [
+        "init",
+        "sandbox",
+        "fetch_balance",
+        "close",
+    ]
     assert client.get("/saas/credentials").json()["data"] == []
 
 
@@ -331,4 +436,9 @@ def test_sandbox_okx_validation_classifies_market_metadata_errors_without_leakin
     assert "okx-key-must-not-leak" not in str(response.json())
     assert "okx-secret-must-not-leak" not in str(response.json())
     assert "okx-passphrase-must-not-leak" not in str(response.json())
-    assert fake_exchange.instances[0].calls == ["init", "sandbox", "fetch_balance", "close"]
+    assert fake_exchange.instances[0].calls == [
+        "init",
+        "sandbox",
+        "fetch_balance",
+        "close",
+    ]

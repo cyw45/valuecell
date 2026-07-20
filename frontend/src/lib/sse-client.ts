@@ -3,7 +3,11 @@
  * Implements SSE using fetch + ReadableStream with custom headers and type safety
  */
 
-import { parse } from "best-effort-json-parser";
+import {
+  enableErrorLogging,
+  parse,
+  setErrorLogger,
+} from "best-effort-json-parser";
 import type { SSEData } from "@/types/agent";
 
 export interface SSEOptions {
@@ -34,6 +38,28 @@ export enum SSEReadyState {
   CONNECTING = 0,
   OPEN = 1,
   CLOSED = 2,
+}
+
+type WarningLogger = (...args: unknown[]) => void;
+
+export function parseSSEData(
+  data: string,
+  warn: WarningLogger = console.warn,
+): SSEData | undefined {
+  try {
+    // The parser's default error logger includes the complete payload. Keep its
+    // recovery behavior while preventing that logger from exposing SSE data.
+    setErrorLogger(() => {});
+    return parse(data) as SSEData;
+  } catch (error) {
+    warn("Failed to parse SSE message", {
+      length: data.length,
+      error: error instanceof Error ? error.name : "UnknownError",
+    });
+    return undefined;
+  } finally {
+    enableErrorLogging();
+  }
 }
 
 export class SSEClient {
@@ -210,17 +236,8 @@ export class SSEClient {
     // Remove trailing newline
     data = data.slice(0, -1);
 
-    try {
-      const parsedData = parse(data);
-
-      // Pass through parsed payload without interpreting event names
-      if (this.handlers.onData) {
-        this.handlers.onData(parsedData as SSEData);
-      }
-    } catch (error) {
-      // Only log JSON parsing errors, don't trigger connection-level error handling
-      console.warn("Failed to parse SSE message:", data, error);
-    }
+    const parsedData = parseSSEData(data);
+    if (parsedData !== undefined) this.handlers.onData?.(parsedData);
   }
 
   /**
