@@ -87,3 +87,24 @@ test("exposes every tenant strategy for the picker while retaining the active ru
     },
   ]);
 });
+
+test("treats a legacy strategy without execution config as paper instead of crashing", () => {
+  const strategies = [
+    {
+      strategy_id: "legacy",
+      name: "Legacy strategy",
+      status: "running" as const,
+      config: {},
+    },
+  ];
+
+  assert.deepEqual(strategyPickerItems(strategies, "legacy"), [
+    {
+      strategyId: "legacy",
+      name: "Legacy strategy",
+      status: "running",
+      executionEnvironment: "paper",
+      selected: true,
+    },
+  ]);
+});

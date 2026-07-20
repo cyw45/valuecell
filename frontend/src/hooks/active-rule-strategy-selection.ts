@@ -8,7 +8,9 @@ type StrategyPickerItemSource = Pick<
   RuleStrategy,
   "strategy_id" | "name" | "status"
 > & {
-  config: { execution: { environment: "paper" | "okx_demo" } };
+  // Legacy persisted strategies can predate the execution object. Keep the
+  // picker defensive so one old row cannot crash the whole authenticated SPA.
+  config?: { execution?: { environment?: "paper" | "okx_demo" } };
 };
 
 const ACTIVE_RULE_STRATEGY_STORAGE_PREFIX = "valuecell.rule-strategy-id";
@@ -46,7 +48,7 @@ export function strategyPickerItems(
     strategyId: strategy.strategy_id,
     name: strategy.name,
     status: strategy.status,
-    executionEnvironment: strategy.config.execution.environment,
+    executionEnvironment: strategy.config?.execution?.environment ?? "paper",
     selected: strategy.strategy_id === selectedStrategyId,
   }));
 }
