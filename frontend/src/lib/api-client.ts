@@ -136,8 +136,16 @@ export class ApiClient {
         requestConfig.body = data;
       } else requestConfig.body = JSON.stringify(data);
     }
+    // Browser native methods require the Window receiver. Saving `fetch` as a
+    // bare function and calling it as `this.fetcher(...)` invokes it with the
+    // ApiClient instance instead, which throws `Illegal invocation` in some
+    // browsers (notably after a fresh SPA deployment).
+    const fetcher = this.fetcher;
+    // Test doubles are ordinary functions; native browser fetch must retain the
+    // Window receiver. `globalThis` is safe in both browser and test runtimes.
+    const receiver = typeof window === "undefined" ? globalThis : window;
     return this.handleResponse<T>(
-      await this.fetcher(getServerUrl(endpoint), requestConfig),
+      await fetcher.call(receiver, getServerUrl(endpoint), requestConfig),
       config.wrapError ?? true,
     );
   }
