@@ -1,6 +1,7 @@
 import { ClipboardList, FileClock, ShieldCheck } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
+import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { useRuleStrategyTrades } from "@/api/rule-strategy";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,7 @@ function formatDate(value: string) {
 
 export default function TradesPage() {
   const { t } = useTranslation();
-  const strategyId = localStorage.getItem("valuecell.rule-strategy-id") ?? "";
+  const [strategyId] = useActiveRuleStrategyId();
   const {
     data: trades,
     isLoading,

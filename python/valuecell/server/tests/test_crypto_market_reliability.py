@@ -6,9 +6,11 @@ import pytest
 from valuecell.server.api.schemas.crypto_market import CryptoCandleData
 from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
 from valuecell.server.config.settings import get_settings
+from valuecell.server.services import crypto_market_service
 from valuecell.server.services.crypto_market_service import (
     CandleFetchResult,
     CryptoMarketService,
+    ProviderHealth,
 )
 
 
@@ -135,8 +137,8 @@ async def test_cached_provider_fetch_returns_result_without_a_second_network_req
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("configured_attempts", "expected_attempts"),
-    [(None, 1), ("2", 2)],
-    ids=["default_one_attempt", "environment_two_attempts"],
+    [(None, 2), ("2", 2)],
+    ids=["default_two_attempts", "environment_two_attempts"],
 )
 async def test_provider_attempts_use_default_or_environment_override(
     monkeypatch: pytest.MonkeyPatch,
@@ -169,6 +171,8 @@ async def test_provider_attempts_use_default_or_environment_override(
 async def test_failed_provider_enters_cooldown_and_fallback_skips_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", "1")
+    get_settings.cache_clear()
     service = CryptoMarketService(providers=("broken", "binance"))
     attempted_providers: list[str] = []
 
@@ -208,6 +212,62 @@ async def test_failed_provider_enters_cooldown_and_fallback_skips_it(
     assert health_by_provider["broken"]["consecutive_failures"] == 1
     assert health_by_provider["broken"]["last_error"] == "primary unavailable"
     assert health_by_provider["broken"]["cooldown_remaining_s"] > 0
+
+
+@pytest.mark.asyncio
+async def test_retryable_403_retries_with_jitter_then_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", "2")
+    get_settings.cache_clear()
+    service = CryptoMarketService(providers=("okx", "binance"))
+    attempts: list[str] = []
+    sleeps: list[float] = []
+
+    async def fetch(provider: str, symbol: str, interval: str, lookback: int):
+        attempts.append(provider)
+        if provider == "okx":
+            raise RuntimeError("HTTP Error 403: Forbidden")
+        return _fetch_result(provider, symbol, interval, lookback)
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(service, "_fetch_uncached", AsyncMock(side_effect=fetch))
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    monkeypatch.setattr(crypto_market_service.random, "uniform", lambda _a, _b: 0.0)
+
+    result = await service._fetch_with_fallback(
+        symbol="BTC-USDT", interval="1h", lookback=1, providers=["okx", "binance"]
+    )
+
+    assert result.provider == "binance"
+    assert attempts == ["okx", "okx", "binance"]
+    assert sleeps == [0.25]
+    assert service.get_health()["providers"][0]["status"] == "cooldown"
+
+
+@pytest.mark.asyncio
+async def test_historical_fetch_observes_cooldown_and_uses_bounded_fetch_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = CryptoMarketService(providers=("okx", "binance"))
+    service._provider_health["okx"] = ProviderHealth(cooldown_until=__import__("time").monotonic() + 60)
+    calls: list[str] = []
+
+    async def fetch(provider: str, symbol: str, interval: str, lookback: int, time_range):
+        calls.append(provider)
+        return _fetch_result(provider, symbol, interval, lookback)
+
+    monkeypatch.setattr(service, "_fetch_history_with_limit", fetch)
+
+    result = await service._fetch_with_fallback(
+        symbol="BTC-USDT", interval="1h", lookback=1, providers=["okx", "binance"],
+        time_range=(BASE_TS, BASE_TS + 60_000),
+    )
+
+    assert result.provider == "binance"
+    assert calls == ["binance"]
 
 
 def test_rule_strategy_config_normalizes_symbols_and_preserves_schedule() -> None:

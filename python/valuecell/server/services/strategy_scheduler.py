@@ -82,6 +82,17 @@ def _required_lookback(config: RuleStrategyConfig) -> int:
     )
 
 
+def _market_data_unavailable_reason(symbol_result: Any | None) -> str:
+    """Return an actionable reason for a safety-related evaluation skip."""
+    if symbol_result is None:
+        return "primary candles unavailable"
+    if getattr(symbol_result, "freshness_status", None) != "fresh":
+        return "primary candles stale age_ms={}".format(
+            getattr(symbol_result, "freshness_age_ms", "unknown")
+        )
+    return "primary candles unavailable"
+
+
 class StrategyScheduler:
     """Wraps AsyncIOScheduler to drive paper or explicitly bound OKX Demo strategies."""
 
@@ -257,12 +268,26 @@ class StrategyScheduler:
                         and symbol_result.latest_price is not None
                     ):
                         latest_price = symbol_result.latest_price
+                primary_result = market_data_by_interval[config.interval].get(symbol)
                 primary_candles = candle_sets.get(config.interval)
-                if not primary_candles:
+                if (
+                    not primary_candles
+                    or primary_result is None
+                    or primary_result.freshness_status != "fresh"
+                ):
+                    reason = _market_data_unavailable_reason(primary_result)
                     logger.warning(
-                        "StrategyScheduler skipping empty candles symbol={} strategy_id={}",
-                        symbol,
+                        "StrategyScheduler market-data unavailable strategy_id={} symbol={} "
+                        "interval={} reason={} failed_symbols={}",
                         strategy_id,
+                        symbol,
+                        config.interval,
+                        reason,
+                        {
+                            interval: data.failed_symbols.get(symbol)
+                            for interval, data in zip(intervals, fetched_sets)
+                            if symbol in data.failed_symbols
+                        },
                     )
                     continue
                 market_snapshot = RuleStrategyMarketSnapshot(
@@ -362,8 +387,13 @@ class StrategyScheduler:
         candle_timestamp_ms: int,
     ) -> dict[str, Any]:
         if config.execution.environment == "paper":
-            return {"execution": "paper_filled", "sandbox": False}
-        return await StrategyScheduler._execute_okx_demo_signal(
+            return {
+                "execution": "paper_filled",
+                "execution_ledger": "paper",
+                "paper_fill": True,
+                "sandbox": False,
+            }
+        execution = await StrategyScheduler._execute_okx_demo_signal(
             tenant_id,
             strategy_id,
             config,
@@ -373,6 +403,13 @@ class StrategyScheduler:
             price,
             candle_timestamp_ms,
         )
+        return {
+            **execution,
+            "execution_ledger": "okx_demo",
+            # Submission/acceptance is deliberately not a local fill. The
+            # exchange order reconciliation path is the authority for fills.
+            "paper_fill": False,
+        }
 
     @staticmethod
     async def _execute_okx_demo_signal(

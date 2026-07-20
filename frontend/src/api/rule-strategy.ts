@@ -5,59 +5,87 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { type ApiResponse, apiClient } from "@/lib/api-client";
+import { useSaaSSession } from "@/store/system-store";
 import type {
   CreateRuleStrategyRequest,
   EvaluateRuleStrategyRequest,
   RuleStrategy,
+  RuleStrategyAdvisory,
   RuleStrategyEvaluation,
+  RuleStrategyEvaluationHistoryEntry,
   RuleStrategyFundingLogEntry,
   RuleStrategyLog,
   RuleStrategyLogEntry,
   RuleStrategyPnlPoint,
+  RuleStrategyTextImportProposal,
   RuleStrategyTradeLogEntry,
   UpdateRuleStrategyRequest,
-  RuleStrategyAdvisory,
-  RuleStrategyEvaluationHistoryEntry,
-  RuleStrategyTextImportProposal,
 } from "@/types/rule-strategy";
 
-const ruleStrategyKey = (strategyId: string) =>
-  ["rule-strategies", strategyId] as const;
+const ruleStrategiesKey = (tenantId: string) =>
+  ["rule-strategies", tenantId] as const;
+const ruleStrategyKey = (tenantId: string, strategyId: string) =>
+  [...ruleStrategiesKey(tenantId), strategyId] as const;
 const ruleStrategyLogKey = (
+  tenantId: string,
   strategyId: string,
   logType: "signals" | "trades" | "funding",
-) => [...ruleStrategyKey(strategyId), logType] as const;
-function invalidateRuleStrategy(queryClient: QueryClient, strategyId: string) {
-  return queryClient.invalidateQueries({
-    queryKey: ruleStrategyKey(strategyId),
+) => [...ruleStrategyKey(tenantId, strategyId), logType] as const;
+function invalidateRuleStrategy(
+  queryClient: QueryClient,
+  tenantId: string,
+  strategyId: string,
+) {
+  return Promise.all([
+    queryClient.invalidateQueries({
+      queryKey: ruleStrategyKey(tenantId, strategyId),
+    }),
+    queryClient.invalidateQueries({ queryKey: ruleStrategiesKey(tenantId) }),
+  ]);
+}
+
+export function useRuleStrategies(tenantId?: string) {
+  return useQuery({
+    queryKey: ruleStrategiesKey(tenantId ?? ""),
+    queryFn: () =>
+      apiClient.get<ApiResponse<RuleStrategy[]>>("/rule-strategies", {
+        requiresAuth: true,
+      }),
+    select: (response) => response.data,
+    enabled: Boolean(tenantId),
   });
 }
 
 export function useRuleStrategy(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: ruleStrategyKey(strategyId ?? ""),
+    queryKey: ruleStrategyKey(tenantId, strategyId ?? ""),
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategy>>(
         `/rule-strategies/${strategyId}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
-    enabled: Boolean(strategyId),
+    enabled: Boolean(strategyId && tenantId),
   });
 }
 
 export function useCreateRuleStrategy() {
+  const queryClient = useQueryClient();
+  const tenantId = useSaaSSession().tenantId;
   return useMutation({
     mutationFn: (request: CreateRuleStrategyRequest) =>
       apiClient.post<ApiResponse<RuleStrategy>>("/rule-strategies", request, {
         requiresAuth: true,
       }),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ruleStrategiesKey(tenantId) }),
   });
 }
 
 export function useUpdateRuleStrategy(strategyId?: string) {
   const queryClient = useQueryClient();
-
+  const tenantId = useSaaSSession().tenantId;
   return useMutation({
     mutationFn: (request: UpdateRuleStrategyRequest) =>
       apiClient.patch<ApiResponse<RuleStrategy>>(
@@ -65,9 +93,8 @@ export function useUpdateRuleStrategy(strategyId?: string) {
         request,
         { requiresAuth: true },
       ),
-    onSuccess: () => {
-      if (strategyId) return invalidateRuleStrategy(queryClient, strategyId);
-    },
+    onSuccess: () =>
+      strategyId && invalidateRuleStrategy(queryClient, tenantId, strategyId),
   });
 }
 
@@ -76,7 +103,7 @@ function useRuleStrategyStatusMutation(
   status: "start" | "stop",
 ) {
   const queryClient = useQueryClient();
-
+  const tenantId = useSaaSSession().tenantId;
   return useMutation({
     mutationFn: () =>
       apiClient.post<ApiResponse<RuleStrategy>>(
@@ -84,23 +111,20 @@ function useRuleStrategyStatusMutation(
         undefined,
         { requiresAuth: true },
       ),
-    onSuccess: () => {
-      if (strategyId) return invalidateRuleStrategy(queryClient, strategyId);
-    },
+    onSuccess: () =>
+      strategyId && invalidateRuleStrategy(queryClient, tenantId, strategyId),
   });
 }
-
 export function useStartRuleStrategy(strategyId?: string) {
   return useRuleStrategyStatusMutation(strategyId, "start");
 }
-
 export function useStopRuleStrategy(strategyId?: string) {
   return useRuleStrategyStatusMutation(strategyId, "stop");
 }
 
 export function useEvaluateRuleStrategy(strategyId?: string) {
   const queryClient = useQueryClient();
-
+  const tenantId = useSaaSSession().tenantId;
   return useMutation({
     mutationFn: (request: EvaluateRuleStrategyRequest) =>
       apiClient.post<ApiResponse<RuleStrategyEvaluation>>(
@@ -110,33 +134,37 @@ export function useEvaluateRuleStrategy(strategyId?: string) {
       ),
     onSuccess: () => {
       if (!strategyId) return;
-      queryClient.invalidateQueries({ queryKey: ruleStrategyKey(strategyId) });
-      for (const logType of ["signals", "trades", "funding"] as const) {
-        queryClient.invalidateQueries({
-          queryKey: ruleStrategyLogKey(strategyId, logType),
-        });
-      }
       queryClient.invalidateQueries({
-        queryKey: [...ruleStrategyKey(strategyId), "pnl-curve"],
+        queryKey: ruleStrategyKey(tenantId, strategyId),
+      });
+      for (const logType of ["signals", "trades", "funding"] as const)
+        queryClient.invalidateQueries({
+          queryKey: ruleStrategyLogKey(tenantId, strategyId, logType),
+        });
+      queryClient.invalidateQueries({
+        queryKey: [...ruleStrategyKey(tenantId, strategyId), "pnl-curve"],
       });
     },
   });
 }
 
 export function useRuleStrategyEvaluations(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: [...ruleStrategyKey(strategyId ?? ""), "evaluations"] as const,
+    queryKey: [
+      ...ruleStrategyKey(tenantId, strategyId ?? ""),
+      "evaluations",
+    ] as const,
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyEvaluationHistoryEntry[]>>(
         `/rule-strategies/${strategyId}/evaluations?limit=100`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
-    enabled: Boolean(strategyId),
+    enabled: Boolean(strategyId && tenantId),
     refetchInterval: 60_000,
   });
 }
-
 export function useRuleStrategyAdvisory(strategyId?: string) {
   return useMutation({
     mutationFn: () =>
@@ -147,7 +175,6 @@ export function useRuleStrategyAdvisory(strategyId?: string) {
       ),
   });
 }
-
 export function useParseRuleStrategyText() {
   return useMutation({
     mutationFn: (strategyText: string) =>
@@ -158,57 +185,60 @@ export function useParseRuleStrategyText() {
       ),
   });
 }
-
 function useRuleStrategyLog<T>(
   strategyId: string | undefined,
   logType: "signals" | "trades" | "funding",
 ) {
+  const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: ruleStrategyLogKey(strategyId ?? "", logType),
+    queryKey: ruleStrategyLogKey(tenantId, strategyId ?? "", logType),
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyLog<T>>>(
         `/rule-strategies/${strategyId}/${logType}?limit=100`,
         { requiresAuth: true },
       ),
     select: (response) => response.data.entries,
-    enabled: Boolean(strategyId),
+    enabled: Boolean(strategyId && tenantId),
   });
 }
-
 export function useRuleStrategySignals(strategyId?: string) {
   return useRuleStrategyLog<RuleStrategyLogEntry>(strategyId, "signals");
 }
-
 export function useRuleStrategyTrades(strategyId?: string) {
   return useRuleStrategyLog<RuleStrategyTradeLogEntry>(strategyId, "trades");
 }
-
 export function useRuleStrategyFunding(strategyId?: string) {
   return useRuleStrategyLog<RuleStrategyFundingLogEntry>(strategyId, "funding");
 }
-
 export function useRuleStrategyPnlCurve(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: [...ruleStrategyKey(strategyId ?? ""), "pnl-curve"] as const,
+    queryKey: [
+      ...ruleStrategyKey(tenantId, strategyId ?? ""),
+      "pnl-curve",
+    ] as const,
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyPnlPoint[]>>(
         `/rule-strategies/${strategyId}/pnl-curve`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
-    enabled: Boolean(strategyId),
+    enabled: Boolean(strategyId && tenantId),
   });
 }
-
 export function useRuleStrategyAccount(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: [...ruleStrategyKey(strategyId ?? ""), "account"] as const,
+    queryKey: [
+      ...ruleStrategyKey(tenantId, strategyId ?? ""),
+      "account",
+    ] as const,
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategy["account"]>>(
         `/rule-strategies/${strategyId}/account`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
-    enabled: Boolean(strategyId),
+    enabled: Boolean(strategyId && tenantId),
   });
 }

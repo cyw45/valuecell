@@ -1,6 +1,7 @@
 import { Landmark, LockKeyhole } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "react-i18next";
+import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import {
   useRuleStrategyFunding,
   useRuleStrategyPnlCurve,
@@ -33,7 +34,7 @@ function formatDate(value: string) {
 export default function FundingPage() {
   const { t } = useTranslation();
   const { resolvedTheme } = useTheme();
-  const strategyId = localStorage.getItem("valuecell.rule-strategy-id") ?? "";
+  const [strategyId] = useActiveRuleStrategyId();
   const {
     data: funding,
     isLoading,

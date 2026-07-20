@@ -119,10 +119,18 @@ class RuleStrategyService:
             market=engine_market,
         )
         result = self.engine.evaluate(request)
-        account_after, fill = self._apply_result(
-            account_before, market, result.model_dump()
-        )
         result_data = result.model_dump(mode="json")
+        # A direct/manual evaluation of an exchange-backed strategy is analysis
+        # only. It must never mutate the local paper ledger or fabricate a fill.
+        if config.execution.environment != "paper":
+            account_after = account_before
+            fill = None
+            result_data["execution_ledger"] = "external"
+            result_data["paper_fill"] = False
+        else:
+            account_after, fill = self._apply_result(
+                account_before, market, result_data
+            )
         result_data["account"] = account_after.model_dump(mode="json")
         journal = self.repository.append_evaluation(
             RuleStrategyEvaluationJournal(
@@ -190,6 +198,26 @@ class RuleStrategyService:
         sell_items = [item for item in evaluated if item[1]["action"] == "sell"]
         remaining_items = [item for item in evaluated if item[1]["action"] != "sell"]
         output: list[dict[str, Any]] = []
+
+        # An exchange-backed strategy uses its exchange account as the execution
+        # ledger. It may journal signals here, but it must never create a local
+        # paper fill before the exchange accepts and later confirms the order.
+        if config.execution.environment != "paper":
+            for market, result_data in evaluated:
+                result_data["execution_ledger"] = "external"
+                result_data["paper_fill"] = False
+                output.append(
+                    self._record_evaluation(
+                        strategy_id,
+                        tenant_id,
+                        strategy.config,
+                        market,
+                        result_data,
+                        account,
+                        None,
+                    )
+                )
+            return output
 
         for market, result_data in sell_items:
             account, fill = self._apply_result(account, market, result_data)

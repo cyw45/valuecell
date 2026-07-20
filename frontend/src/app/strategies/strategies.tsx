@@ -23,6 +23,7 @@ import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
   useCreateRuleStrategy,
   useParseRuleStrategyText,
+  useRuleStrategies,
   useRuleStrategy,
   useStartRuleStrategy,
   useStopRuleStrategy,
@@ -50,8 +51,10 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { strategyPickerItems } from "@/hooks/active-rule-strategy-selection";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { cn } from "@/lib/utils";
+import { useSaaSSession } from "@/store/system-store";
 import type {
   AdvancedRuleSetConfig,
   RuleStrategyConfig,
@@ -636,6 +639,7 @@ export function RuleStrategyConfiguration({
   const { t } = useTranslation();
   const [values, setValues] = useState<StrategyFormValues>(initialValues);
   const [strategyId, setStrategyId] = useActiveRuleStrategyId();
+  const { tenantId } = useSaaSSession();
   const [name, setName] = useState(() =>
     t("saas.operations.strategy.defaultName"),
   );
@@ -643,6 +647,7 @@ export function RuleStrategyConfiguration({
   const [strategyText, setStrategyText] = useState("");
   const [textImportSummary, setTextImportSummary] = useState("");
   const [unresolvedItems, setUnresolvedItems] = useState<string[]>([]);
+  const strategiesQuery = useRuleStrategies(tenantId);
   const symbolsQuery = useGetCryptoSymbols();
   const strategyQuery = useRuleStrategy(strategyId);
   const createStrategy = useCreateRuleStrategy();
@@ -657,6 +662,10 @@ export function RuleStrategyConfiguration({
   );
   const symbolOptions =
     symbolsQuery.data?.symbols.map((symbol) => symbol.replace("-", "/")) ?? [];
+  const strategyItems = strategyPickerItems(
+    strategiesQuery.data ?? [],
+    strategyId,
+  );
 
   useEffect(() => {
     if (!strategyQuery.data) return;
@@ -1041,6 +1050,68 @@ export function RuleStrategyConfiguration({
           </Badge>
         </div>
       </header>
+
+      <div
+        className={cn(
+          "mx-auto w-full max-w-[1600px] px-4 pt-4 sm:px-6",
+          embedded && "max-w-none px-0 pt-0 sm:px-0",
+        )}
+      >
+        <Card className="gap-0 rounded-lg py-0 shadow-none">
+          <CardHeader className="px-4 py-4 sm:px-5">
+            <CardTitle className="text-base">已保存策略</CardTitle>
+            <CardDescription>
+              选择要查看和编辑的租户策略。新浏览器会自动选中最新运行中的策略。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="px-4 pb-4 sm:px-5">
+            {strategiesQuery.isLoading ? (
+              <p className="text-muted-foreground text-sm">正在加载策略…</p>
+            ) : strategiesQuery.isError ? (
+              <p className="text-destructive text-sm" role="alert">
+                无法加载已保存的策略。
+              </p>
+            ) : strategyItems.length === 0 ? (
+              <p className="text-muted-foreground text-sm">尚未保存策略。</p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {strategyItems.map((strategy) => (
+                  <Button
+                    aria-pressed={strategy.selected}
+                    className="h-auto items-start justify-start whitespace-normal p-3 text-left"
+                    key={strategy.strategyId}
+                    onClick={() => setStrategyId(strategy.strategyId)}
+                    type="button"
+                    variant={strategy.selected ? "default" : "outline"}
+                  >
+                    <span className="grid min-w-0 gap-1">
+                      <span className="truncate font-medium">
+                        {strategy.name}
+                      </span>
+                      <span className="flex flex-wrap gap-1 text-xs">
+                        <Badge
+                          variant={
+                            strategy.status === "running"
+                              ? "secondary"
+                              : "outline"
+                          }
+                        >
+                          {strategy.status === "running" ? "运行中" : "已停止"}
+                        </Badge>
+                        <Badge variant="outline">
+                          {strategy.executionEnvironment === "okx_demo"
+                            ? "OKX Demo"
+                            : "纸面交易"}
+                        </Badge>
+                      </span>
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <div
         className={cn(

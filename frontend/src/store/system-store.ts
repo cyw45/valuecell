@@ -40,13 +40,16 @@ export const useSystemStore = create<SystemStoreState>()(
         setSystemInfo: (info) => set((state) => ({ ...state, ...info })),
         clearSystemInfo: () => set(INITIAL_SYSTEM_INFO),
         setSaaSSession: ({ access_token, user_id, tenant_id, email }) =>
-          set((state) => ({
-            ...state,
-            access_token,
-            id: user_id,
-            tenant_id,
-            email,
-          })),
+          set((state) => {
+            return {
+              ...state,
+              access_token,
+              refresh_token: "",
+              id: user_id,
+              tenant_id,
+              email,
+            };
+          }),
       }),
       {
         name: STORAGE_KEY,

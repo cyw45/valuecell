@@ -1,5 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
+import { useEffect, useRef, useState } from "react";
 import {
   Links,
   Meta,
@@ -9,7 +14,6 @@ import {
   useLocation,
   useNavigate,
 } from "react-router";
-import { useEffect, useState } from "react";
 import "@/i18n";
 import AppSidebar from "@/components/valuecell/app/app-sidebar";
 import { useLanguage } from "@/store/settings-store";
@@ -64,6 +68,7 @@ const queryClient = new QueryClient({
 import { AutoUpdateCheck } from "@/components/valuecell/app/auto-update-check";
 import { BackendHealthCheck } from "@/components/valuecell/app/backend-health-check";
 import { TrackerProvider } from "./provider/tracker-provider";
+
 // Routes that are accessible without a SaaS session.
 const PUBLIC_PATHS: readonly string[] = ["/login"];
 // Legacy route prefixes that bypass the SaaS auth guard entirely.
@@ -105,6 +110,14 @@ function SaaSGuard({ children }: { children: React.ReactNode }) {
 }
 
 function ApplicationShell() {
+  const queryClient = useQueryClient();
+  const { userId, tenantId } = useSaaSSession();
+  const previousBoundary = useRef(`${userId}:${tenantId}`);
+  useEffect(() => {
+    const boundary = `${userId}:${tenantId}`;
+    if (previousBoundary.current !== boundary) queryClient.clear();
+    previousBoundary.current = boundary;
+  }, [queryClient, tenantId, userId]);
   const location = useLocation();
   const isPublicRoute = PUBLIC_PATHS.includes(location.pathname);
   return (

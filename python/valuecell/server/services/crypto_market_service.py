@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 import time
 import json
 import os
@@ -443,20 +444,19 @@ class CryptoMarketService:
         errors: list[str] = []
         stale_result: CandleFetchResult | None = None
         settings = get_settings()
-        is_historical_request = any(time_range)
         for provider in providers:
             health = self._provider_health.setdefault(provider, ProviderHealth())
             cache_key = (provider, symbol, interval, lookback)
             cached = self._cache.get(cache_key)
-            if not is_historical_request and health.cooldown_until > time.monotonic():
+            if health.cooldown_until > time.monotonic():
                 errors.append(f"{provider}: cooling down")
-                if stale_result is None and cached is not None:
+                if not any(time_range) and stale_result is None and cached is not None:
                     stale_result = cached.result
                 continue
             for attempt in range(settings.MARKET_DATA_PROVIDER_ATTEMPTS):
                 try:
                     result = (
-                        await self._fetch_history_from_provider(
+                        await self._fetch_history_with_limit(
                             provider, symbol, interval, lookback, time_range
                         )
                         if any(time_range)
@@ -467,28 +467,29 @@ class CryptoMarketService:
                             lookback=lookback,
                         )
                     )
-                    if not is_historical_request:
-                        health.consecutive_failures = 0
-                        health.cooldown_until = 0.0
-                        health.last_error = None
-                        health.last_success_at = datetime.now(timezone.utc).isoformat()
+                    health.consecutive_failures = 0
+                    health.cooldown_until = 0.0
+                    health.last_error = None
+                    health.last_success_at = datetime.now(timezone.utc).isoformat()
                     return result
                 except Exception as exc:
                     errors.append(f"{provider}: {exc}")
-                    if stale_result is None and cached is not None:
+                    if not any(time_range) and stale_result is None and cached is not None:
                         stale_result = cached.result
                     if attempt + 1 < settings.MARKET_DATA_PROVIDER_ATTEMPTS:
-                        await asyncio.sleep(0.25 * (attempt + 1))
+                        await asyncio.sleep(0.25 * (attempt + 1) + random.uniform(0, 0.1))
                         continue
-                    if not is_historical_request:
-                        self._record_provider_failure(provider, exc)
-                        logger.warning(
-                            "Crypto OHLCV fetch failed provider={} symbol={} interval={} err={}",
-                            provider,
-                            symbol,
-                            interval,
-                            str(exc),
-                        )
+                    self._record_provider_failure(provider, exc)
+                    logger.warning(
+                        "Crypto OHLCV fetch failed provider={} symbol={} interval={} attempts={} "
+                        "failure_type={} err={}",
+                        provider,
+                        symbol,
+                        interval,
+                        attempt + 1,
+                        self._failure_type(exc),
+                        str(exc),
+                    )
         if stale_result is not None and not any(time_range):
             logger.warning(
                 "Serving last successful candles during provider outage symbol={} interval={}",
@@ -497,6 +498,38 @@ class CryptoMarketService:
             )
             return stale_result
         raise RuntimeError("; ".join(errors) or "No provider succeeded")
+
+    @staticmethod
+    def _failure_type(exc: Exception) -> str:
+        """Provide a stable diagnostic category without exposing provider internals."""
+        message = str(exc).lower()
+        if "403" in message or "forbidden" in message or "401" in message:
+            return "authorization"
+        if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timed out" in message:
+            return "timeout"
+        if "429" in message or "rate limit" in message:
+            return "rate_limited"
+        if "no candles" in message:
+            return "empty_response"
+        return "provider_error"
+
+    async def _fetch_history_with_limit(
+        self,
+        provider: str,
+        symbol: str,
+        interval: str,
+        lookback: int,
+        time_range: tuple[int | None, int | None],
+    ) -> CandleFetchResult:
+        semaphore = self._semaphore
+        if semaphore is None:
+            raise RuntimeError("Market-data semaphore was not initialized")
+        async with semaphore:
+            return await asyncio.wait_for(
+                self._fetch_history_from_provider(provider, symbol, interval, lookback, time_range),
+                timeout=FETCH_TIMEOUT_S,
+            )
+
     async def _fetch_history_from_provider(
         self,
         provider: str,

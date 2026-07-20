@@ -285,3 +285,34 @@ def test_batch_cycle_uses_fixed_amount_and_blocks_unaffordable_entries():
     account = results[-1]["account"]
     assert account["quote_balance"] == 50.0
     assert set(account["positions"]) == {"BTC-USDT"}
+
+
+def test_okx_demo_batch_cycle_journals_signals_without_mutating_paper_account():
+    repository = PaperAccountRepository()
+    service = RuleStrategyService(repository=repository)
+    config = RuleStrategyConfig.model_validate(
+        {
+            **_config(),
+            "initial_capital_quote": 1_000,
+            "symbols": ["BTC-USDT"],
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "okx-demo-connection",
+            },
+        }
+    )
+    created = service.create("tenant-a", "OKX Demo ledger", None, config)
+    service.start(created["strategy_id"], "tenant-a")
+
+    results = service.evaluate_batch(
+        created["strategy_id"],
+        "tenant-a",
+        [(_candles(100, 90, 80), RuleStrategyMarketSnapshot(symbol="BTC-USDT", price=80))],
+    )
+
+    assert results[0]["action"] == "buy"
+    assert results[0]["paper_fill"] is False
+    assert results[0]["execution_ledger"] == "external"
+    assert results[0]["account"]["quote_balance"] == 1_000.0
+    assert results[0]["account"]["positions"] == {}
+    assert repository.evaluations[0].trades == []

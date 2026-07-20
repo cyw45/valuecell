@@ -23,6 +23,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import type { RuleStrategyAdvisory } from "@/types/rule-strategy";
 
 const formatTimestamp = (value?: string) =>
@@ -34,7 +35,7 @@ const formatTimestamp = (value?: string) =>
     : "尚无评估记录";
 
 export default function StrategyAdvisoryPage() {
-  const strategyId = localStorage.getItem("valuecell.rule-strategy-id") ?? "";
+  const [strategyId] = useActiveRuleStrategyId();
   const strategyQuery = useRuleStrategy(strategyId);
   const evaluationsQuery = useRuleStrategyEvaluations(strategyId);
   const advisoryMutation = useRuleStrategyAdvisory(strategyId);

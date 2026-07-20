@@ -4,11 +4,9 @@ import { VALUECELL_BACKEND_URL } from "@/constants/api";
 import { useSystemStore } from "@/store/system-store";
 import type { SystemInfo } from "@/types/system";
 
-// API error type
 export class ApiError extends Error {
   public status: number;
   public details?: unknown;
-
   constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.name = "ApiError";
@@ -16,14 +14,11 @@ export class ApiError extends Error {
     this.details = details;
   }
 }
-
 export interface ApiResponse<T> {
   code: number;
   data: T;
   msg: string;
 }
-
-// request config interface
 export interface RequestConfig {
   requiresAuth?: boolean;
   headers?: Record<string, string>;
@@ -31,21 +26,58 @@ export interface RequestConfig {
   keepalive?: boolean;
   wrapError?: boolean;
 }
+export const getServerUrl = (endpoint: string) =>
+  endpoint.startsWith("http")
+    ? endpoint
+    : `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1"}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 
-export const getServerUrl = (endpoint: string) => {
-  if (endpoint.startsWith("http")) return endpoint;
-
-  return `${import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1"}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+type Session = Pick<
+  SystemInfo,
+  "access_token" | "refresh_token" | "id" | "tenant_id"
+>;
+type ApiClientDependencies = {
+  fetch?: typeof fetch;
+  getSession?: () => Session;
+  refreshLegacySession?: () => Promise<void>;
+  notifyError?: (message: string) => void;
 };
 
-class ApiClient {
-  // default config
-  private config: RequestConfig = {
-    requiresAuth: false,
-    headers: {
-      "Content-Type": "application/json",
-    },
-  };
+export class ApiClient {
+  private fetcher: typeof fetch;
+  private getSession: () => Session;
+  private refreshLegacySession: () => Promise<void>;
+  private notifyError: (message: string) => void;
+
+  constructor(dependencies: ApiClientDependencies = {}) {
+    this.fetcher = dependencies.fetch ?? fetch;
+    this.getSession =
+      dependencies.getSession ?? (() => useSystemStore.getState());
+    this.refreshLegacySession =
+      dependencies.refreshLegacySession ?? (() => this.refreshLegacy());
+    this.notifyError =
+      dependencies.notifyError ?? ((message) => toast.error(message));
+  }
+
+  private async refreshLegacy() {
+    const { refresh_token } = this.getSession();
+    const {
+      data: { access_token, refresh_token: nextRefreshToken },
+    } = await this.post<
+      ApiResponse<Pick<SystemInfo, "access_token" | "refresh_token">>
+    >(
+      `${VALUECELL_BACKEND_URL}/refresh`,
+      { refreshToken: refresh_token },
+      { wrapError: false },
+    );
+    if (!access_token || !nextRefreshToken) return;
+    const userInfo = await getUserInfo(access_token);
+    if (userInfo)
+      useSystemStore.getState().setSystemInfo({
+        access_token,
+        refresh_token: nextRefreshToken,
+        ...userInfo,
+      });
+  }
 
   private async handleResponse<T>(
     response: Response,
@@ -59,45 +91,22 @@ class ApiClient {
           response.statusText ||
           `HTTP ${response.status}`,
       );
-
       if (response.status === 401) {
-        try {
-          const {
-            data: { access_token, refresh_token },
-          } = await apiClient.post<
-            ApiResponse<Pick<SystemInfo, "access_token" | "refresh_token">>
-          >(`${VALUECELL_BACKEND_URL}/refresh`, {
-            refreshToken: useSystemStore.getState().refresh_token,
-          });
-
-          if (access_token && refresh_token) {
-            const userInfo = await getUserInfo(access_token);
-
-            if (userInfo) {
-              useSystemStore.getState().setSystemInfo({
-                access_token,
-                refresh_token,
-                ...userInfo,
-              });
-            }
+        // SaaS tokens are issued and refreshed by the SaaS auth boundary, not /refresh.
+        if (this.getSession().refresh_token) {
+          try {
+            await this.refreshLegacySession();
+          } catch (error) {
+            this.notifyError(JSON.stringify(error));
+            useSystemStore.getState().clearSystemInfo();
           }
-        } catch (error) {
-          toast.error(JSON.stringify(error));
-          useSystemStore.getState().clearSystemInfo();
         }
-      } else {
-        toast.error(message);
-      }
-
+      } else this.notifyError(message);
       throw new ApiError(message, response.status, errorData);
     }
-
-    const contentType = response.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      return response.json();
-    }
-
-    return response.text() as unknown as T;
+    return response.headers.get("content-type")?.includes("application/json")
+      ? response.json()
+      : (response.text() as unknown as T);
   }
 
   private async request<T>(
@@ -106,80 +115,49 @@ class ApiClient {
     data?: unknown,
     config: RequestConfig = {},
   ): Promise<T> {
-    const mergedConfig = { ...this.config, ...config };
-    const url = getServerUrl(endpoint);
-
-    // add authentication header
-    if (mergedConfig.requiresAuth) {
-      const token = useSystemStore.getState().access_token;
-      if (token) {
-        mergedConfig.headers!.Authorization = `Bearer ${token}`;
-      }
+    // Never mutate defaults or caller headers: each request gets an isolated header object.
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...config.headers,
+    };
+    if (config.requiresAuth) {
+      const token = this.getSession().access_token;
+      if (token) headers.Authorization = `Bearer ${token}`;
     }
-
-    // prepare request config
     const requestConfig: RequestInit = {
       method,
-      headers: mergedConfig.headers,
-      signal: mergedConfig.signal,
-      keepalive: mergedConfig.keepalive,
+      headers,
+      signal: config.signal,
+      keepalive: config.keepalive,
     };
-
-    // add request body
     if (data && ["POST", "PUT", "PATCH"].includes(method)) {
       if (data instanceof FormData) {
-        delete mergedConfig.headers!["Content-Type"];
+        delete headers["Content-Type"];
         requestConfig.body = data;
-      } else {
-        requestConfig.body = JSON.stringify(data);
-      }
+      } else requestConfig.body = JSON.stringify(data);
     }
-
-    const response = await fetch(url, requestConfig);
-    return this.handleResponse<T>(response, config.wrapError ?? true);
+    return this.handleResponse<T>(
+      await this.fetcher(getServerUrl(endpoint), requestConfig),
+      config.wrapError ?? true,
+    );
   }
-
-  async get<T>(endpoint: string, config?: RequestConfig): Promise<T> {
+  get<T>(endpoint: string, config?: RequestConfig) {
     return this.request<T>("GET", endpoint, undefined, config);
   }
-
-  async post<T>(
-    endpoint: string,
-    data?: unknown,
-    config?: RequestConfig,
-  ): Promise<T> {
+  post<T>(endpoint: string, data?: unknown, config?: RequestConfig) {
     return this.request<T>("POST", endpoint, data, config);
   }
-
-  async put<T>(
-    endpoint: string,
-    data?: unknown,
-    config?: RequestConfig,
-  ): Promise<T> {
+  put<T>(endpoint: string, data?: unknown, config?: RequestConfig) {
     return this.request<T>("PUT", endpoint, data, config);
   }
-
-  async patch<T>(
-    endpoint: string,
-    data?: unknown,
-    config?: RequestConfig,
-  ): Promise<T> {
+  patch<T>(endpoint: string, data?: unknown, config?: RequestConfig) {
     return this.request<T>("PATCH", endpoint, data, config);
   }
-
-  async delete<T>(endpoint: string, config?: RequestConfig): Promise<T> {
+  delete<T>(endpoint: string, config?: RequestConfig) {
     return this.request<T>("DELETE", endpoint, undefined, config);
   }
-
-  // file upload
-  async upload<T>(
-    endpoint: string,
-    formData: FormData,
-    config?: RequestConfig,
-  ): Promise<T> {
+  upload<T>(endpoint: string, formData: FormData, config?: RequestConfig) {
     return this.request<T>("POST", endpoint, formData, config);
   }
 }
-
-// default api client with authentication
 export const apiClient = new ApiClient();

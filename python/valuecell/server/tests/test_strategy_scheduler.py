@@ -63,7 +63,57 @@ async def test_paper_execution_never_routes_to_a_live_connection() -> None:
         1234,
     )
 
-    assert result == {"execution": "paper_filled", "sandbox": False}
+    assert result == {
+        "execution": "paper_filled",
+        "execution_ledger": "paper",
+        "paper_fill": True,
+        "sandbox": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_submission_is_not_recorded_as_a_paper_fill(monkeypatch):
+    class FakeQuery:
+        def filter_by(self, **_kwargs):
+            return self
+
+        def all(self):
+            return []
+
+    class FakeSession:
+        def query(self, _model):
+            return FakeQuery()
+
+        def rollback(self):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeService:
+        def __init__(self, _session):
+            pass
+
+        async def submit_order(self, *_args):
+            return {"id": "demo-order", "status": "open", "sandbox": True}
+
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", FakeService)
+    monkeypatch.setattr(
+        strategy_scheduler, "get_database_manager", lambda: SimpleNamespace(get_session=FakeSession)
+    )
+    config = RuleStrategyConfig.model_validate({
+        "symbols": ["BTC-USDT"],
+        "execution": {"environment": "okx_demo", "sandbox_connection_id": "okx-demo-connection"},
+    })
+
+    result = await strategy_scheduler.StrategyScheduler._execute_signal(
+        "tenant-a", "rule-a", config, "BTC-USDT", "buy", Decimal("100"), Decimal("50000"), 1234
+    )
+
+    assert result["execution"] == "okx_demo_submitted"
+    assert result["paper_fill"] is False
+    assert result["execution_ledger"] == "okx_demo"
+
 
 @pytest.mark.asyncio
 async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministic_id(monkeypatch):
@@ -197,3 +247,10 @@ async def test_okx_demo_execution_blocks_when_daily_limit_is_reached(monkeypatch
     )
     assert result["execution"] == "blocked"
     assert "daily limit" in result["reason"]
+
+
+def test_market_data_unavailable_reason_distinguishes_missing_and_stale_primary_candles():
+    assert strategy_scheduler._market_data_unavailable_reason(None) == "primary candles unavailable"
+    assert strategy_scheduler._market_data_unavailable_reason(
+        SimpleNamespace(freshness_status="stale", freshness_age_ms=121_000)
+    ) == "primary candles stale age_ms=121000"

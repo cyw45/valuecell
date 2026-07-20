@@ -280,7 +280,7 @@ class Settings:
             "VALUECELL_MARKET_DATA_MAX_CONCURRENT_FETCHES", 12
         )
         self.MARKET_DATA_PROVIDER_ATTEMPTS = _positive_int_env(
-            "VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", 1
+            "VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", 2
         )
         self.MARKET_DATA_CACHE_TTL_S = _positive_float_env(
             "VALUECELL_MARKET_DATA_CACHE_TTL_S", 30.0
