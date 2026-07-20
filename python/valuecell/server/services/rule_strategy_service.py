@@ -14,6 +14,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyPaperPosition,
     RuleStrategyPosition,
 )
+from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyEvaluationJournal,
@@ -80,14 +81,11 @@ class RuleStrategyService:
         description: str | None,
         config: RuleStrategyConfig | None,
     ) -> dict[str, Any]:
-        strategy = self._require_strategy(strategy_id, tenant_id)
-        if name is not None:
-            strategy.name = name
-        if description is not None:
-            strategy.description = description
-        if config is not None:
-            strategy.config = config.model_dump(mode="json")
-        return self._strategy_data(self.repository.update(strategy))
+        return self._locked_mutate(
+            strategy_id,
+            tenant_id,
+            lambda strategy: self._apply_update(strategy, name, description, config),
+        )
 
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         return self._set_status(strategy_id, tenant_id, "running")
@@ -474,9 +472,58 @@ class RuleStrategyService:
     def _set_status(
         self, strategy_id: str, tenant_id: str, status: str
     ) -> dict[str, Any]:
-        strategy = self._require_strategy(strategy_id, tenant_id)
-        strategy.status = status
-        return self._strategy_data(self.repository.update(strategy))
+        def apply(strategy: RuleStrategy) -> None:
+            strategy.status = status
+            strategy.execution_generation = (strategy.execution_generation or 1) + 1
+        return self._locked_mutate(strategy_id, tenant_id, apply)
+
+    @staticmethod
+    def _apply_update(
+        strategy: RuleStrategy, name: str | None, description: str | None,
+        config: RuleStrategyConfig | None,
+    ) -> None:
+        if name is not None:
+            strategy.name = name
+        if description is not None:
+            strategy.description = description
+        if config is not None:
+            strategy.config = config.model_dump(mode="json")
+            strategy.execution_generation = (strategy.execution_generation or 1) + 1
+
+    def _locked_mutate(self, strategy_id: str, tenant_id: str, apply: Any) -> dict[str, Any]:
+        """Control-plane changes share the RuleStrategy lock with dispatch.
+
+        Production repositories use a database transaction and row lock.  The
+        small in-memory repository used by deterministic unit tests deliberately
+        has no database session; it cannot race another process, so retain its
+        repository-owned mutation semantics without opening the production DB.
+        """
+        if not hasattr(self.repository, "db_session"):
+            strategy = self._require_strategy(strategy_id, tenant_id)
+            apply(strategy)
+            return self._strategy_data(self.repository.update(strategy))
+
+        configured_session = self.repository.db_session
+        session = configured_session or get_database_manager().get_session()
+        owns_session = configured_session is None
+        try:
+            strategy = session.query(RuleStrategy).filter_by(
+                strategy_id=strategy_id, tenant_id=tenant_id
+            ).with_for_update().first()
+            if strategy is None:
+                raise RuleStrategyNotFoundError(f"Rule strategy '{strategy_id}' was not found")
+            apply(strategy)
+            session.commit()
+            session.refresh(strategy)
+            if owns_session:
+                session.expunge(strategy)
+            return self._strategy_data(strategy)
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if owns_session:
+                session.close()
 
     def _require_strategy(self, strategy_id: str, tenant_id: str) -> RuleStrategy:
         strategy = self.repository.get(strategy_id, tenant_id)
@@ -495,6 +542,7 @@ class RuleStrategyService:
             "status": strategy.status,
             "mode": config.execution.environment,
             "config": strategy.config,
+            "execution_generation": strategy.execution_generation,
             "account": self._account_from_history(
                 strategy, strategy.tenant_id, config
             ).model_dump(mode="json"),

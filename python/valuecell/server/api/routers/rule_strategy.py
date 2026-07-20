@@ -30,6 +30,14 @@ from valuecell.server.services.rule_strategy_text_import_service import (
     RuleStrategyTextImportService,
     RuleStrategyTextImportUnavailableError,
 )
+from valuecell.server.services.rule_strategy_demo_execution_read_model import (
+    DemoExecutionReadModelError,
+    get_demo_execution_read_model,
+)
+from valuecell.server.services.sandbox_exchange_trading_service import (
+    SandboxExchangeTradingService,
+    SandboxTradingError,
+)
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
 )
@@ -354,6 +362,35 @@ def create_rule_strategy_router(
                 }
             )
         return SuccessResponse.create(data=points, msg="PnL curve retrieved")
+
+    @router.get(
+        "/{strategy_id}/demo-execution", response_model=SuccessResponse[dict[str, Any]]
+    )
+    async def get_rule_strategy_demo_execution(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db=Depends(get_db),
+    ) -> SuccessResponse[dict[str, Any]]:
+        """Return explicit OKX Demo facts; never substitute the paper ledger."""
+        require_strategy_read(principal)
+        try:
+            strategy = rule_service.get(strategy_id, principal.tenant_id)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            data = await get_demo_execution_read_model(
+                strategy,
+                principal.tenant_id,
+                SandboxExchangeTradingService(db),
+            )
+        except DemoExecutionReadModelError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except SandboxTradingError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "okx_demo_read_unavailable", "detail": str(exc)},
+            ) from exc
+        return SuccessResponse.create(data=data, msg="OKX Demo strategy execution retrieved")
 
     @router.get(
         "/{strategy_id}/account", response_model=SuccessResponse[dict[str, Any]]

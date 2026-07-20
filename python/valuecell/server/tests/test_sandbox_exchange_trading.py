@@ -269,7 +269,7 @@ def test_list_orders_refreshes_non_terminal_exchange_statuses(sandbox_client):
         f"/saas/sandbox-exchanges/orders?credential_id={credential_id}&refresh=true"
     )
     assert orders.status_code == 200
-    assert orders.json()["data"][0]["status"] == "closed"
+    assert orders.json()["data"][0]["status"] == "filled"
 
 
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):

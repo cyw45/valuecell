@@ -21,6 +21,7 @@ import type {
   RuleStrategyTradeLogEntry,
   UpdateRuleStrategyRequest,
 } from "@/types/rule-strategy";
+import type { RuleStrategyDemoExecution } from "@/types/rule-strategy-demo-execution";
 
 const ruleStrategiesKey = (tenantId: string) =>
   ["rule-strategies", tenantId] as const;
@@ -31,6 +32,8 @@ const ruleStrategyLogKey = (
   strategyId: string,
   logType: "signals" | "trades" | "funding",
 ) => [...ruleStrategyKey(tenantId, strategyId), logType] as const;
+const ruleStrategyDemoExecutionKey = (tenantId: string, strategyId: string) =>
+  [...ruleStrategyKey(tenantId, strategyId), "demo-execution"] as const;
 function invalidateRuleStrategy(
   queryClient: QueryClient,
   tenantId: string,
@@ -67,6 +70,25 @@ export function useRuleStrategy(strategyId?: string) {
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+  });
+}
+
+/** Reads only the exchange-authoritative Demo execution model for one strategy. */
+export function useRuleStrategyDemoExecution(
+  strategyId?: string,
+  enabled = true,
+) {
+  const tenantId = useSaaSSession().tenantId;
+  return useQuery({
+    queryKey: ruleStrategyDemoExecutionKey(tenantId, strategyId ?? ""),
+    queryFn: () =>
+      apiClient.get<ApiResponse<RuleStrategyDemoExecution>>(
+        `/rule-strategies/${strategyId}/demo-execution`,
+        { requiresAuth: true },
+      ),
+    select: (response) => response.data,
+    enabled: Boolean(strategyId && tenantId && enabled),
+    refetchInterval: enabled ? 30_000 : false,
   });
 }
 

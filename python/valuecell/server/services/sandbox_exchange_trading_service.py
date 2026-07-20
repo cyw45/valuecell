@@ -6,12 +6,24 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
+import asyncio
 import ccxt.pro as ccxtpro
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
+
+# These are deliberately shared service semantics, rather than exchange-specific
+# strings.  In particular submission_unknown means the remote request may have
+# reached the venue and must only be reconciled, never automatically retried.
+INTENT_PENDING = "pending"
+INTENT_SUBMITTING = "submitting"
+INTENT_SUBMISSION_UNKNOWN = "submission_unknown"
+INTENT_SUBMITTED = "submitted"
+INTENT_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected", "stale"})
+ORDER_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected"})
 from valuecell.server.services.tenant_credential_service import (
     CredentialVaultError,
     TenantCredentialService,
@@ -152,7 +164,41 @@ class SandboxExchangeTradingService:
         order_type: Literal["market", "limit"],
         quote_amount: Decimal,
         price: Decimal | None,
+        *,
+        intent: RuleStrategyExecutionIntent | None = None,
+        fenced: bool = False,
+        submission_timeout_s: float | None = None,
     ) -> dict[str, Any]:
+        """Persist the order before I/O; an attributed intent is never paper-filled.
+
+        ``submission_unknown`` is intentionally not retried here: a transport
+        exception may have created an exchange order.
+        """
+        if intent is not None:
+            if intent.tenant_id != tenant_id or intent.credential_id != credential_id:
+                raise SandboxTradingError("Execution intent attribution does not match order")
+            client_order_id = intent.idempotency_key
+            existing_intent_order = self.db.query(SandboxExchangeOrder).filter_by(execution_intent_id=intent.id).first()
+            if existing_intent_order is not None:
+                return self._order_metadata(existing_intent_order)
+            if intent.status == INTENT_SUBMISSION_UNKNOWN:
+                return self._intent_metadata(intent, None)
+            # Last fence immediately before routing. Stop/update after the intent
+            # commit turns it stale without making any exchange request.
+            strategy_query = self.db.query(RuleStrategy).filter_by(
+                strategy_id=intent.strategy_id, tenant_id=tenant_id
+            )
+            # Scheduler already owns this lock. Other callers acquire it here.
+            strategy = strategy_query.first() if fenced else strategy_query.with_for_update().first()
+            if strategy is None or strategy.status != "running" or strategy.execution_generation != intent.execution_generation:
+                intent.status = "stale"
+                intent.terminal_at = datetime.now(timezone.utc)
+                intent.error_code = "stale_generation"
+                if fenced:
+                    self.db.flush()
+                else:
+                    self.db.commit()
+                return self._intent_metadata(intent, None)
         existing = self._order_by_client_id(tenant_id, client_order_id)
         if existing is not None:
             return self._order_metadata(existing)
@@ -174,10 +220,24 @@ class SandboxExchangeTradingService:
             requested_quantity=str(quantity) if quantity is not None else None,
             status="pending",
             sandbox=True,
+            **(
+                {
+                    "strategy_id": intent.strategy_id,
+                    "evaluation_id": intent.evaluation_id,
+                    "execution_generation": intent.execution_generation,
+                    "execution_source": intent.execution_source,
+                    "execution_intent_id": intent.id,
+                }
+                if intent is not None
+                else {}
+            ),
         )
         self.db.add(order)
         try:
-            self.db.commit()
+            if fenced:
+                self.db.flush()
+            else:
+                self.db.commit()
         except IntegrityError:
             self.db.rollback()
             existing = self._order_by_client_id(tenant_id, client_order_id)
@@ -185,11 +245,26 @@ class SandboxExchangeTradingService:
                 return self._order_metadata(existing)
             raise
         self.db.refresh(order)
+        if intent is not None:
+            intent.status = INTENT_SUBMITTING
+            # Scheduler-owned intents enter ``submitting`` in a separate durable
+            # transaction before this fenced remote-I/O section. Do not count the
+            # same remote submission twice.
+            if intent.submitted_at is None:
+                intent.attempt_count = (intent.attempt_count or 0) + 1
+                intent.submitted_at = datetime.now(timezone.utc)
+            if fenced:
+                self.db.flush()
+            else:
+                self.db.commit()
 
         exchange = self._exchange_for(tenant_id, credential)
         try:
             exchange.set_sandbox_mode(True)
-            markets = await exchange.load_markets()
+            # Market discovery, ticker and balance are preflight operations: a
+            # timeout there proves no create request was sent, so it is terminal
+            # validation failure rather than ambiguous exchange submission.
+            markets = await self._await_preflight(exchange.load_markets(), submission_timeout_s)
             market = markets.get(symbol) if isinstance(markets, dict) else None
             if (
                 not isinstance(market, dict)
@@ -198,7 +273,7 @@ class SandboxExchangeTradingService:
                 or market.get("quote") != "USDT"
             ):
                 raise SandboxTradingError("Symbol is not an active USDT spot market on OKX Demo")
-            ticker = await exchange.fetch_ticker(symbol)
+            ticker = await self._await_preflight(exchange.fetch_ticker(symbol), submission_timeout_s)
             market_price = self._decimal(
                 ticker.get("last") if isinstance(ticker, dict) else None,
                 "Ticker price unavailable",
@@ -213,7 +288,7 @@ class SandboxExchangeTradingService:
             min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
             if quantity <= 0 or (min_amount > 0 and quantity < min_amount) or (min_cost > 0 and quote_amount < min_cost):
                 raise SandboxTradingError("Order does not satisfy OKX Demo minimum size")
-            raw_balance = await exchange.fetch_balance()
+            raw_balance = await self._await_preflight(exchange.fetch_balance(), submission_timeout_s)
             free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
             required_currency = "USDT" if side == "buy" else str(market.get("base") or "")
             required_amount = quote_amount if side == "buy" else quantity
@@ -222,7 +297,7 @@ class SandboxExchangeTradingService:
             if order_type == "limit" and price is None:
                 raise SandboxTradingError("Limit orders require a price")
             exchange.set_sandbox_mode(True)
-            exchange_order = await exchange.create_order(
+            create = exchange.create_order(
                 symbol,
                 order_type,
                 side,
@@ -230,17 +305,48 @@ class SandboxExchangeTradingService:
                 float(price) if price is not None else None,
                 {"clientOrderId": client_order_id},
             )
+            exchange_order = (
+                await asyncio.wait_for(create, timeout=submission_timeout_s)
+                if submission_timeout_s is not None
+                else await create
+            )
             order.requested_quantity = str(quantity)
-            order.status = str(exchange_order.get("status") or "submitted")
+            order.status = self._normalise_status(exchange_order.get("status") or "submitted")
             exchange_id = exchange_order.get("id")
             order.exchange_order_id = str(exchange_id) if exchange_id is not None else None
             order.response_metadata = self._safe_exchange_metadata(exchange_order)
-        except SandboxTradingError:
+            if intent is not None:
+                intent.status = order.status if order.status not in ORDER_TERMINAL else order.status
+                if order.status in ORDER_TERMINAL:
+                    intent.terminal_at = datetime.now(timezone.utc)
+        except SandboxTradingError as exc:
             order.status = "failed"
             order.error_code = "sandbox_order_rejected"
-        except Exception:
-            order.status = "failed"
-            order.error_code = "sandbox_order_rejected"
+            if intent is not None:
+                intent.status = "failed"
+                intent.error_code = order.error_code
+                intent.error_message = str(exc)
+                intent.terminal_at = datetime.now(timezone.utc)
+        except asyncio.CancelledError as exc:
+            # Cancellation can race a remote create. Persist ambiguity before
+            # propagating it so a caller's rollback cannot erase the audit row.
+            order.status = INTENT_SUBMISSION_UNKNOWN
+            order.error_code = "sandbox_submission_unknown"
+            if intent is not None:
+                intent.status = INTENT_SUBMISSION_UNKNOWN
+                intent.error_code = order.error_code
+                intent.error_message = "submission cancelled"
+            self.db.commit()
+            raise
+        except Exception as exc:
+            # The request could have reached the exchange. Preserve that ambiguity
+            # and force reconciliation rather than issuing a duplicate create.
+            order.status = INTENT_SUBMISSION_UNKNOWN
+            order.error_code = "sandbox_submission_unknown"
+            if intent is not None:
+                intent.status = INTENT_SUBMISSION_UNKNOWN
+                intent.error_code = order.error_code
+                intent.error_message = str(exc)
         finally:
             await self._close(exchange)
         self.db.commit()
@@ -259,8 +365,9 @@ class SandboxExchangeTradingService:
         try:
             exchange.set_sandbox_mode(True)
             raw = await exchange.fetch_order(order.exchange_order_id, order.symbol)
-            order.status = str(raw.get("status") or order.status)
+            order.status = self._normalise_status(raw.get("status") or order.status)
             order.response_metadata = self._safe_exchange_metadata(raw)
+            self._sync_intent_from_order(order)
             self.db.commit()
             self.db.refresh(order)
         finally:
@@ -278,7 +385,7 @@ class SandboxExchangeTradingService:
             order.id
             for order in query.all()
             if getattr(order, "exchange_order_id", None)
-            and order.status not in {"closed", "canceled", "cancelled", "failed", "rejected"}
+            and order.status not in {"filled", "canceled", "cancelled", "failed", "rejected", "stale"}
         ]
         refreshed = []
         for order_id in order_ids:
@@ -287,6 +394,68 @@ class SandboxExchangeTradingService:
             except SandboxTradingError:
                 continue
         return refreshed
+
+    async def reconcile_nonterminal_intents(self, tenant_id: str) -> list[dict[str, Any]]:
+        """Lookup ambiguous submissions by idempotency key; never issue create_order."""
+        intents = self.db.query(RuleStrategyExecutionIntent).filter_by(tenant_id=tenant_id).all()
+        results: list[dict[str, Any]] = []
+        for intent in intents:
+            # A crash after the durable ``submitting`` transition but before (or
+            # during) create_order is just as ambiguous as a transport timeout.
+            # Neither state is ever resubmitted here; both are lookup-only.
+            if intent.status not in {INTENT_SUBMITTING, INTENT_SUBMISSION_UNKNOWN}:
+                continue
+            # Generation fencing blocks new remote submissions, not recovery of
+            # a request already durable in ``submitting``/``submission_unknown``.
+            # Even after stop or a connection switch, reconciliation must retain
+            # and query the original attributed connection so any venue order is
+            # auditable rather than silently being marked stale.
+            try:
+                credential = self._active_sandbox_credential(tenant_id, intent.credential_id)
+                exchange = self._exchange_for(tenant_id, credential)
+            except SandboxTradingError as exc:
+                intent.error_code = "reconciliation_deferred"
+                intent.error_message = str(exc)
+                if intent.status == INTENT_SUBMITTING:
+                    intent.status = INTENT_SUBMISSION_UNKNOWN
+                self.db.commit()
+                results.append(self._intent_metadata(intent, None))
+                continue
+            try:
+                exchange.set_sandbox_mode(True)
+                raw = await self._find_exchange_order_by_client_id(exchange, intent.symbol, intent.idempotency_key)
+                if raw is None:
+                    intent.error_code = "reconciliation_required"
+                    # A durable in-flight submission was not located in this polling
+                    # pass. Preserve its ambiguity and let the scheduled lookup retry;
+                    # never turn this into another create_order request.
+                    if intent.status == INTENT_SUBMITTING:
+                        intent.status = INTENT_SUBMISSION_UNKNOWN
+                    self.db.commit()
+                    results.append(self._intent_metadata(intent, None))
+                    continue
+                order = self._order_by_client_id(tenant_id, intent.idempotency_key)
+                if order is None:
+                    order = SandboxExchangeOrder(tenant_id=tenant_id, credential_id=intent.credential_id, provider=credential.provider, client_order_id=intent.idempotency_key, symbol=intent.symbol, side=intent.side, order_type=intent.order_type, requested_quote=intent.requested_quote, status="submitted", sandbox=True, strategy_id=intent.strategy_id, evaluation_id=intent.evaluation_id, execution_generation=intent.execution_generation, execution_source=intent.execution_source, execution_intent_id=intent.id)
+                    self.db.add(order)
+                order.status = self._normalise_status(raw.get("status") or "submitted")
+                order.exchange_order_id = str(raw["id"]) if raw.get("id") is not None else None
+                order.response_metadata = self._safe_exchange_metadata(raw)
+                self._sync_intent_from_order(order)
+                self.db.commit()
+                results.append(self._order_metadata(order))
+            except Exception as exc:
+                # Recovery errors must not kill the whole tenant loop or permit a
+                # retrying order submission. Keep the intent safely ambiguous.
+                intent.error_code = "reconciliation_deferred"
+                intent.error_message = str(exc)
+                if intent.status == INTENT_SUBMITTING:
+                    intent.status = INTENT_SUBMISSION_UNKNOWN
+                self.db.commit()
+                results.append(self._intent_metadata(intent, None))
+            finally:
+                await self._close(exchange)
+        return results
 
     def list_orders(self, tenant_id: str, credential_id: str | None = None) -> list[dict[str, Any]]:
         query = self.db.query(SandboxExchangeOrder).filter_by(tenant_id=tenant_id)
@@ -318,6 +487,18 @@ class SandboxExchangeTradingService:
         return exchange_cls(config)
 
     @staticmethod
+    async def _await_preflight(awaitable: Any, timeout_s: float | None) -> Any:
+        """Bound an exchange operation known to run before create_order."""
+        try:
+            return (
+                await asyncio.wait_for(awaitable, timeout=timeout_s)
+                if timeout_s is not None
+                else await awaitable
+            )
+        except asyncio.TimeoutError as exc:
+            raise SandboxTradingError("OKX Demo preflight timed out before submission") from exc
+
+    @staticmethod
     async def _close(exchange: Any) -> None:
         try:
             await exchange.close()
@@ -339,8 +520,39 @@ class SandboxExchangeTradingService:
         return {"id": credential.id, "provider": credential.provider, "label": credential.label, "metadata": credential.metadata_json, "created_at": credential.created_at}
 
     @staticmethod
+    def _intent_metadata(intent: RuleStrategyExecutionIntent, order: SandboxExchangeOrder | None) -> dict[str, Any]:
+        return {
+            "execution_intent_id": intent.id,
+            "id": order.id if order is not None else None,
+            "status": intent.status if order is None else order.status,
+            "error_code": intent.error_code if order is None else order.error_code,
+            "attempt_count": intent.attempt_count,
+        }
+
+    @staticmethod
     def _order_metadata(order: SandboxExchangeOrder) -> dict[str, Any]:
-        return {"id": order.id, "credential_id": order.credential_id, "provider": order.provider, "client_order_id": order.client_order_id, "symbol": order.symbol, "side": order.side, "type": order.order_type, "requested_quote": order.requested_quote, "requested_quantity": order.requested_quantity, "status": order.status, "exchange_order_id": order.exchange_order_id, "sandbox": order.sandbox, "error_code": order.error_code, "created_at": order.created_at, "updated_at": order.updated_at}
+        return {
+            "id": order.id,
+            "credential_id": order.credential_id,
+            "provider": order.provider,
+            "client_order_id": order.client_order_id,
+            "symbol": order.symbol,
+            "side": order.side,
+            "type": order.order_type,
+            "requested_quote": order.requested_quote,
+            "requested_quantity": order.requested_quantity,
+            "status": order.status,
+            "exchange_order_id": order.exchange_order_id,
+            "sandbox": order.sandbox,
+            "error_code": order.error_code,
+            "strategy_id": order.strategy_id,
+            "evaluation_id": order.evaluation_id,
+            "execution_generation": order.execution_generation,
+            "execution_source": order.execution_source,
+            "execution_intent_id": order.execution_intent_id,
+            "created_at": order.created_at,
+            "updated_at": order.updated_at,
+        }
 
     @staticmethod
     def _safe_exchange_metadata(raw: Any) -> dict[str, Any]:
@@ -374,3 +586,42 @@ class SandboxExchangeTradingService:
 
     def _order_by_client_id(self, tenant_id: str, client_order_id: str) -> SandboxExchangeOrder | None:
         return self.db.query(SandboxExchangeOrder).filter_by(tenant_id=tenant_id, client_order_id=client_order_id).first()
+
+    @staticmethod
+    def _normalise_status(status: Any) -> str:
+        """Map CCXT terminal vocabulary to durable execution vocabulary."""
+        value = str(status).lower()
+        return {"closed": "filled", "canceled": "canceled", "cancelled": "cancelled"}.get(value, value)
+
+    def _sync_intent_from_order(self, order: SandboxExchangeOrder) -> None:
+        """Persist order and attributed-intent lifecycle atomically."""
+        if not order.execution_intent_id:
+            return
+        intent = self.db.query(RuleStrategyExecutionIntent).filter_by(id=order.execution_intent_id).first()
+        if intent is None:
+            return
+        intent.status = order.status
+        if order.status in INTENT_TERMINAL:
+            intent.terminal_at = datetime.now(timezone.utc)
+        if order.error_code:
+            intent.error_code = order.error_code
+
+    @staticmethod
+    async def _find_exchange_order_by_client_id(exchange: Any, symbol: str, client_order_id: str) -> dict[str, Any] | None:
+        """Use portable CCXT history fallbacks because venues differ."""
+        candidates: list[Any] = []
+        for method_name in ("fetch_orders", "fetch_open_orders", "fetch_closed_orders"):
+            method = getattr(exchange, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                candidates.extend(await method(symbol))
+            except Exception:
+                continue
+        for raw in candidates:
+            if not isinstance(raw, dict):
+                continue
+            info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+            if client_order_id in (raw.get("clientOrderId"), raw.get("client_order_id"), info.get("clientOrderId"), info.get("clOrdId")):
+                return raw
+        return None

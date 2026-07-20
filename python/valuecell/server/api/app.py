@@ -29,8 +29,38 @@ from .routers.live_execution import create_live_execution_router
 from .routers.rule_strategy import create_rule_strategy_router
 from .routers.strategy_api import create_strategy_api_router
 from ..services.crypto_market_service import get_crypto_market_service
+from ..services.sandbox_exchange_trading_service import SandboxExchangeTradingService
+from ..services.demo_execution_reconciliation import (
+    reconcile_active_tenant_intents as _reconcile_active_tenant_intents,
+)
+from ..db.connection import get_database_manager
+from ..db.models.tenant import Tenant
 from .routers.system import create_system_router
 from .schemas.base import AppInfoData, SuccessResponse
+
+
+async def reconcile_active_tenant_intents() -> None:
+    """Reconcile ambiguous Demo submissions for active tenants only.
+
+    This is deliberately a scheduled recovery loop rather than an automatic
+    re-submit path: the exchange is queried by client order ID and unresolved
+    requests remain explicitly marked for reconciliation.
+    """
+    session = get_database_manager().get_session()
+    try:
+        await _reconcile_active_tenant_intents(
+            session,
+            _active_tenant_ids(session),
+            SandboxExchangeTradingService,
+        )
+    except Exception as exc:
+        logger.warning("Demo execution reconciliation deferred: {}", exc)
+    finally:
+        session.close()
+
+
+def _active_tenant_ids(session) -> list[str]:
+    return [tenant_id for (tenant_id,) in session.query(Tenant.id).all()]
 
 
 def _ensure_system_env_and_load() -> None:
@@ -83,6 +113,18 @@ def _ensure_system_env_and_load() -> None:
         pass
 
 
+def _run_required_execution_attribution_migration() -> None:
+    """Run the fail-closed schema migration after table creation at startup."""
+    from ..db.connection import get_database_manager
+    from ..db.migrations import migrate_rule_strategy_execution_attribution
+
+    session = get_database_manager().get_session()
+    try:
+        migrate_rule_strategy_execution_attribution(session)
+    finally:
+        session.close()
+
+
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
     # Ensure .env exists and is loaded before reading settings
@@ -116,6 +158,11 @@ def create_app() -> FastAPI:
                 manager.configure_baostock()
             except Exception as exc:
                 logger.warning("Legacy initialization unavailable: {}", exc)
+
+        # This migration is required for every execution-capable deployment. Keep
+        # it outside the best-effort legacy data migration below: failure must
+        # prevent scheduler startup and therefore fail closed.
+        _run_required_execution_attribution_migration()
 
         try:
             from ..db.connection import get_database_manager
@@ -183,6 +230,14 @@ def create_app() -> FastAPI:
                 id="_scheduler_sync_running",
                 replace_existing=True,
                 coalesce=True,
+            )
+            _scheduler._scheduler.add_job(
+                reconcile_active_tenant_intents,
+                trigger=IntervalTrigger(seconds=60),
+                id="_scheduler_reconcile_demo_execution",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
             )
             # Attempt immediately, but database outages must not disable the
             # recurring job or prevent the API and market snapshot from starting.

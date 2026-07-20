@@ -28,15 +28,11 @@ import {
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
 import {
   useRuleStrategy,
+  useRuleStrategyDemoExecution,
   useRuleStrategyEvaluations,
   useRuleStrategyPnlCurve,
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
-import {
-  useSandboxBalance,
-  useSandboxConnections,
-  useSandboxPositions,
-} from "@/api/sandbox-exchange";
 import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,6 +61,10 @@ import {
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
 import { ThresholdGauge } from "@/components/valuecell/charts/threshold-gauge";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
+import {
+  demoExecutionCheckedAtLabel,
+  demoExecutionUnvaluedAssetCount,
+} from "@/types/rule-strategy-demo-execution";
 import { cn } from "@/lib/utils";
 
 const currency = new Intl.NumberFormat("en-US", {
@@ -239,19 +239,23 @@ export default function DashboardPage() {
   const { data: ruleStrategy } = useRuleStrategy(strategyId);
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
-  const connectionId = isOkxDemo ? execution?.sandbox_connection_id : undefined;
-  const { data: sandboxConnections = [] } = useSandboxConnections();
-  const demoConnection = sandboxConnections.find(
-    (connection) => connection.id === connectionId,
-  );
   const {
-    data: demoBalance,
-    isError: demoBalanceError,
-    isFetching: demoBalanceLoading,
-  } = useSandboxBalance(connectionId, isOkxDemo);
-  const { data: demoPositionsData, isError: demoPositionsError } =
-    useSandboxPositions(connectionId, isOkxDemo);
-  const demoPositions = demoPositionsData?.positions ?? [];
+    data: demoExecution,
+    isError: demoExecutionError,
+    isFetching: demoExecutionLoading,
+  } = useRuleStrategyDemoExecution(strategyId || undefined, isOkxDemo);
+  const demoBalance = demoExecution?.account.data;
+  const demoPositions = demoExecution?.positions.data.positions ?? [];
+  const demoOrders = demoExecution?.orders ?? [];
+  const demoCheckedAt = demoExecution
+    ? demoExecutionCheckedAtLabel(demoExecution)
+    : undefined;
+  const demoCheckedAtTime = demoCheckedAt
+    ? new Date(demoCheckedAt).toLocaleTimeString()
+    : "等待策略账户同步";
+  const demoUnvaluedAssetCount = demoExecution
+    ? demoExecutionUnvaluedAssetCount(demoExecution)
+    : 0;
   const { data: pnlCurve } = useRuleStrategyPnlCurve(
     isOkxDemo ? undefined : strategyId || undefined,
   );
@@ -262,7 +266,9 @@ export default function DashboardPage() {
     strategyId || undefined,
   );
   const trackedSymbols = ruleStrategy?.config.symbols ?? [];
-  const activeSymbols = Object.keys(ruleStrategy?.account.positions ?? {});
+  const activeSymbols = isOkxDemo
+    ? demoPositions.map((position) => position.symbol.replace("/", "-"))
+    : Object.keys(ruleStrategy?.account.positions ?? {});
   const marketSymbols =
     activeSymbols.length > 0 ? activeSymbols : trackedSymbols;
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USDT");
@@ -363,7 +369,7 @@ export default function DashboardPage() {
               mark_price: position.mark_price ?? 0,
             },
             value: position.notional_usdt ?? 0,
-            profit: 0,
+            profit: null,
           }))
         : Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
             const value = position.quantity * position.mark_price;
@@ -455,11 +461,11 @@ export default function DashboardPage() {
                 className="border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-300"
               >
                 {isOkxDemo
-                  ? demoBalanceError || demoPositionsError
+                  ? demoExecutionError
                     ? "OKX Demo 数据读取失败"
-                    : demoBalanceLoading
-                      ? "同步 OKX Demo 账户中"
-                      : `OKX Demo · ${demoConnection?.label ?? "已绑定连接"}`
+                    : demoExecutionLoading
+                      ? "同步 OKX Demo 策略账户中"
+                      : "OKX Demo · 共享交易所账户"
                   : ruleStrategy?.status === "running"
                     ? "策略扫描中"
                     : "策略待命"}
@@ -515,7 +521,7 @@ export default function DashboardPage() {
             }
             detail={
               isOkxDemo
-                ? `OKX Demo 实时估值 · ${demoBalance?.checked_at ? new Date(demoBalance.checked_at).toLocaleTimeString() : "等待账户同步"}`
+                ? `共享 OKX Demo 账户估值 · ${demoCheckedAtTime}${demoUnvaluedAssetCount > 0 ? ` · ${demoUnvaluedAssetCount} 项资产未估值` : ""}`
                 : `初始资金 ${currency.format(account?.initial_capital_quote ?? 10_000)} USDT`
             }
           />
@@ -523,13 +529,17 @@ export default function DashboardPage() {
             icon={pnl >= 0 ? TrendingUp : TrendingDown}
             label={isOkxDemo ? "账户盈亏" : "总收益与亏损"}
             value={
-              <>
-                <TerminalValue signed value={isOkxDemo ? 0 : pnl} /> USDT
-              </>
+              isOkxDemo ? (
+                "不可用"
+              ) : (
+                <>
+                  <TerminalValue signed value={pnl} /> USDT
+                </>
+              )
             }
             detail={
               isOkxDemo
-                ? "OKX Demo 未提供可靠成本基准；不展示估算盈亏"
+                ? (demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用")
                 : `策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`
             }
             trend={isOkxDemo ? "neutral" : pnl >= 0 ? "positive" : "negative"}
@@ -548,7 +558,11 @@ export default function DashboardPage() {
             icon={Layers3}
             label="策略执行情况"
             value={`${holdingRows.length} / ${ruleStrategy?.config.risk.max_positions ?? 0}`}
-            detail={`已成交 ${trades.length} 笔模拟交易，扫描 ${trackedSymbols.length} 个币种`}
+            detail={
+              isOkxDemo
+                ? `策略归属订单 ${demoOrders.length} 笔 · 共享账户持仓 ${holdingRows.length} 个 · ${demoCheckedAtTime}`
+                : `已成交 ${trades.length} 笔模拟交易，扫描 ${trackedSymbols.length} 个币种`
+            }
             trend="neutral"
           />
         </section>
@@ -849,7 +863,7 @@ export default function DashboardPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <div
+                  <fieldset
                     className="flex items-center gap-1"
                     aria-label="历史范围"
                   >
@@ -873,7 +887,7 @@ export default function DashboardPage() {
                         {range.label}
                       </Button>
                     ))}
-                  </div>
+                  </fieldset>
                 </div>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <Input
@@ -927,7 +941,9 @@ export default function DashboardPage() {
               <div>
                 <h2 className="font-semibold">符合策略的持仓</h2>
                 <p className="mt-0.5 text-muted-foreground text-xs">
-                  已根据信号建立的模拟持仓
+                  {isOkxDemo
+                    ? "OKX Demo 共享交易所账户持仓；未估值资产不计入组合权益"
+                    : "已根据信号建立的模拟持仓"}
                 </p>
               </div>
               <Badge variant="outline">{holdingRows.length} 个持仓</Badge>
@@ -968,11 +984,16 @@ export default function DashboardPage() {
                         <span
                           className={cn(
                             "block text-xs",
-                            profit >= 0 ? "text-emerald-500" : "text-rose-500",
+                            profit === null
+                              ? "text-muted-foreground"
+                              : profit >= 0
+                                ? "text-emerald-500"
+                                : "text-rose-500",
                           )}
                         >
-                          {profit >= 0 ? "+" : ""}
-                          {currency.format(profit)}
+                          {profit === null
+                            ? "盈亏不可用"
+                            : `${profit >= 0 ? "+" : ""}${currency.format(profit)}`}
                         </span>
                       </span>
                     </button>
@@ -1142,21 +1163,35 @@ export default function DashboardPage() {
             <div>
               <h2 className="font-semibold">组合收益与亏损</h2>
               <p className="mt-0.5 text-muted-foreground text-xs">
-                模拟执行产生的已实现与未实现收益汇总
+                {isOkxDemo
+                  ? "OKX Demo 共享账户盈亏不可用；不会以纸面账本替代。"
+                  : "模拟执行产生的已实现与未实现收益汇总"}
               </p>
             </div>
-            <span
-              className={cn(
-                "font-semibold text-sm tabular-nums",
-                pnl >= 0 ? "text-emerald-500" : "text-rose-500",
-              )}
-            >
-              {pnl >= 0 ? "+" : ""}
-              {currency.format(pnl)} USDT
-            </span>
+            {isOkxDemo ? (
+              <span className="font-semibold text-muted-foreground text-sm">
+                不可用
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "font-semibold text-sm tabular-nums",
+                  pnl >= 0 ? "text-emerald-500" : "text-rose-500",
+                )}
+              >
+                {pnl >= 0 ? "+" : ""}
+                {currency.format(pnl)} USDT
+              </span>
+            )}
           </div>
           <CardContent className="p-2 sm:p-4">
-            {pnlCurve?.length ? (
+            {isOkxDemo ? (
+              <div className="grid h-60 place-items-center text-center">
+                <p className="text-muted-foreground text-sm">
+                  {demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用。"}
+                </p>
+              </div>
+            ) : pnlCurve?.length ? (
               <PnlLineChart
                 data={pnlCurve}
                 height={240}
