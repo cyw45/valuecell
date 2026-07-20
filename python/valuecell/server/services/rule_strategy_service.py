@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyConfig,
     RuleStrategyEngineMarketSnapshot,
@@ -31,6 +33,10 @@ class RuleStrategyNotFoundError(Exception):
 
 class RuleStrategyNotRunningError(Exception):
     """Raised when evaluation is requested for a stopped strategy."""
+
+
+class RuleStrategyUnsupportedEvaluationError(Exception):
+    """Raised when manual evaluation cannot use authoritative account facts."""
 
 
 class RuleStrategyService:
@@ -107,6 +113,11 @@ class RuleStrategyService:
             )
 
         config = RuleStrategyConfig.model_validate(strategy.config)
+        if config.execution.environment == "okx_demo":
+            raise RuleStrategyUnsupportedEvaluationError(
+                "Manual evaluation requires a synchronized OKX Demo account; "
+                "use scheduled Demo evaluation instead"
+            )
         account_before = self._account_from_history(strategy, tenant_id, config)
         engine_market = self._engine_market(
             account_before, market, config.risk.leverage
@@ -171,7 +182,12 @@ class RuleStrategyService:
             )
 
         config = RuleStrategyConfig.model_validate(strategy.config)
-        account = self._account_from_history(strategy, tenant_id, config)
+        is_demo = config.execution.environment == "okx_demo"
+        account = (
+            None
+            if is_demo
+            else self._account_from_history(strategy, tenant_id, config)
+        )
         evaluated: list[tuple[RuleStrategyMarketSnapshot, dict[str, Any]]] = []
         for candle_input, market in market_inputs:
             candle_sets = (
@@ -182,7 +198,11 @@ class RuleStrategyService:
             candles = candle_sets.get(config.interval) or next(
                 iter(candle_sets.values())
             )
-            engine_market = self._engine_market(account, market, config.risk.leverage)
+            engine_market = (
+                market
+                if is_demo and isinstance(market, RuleStrategyEngineMarketSnapshot)
+                else self._engine_market(account, market, config.risk.leverage)
+            )
             result = self.engine.evaluate(
                 RuleStrategyEvaluationRequest(
                     config=config,
@@ -191,7 +211,12 @@ class RuleStrategyService:
                     market=engine_market,
                 )
             )
-            evaluated.append((market, result.model_dump(mode="json")))
+            result_data = result.model_dump(mode="json")
+            if config.advanced_rules.enabled:
+                result_data["exit_confirmation_mode"] = (
+                    config.advanced_rules.exit_confirmation_mode
+                )
+            evaluated.append((market, result_data))
 
         sell_items = [item for item in evaluated if item[1]["action"] == "sell"]
         remaining_items = [item for item in evaluated if item[1]["action"] != "sell"]
@@ -200,8 +225,10 @@ class RuleStrategyService:
         # An exchange-backed strategy uses its exchange account as the execution
         # ledger. It may journal signals here, but it must never create a local
         # paper fill before the exchange accepts and later confirms the order.
-        if config.execution.environment != "paper":
+        if is_demo:
             for market, result_data in evaluated:
+                if not isinstance(market, RuleStrategyEngineMarketSnapshot):
+                    raise ValueError("OKX Demo evaluation requires synced account facts")
                 result_data["execution_ledger"] = "external"
                 result_data["paper_fill"] = False
                 output.append(
@@ -211,12 +238,19 @@ class RuleStrategyService:
                         strategy.config,
                         market,
                         result_data,
-                        account,
+                        {
+                            "quote_balance": market.quote_balance,
+                            "equity_quote": market.equity_quote,
+                            "open_position_count": market.open_position_count,
+                            "position": market.position.model_dump(mode="json"),
+                            "source": "okx_demo",
+                        },
                         None,
                     )
                 )
             return output
 
+        assert account is not None
         for market, result_data in sell_items:
             account, fill = self._apply_result(account, market, result_data)
             output.append(
@@ -278,6 +312,7 @@ class RuleStrategyService:
             strategy_id, tenant_id, limit=limit
         ):
             result = journal.result or {}
+            funnel_data = self._evaluation_funnel(result, journal.trades or [])
             entries.append(
                 {
                     "strategy_id": strategy_id,
@@ -292,10 +327,201 @@ class RuleStrategyService:
                     "sizing": result.get("sizing", {}),
                     "funding": result.get("funding", {}),
                     "account": result.get("account", {}),
+                    "entry_confirmation": result.get("entry_confirmation"),
+                    "execution": result.get("execution"),
+                    "execution_ledger": result.get("execution_ledger"),
+                    "paper_fill": result.get("paper_fill"),
                     "trades": journal.trades or [],
+                    **funnel_data,
+                    **{
+                        key: result[key]
+                        for key in (
+                            "stage",
+                            "status",
+                            "checked_at",
+                            "next_check_at",
+                        )
+                        if key in result
+                    },
                 }
             )
         return entries
+
+    def update_execution(
+        self,
+        tenant_id: str,
+        strategy_id: str,
+        evaluation_id: str,
+        execution: dict[str, Any],
+    ) -> None:
+        """Persist execution only when all ownership identifiers match."""
+        journal = self.repository.update_evaluation_execution(
+            tenant_id, strategy_id, evaluation_id, execution
+        )
+        if journal is None:
+            raise RuleStrategyNotFoundError(
+                f"Evaluation '{evaluation_id}' was not found for rule strategy '{strategy_id}'"
+            )
+
+    @staticmethod
+    def _evaluation_funnel(
+        result: dict[str, Any], trades: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Normalize current and historical journals into one six-stage read model."""
+        conditions = result.get("conditions") or []
+        condition_category = "exit" if result.get("action") == "sell" else "indicator"
+        indicator_conditions = [
+            item for item in conditions if item.get("category") == condition_category
+        ]
+        risk_conditions = [item for item in conditions if item.get("category") == "risk"]
+        is_sell = result.get("action") == "sell"
+        confirmation = {} if is_sell else (result.get("entry_confirmation") or {})
+        total = int(confirmation.get("enabled", len(indicator_conditions)))
+        available = int(
+            confirmation.get(
+                "available",
+                sum(item.get("state") != "unavailable" for item in indicator_conditions),
+            )
+        )
+        matched = int(
+            confirmation.get(
+                "passed",
+                sum(item.get("state") == "triggered" for item in indicator_conditions),
+            )
+        )
+        exit_mode = result.get("exit_confirmation_mode", "any")
+        required = int(
+            confirmation.get(
+                "required", 1 if is_sell and exit_mode == "any" and total else total
+            )
+        )
+        summary = {
+            "matched": matched,
+            "total": total,
+            "required": required,
+            "available": available,
+        }
+        labels = {
+            "strategy_run": "策略运行",
+            "market_ready": "行情就绪",
+            "conditions": "条件满足",
+            "risk": "风控检查",
+            "order_submission": "订单提交",
+            "fill": "订单成交",
+        }
+        stages = [
+            {
+                "code": code,
+                "label": label,
+                "status": "pending",
+                "detail": "尚未到达此阶段。",
+            }
+            for code, label in labels.items()
+        ]
+
+        def set_stage(code: str, status: str, detail: str) -> None:
+            stage = next(item for item in stages if item["code"] == code)
+            stage.update(status=status, detail=detail)
+
+        set_stage("strategy_run", "passed", "策略已运行并记录本次检查。")
+        diagnostic_stage = result.get("stage")
+        if result.get("status") == "blocked" and diagnostic_stage in {
+            "market_data",
+            "account_sync",
+        }:
+            blocker = "market_ready" if diagnostic_stage == "market_data" else "risk"
+            if blocker == "risk":
+                set_stage("conditions", "pending", "账户同步失败，未执行条件评估。")
+            set_stage(
+                blocker,
+                "blocked",
+                result.get("reason", "同步暂不可用，已安全跳过。"),
+            )
+            return {
+                "funnel": stages,
+                "blocked_stage": blocker,
+                "condition_summary": summary,
+            }
+
+        set_stage("market_ready", "passed", "行情数据已就绪。")
+        has_signal = result.get("action") in {"buy", "sell"}
+        risk_blocked = any(item.get("state") == "blocked" for item in risk_conditions)
+        if risk_blocked:
+            set_stage(
+                "conditions", "passed", f"条件满足 {matched}/{total}，需要 {required} 项。"
+            )
+            detail = next(
+                (item.get("detail") for item in risk_conditions if item.get("state") == "blocked"),
+                "风控未通过。",
+            )
+            set_stage("risk", "blocked", detail)
+            return {
+                "funnel": stages,
+                "blocked_stage": "risk",
+                "condition_summary": summary,
+            }
+        if not has_signal:
+            set_stage(
+                "conditions",
+                "blocked",
+                f"条件满足 {matched}/{total}，需要 {required} 项。",
+            )
+            return {
+                "funnel": stages,
+                "blocked_stage": "conditions",
+                "condition_summary": summary,
+            }
+
+        set_stage(
+            "conditions", "passed", f"条件满足 {matched}/{total}，需要 {required} 项。"
+        )
+        set_stage("risk", "passed", "风控检查通过。")
+
+        execution = result.get("execution") or {}
+        if not isinstance(execution, dict):
+            execution = {}
+        order_status = str(execution.get("status") or "").lower()
+        trade_filled = any(item.get("execution") == "paper_filled" for item in trades)
+        submission_rejected = order_status in {"rejected", "failed", "stale"} or (
+            execution.get("execution") == "blocked" and not order_status
+        )
+        fill_rejected = order_status in {"canceled", "cancelled"}
+        submitted_statuses = {
+            "submitted",
+            "open",
+            "partially_filled",
+            "partial",
+            "filled",
+            "closed",
+            "canceled",
+            "cancelled",
+        }
+        submitted = trade_filled or order_status in submitted_statuses
+        if submission_rejected:
+            set_stage("order_submission", "rejected", "订单提交被拒绝或失败。")
+            set_stage("fill", "rejected", "订单未成交。")
+            blocked_stage = "order_submission"
+        elif submitted:
+            set_stage("order_submission", "passed", "订单已提交。")
+            if fill_rejected:
+                set_stage("fill", "rejected", "订单已取消，未完全成交。")
+                blocked_stage = "fill"
+            else:
+                blocked_stage = None
+                if trade_filled or order_status in {"filled", "closed"}:
+                    set_stage("fill", "filled", "订单已成交。")
+                elif order_status in {"partially_filled", "partial"}:
+                    set_stage("fill", "partial", "订单部分成交。")
+                else:
+                    set_stage("fill", "pending", "订单待成交。")
+        else:
+            set_stage("order_submission", "pending", "订单提交结果待确认。")
+            blocked_stage = None
+        return {
+            "funnel": stages,
+            "blocked_stage": blocked_stage,
+            "condition_summary": summary,
+        }
 
     def account(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
@@ -307,13 +533,39 @@ class RuleStrategyService:
     def _account_from_history(
         self, strategy: RuleStrategy, tenant_id: str, config: RuleStrategyConfig
     ) -> RuleStrategyPaperAccount:
-        journals = self.repository.get_evaluations(
-            strategy.strategy_id, tenant_id, limit=1
+        # Account recovery is deliberately independent from bounded diagnostic
+        # history. More than 100 diagnostics must not reset a durable ledger.
+        account_query = getattr(self.repository, "get_latest_account_evaluations", None)
+        journals = (
+            account_query(strategy.strategy_id, tenant_id)
+            if account_query is not None
+            else self.repository.get_evaluations(
+                strategy.strategy_id, tenant_id, limit=100_000
+            )
         )
-        if journals:
-            raw_account = (journals[0].result or {}).get("account")
-            if raw_account is not None:
+        required_fields = {
+            "initial_capital_quote",
+            "quote_balance",
+            "positions",
+            "realized_pnl_quote",
+            "unrealized_pnl_quote",
+            "equity_quote",
+        }
+        for journal in journals:
+            raw_account = (journal.result or {}).get("account")
+            # Demo diagnostics also use `account`, but describe an external
+            # position rather than the server-owned paper ledger.
+            if (
+                not isinstance(raw_account, dict)
+                or raw_account.get("source") == "okx_demo"
+                or not required_fields.issubset(raw_account)
+            ):
+                continue
+            try:
                 return RuleStrategyPaperAccount.model_validate(raw_account)
+            except ValidationError:
+                # Skip corrupt snapshots and continue to an older valid one.
+                continue
         return RuleStrategyPaperAccount(
             initial_capital_quote=config.initial_capital_quote,
             quote_balance=config.initial_capital_quote,
@@ -327,11 +579,15 @@ class RuleStrategyService:
         config: dict[str, Any],
         market: RuleStrategyMarketSnapshot,
         result_data: dict[str, Any],
-        account: RuleStrategyPaperAccount,
+        account: RuleStrategyPaperAccount | dict[str, Any],
         fill: dict[str, Any] | None,
     ) -> dict[str, Any]:
         result_data["symbol"] = market.symbol
-        result_data["account"] = account.model_dump(mode="json")
+        result_data["account"] = (
+            account.model_dump(mode="json")
+            if isinstance(account, RuleStrategyPaperAccount)
+            else account
+        )
         journal = self.repository.append_evaluation(
             RuleStrategyEvaluationJournal(
                 evaluation_id=f"evaluation_{uuid4().hex}",

@@ -11,9 +11,17 @@ import ccxt.pro as ccxtpro
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
+from valuecell.server.db.models.rule_strategy import (
+    RuleStrategy,
+    RuleStrategyEvaluationJournal,
+    RuleStrategyExecutionIntent,
+)
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
+from valuecell.server.services.tenant_credential_service import (
+    CredentialVaultError,
+    TenantCredentialService,
+)
 
 # These are deliberately shared service semantics, rather than exchange-specific
 # strings.  In particular submission_unknown means the remote request may have
@@ -24,10 +32,6 @@ INTENT_SUBMISSION_UNKNOWN = "submission_unknown"
 INTENT_SUBMITTED = "submitted"
 INTENT_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected", "stale"})
 ORDER_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected"})
-from valuecell.server.services.tenant_credential_service import (
-    CredentialVaultError,
-    TenantCredentialService,
-)
 
 SandboxProvider = Literal["binance", "okx"]
 
@@ -115,9 +119,17 @@ class SandboxExchangeTradingService:
         finally:
             await self._close(exchange)
 
-    async def positions(self, tenant_id: str, credential_id: str) -> dict[str, Any]:
+    async def positions(
+        self,
+        tenant_id: str,
+        credential_id: str,
+        *,
+        account: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Derive real spot positions from the Demo account balance, not local orders."""
-        account = await self.balance(tenant_id, credential_id)
+        # Reuse a cycle's balance when supplied; otherwise preserve the public
+        # endpoint's standalone behavior.
+        account = account or await self.balance(tenant_id, credential_id)
         positions = []
         for balance in account["balances"]:
             if balance["currency"] == "USDT" or not self._nonzero(balance["total"]):
@@ -174,6 +186,7 @@ class SandboxExchangeTradingService:
         ``submission_unknown`` is intentionally not retried here: a transport
         exception may have created an exchange order.
         """
+        symbol = self._canonical_exchange_symbol(symbol)
         if intent is not None:
             if intent.tenant_id != tenant_id or intent.credential_id != credential_id:
                 raise SandboxTradingError("Execution intent attribution does not match order")
@@ -279,24 +292,42 @@ class SandboxExchangeTradingService:
                 "Ticker price unavailable",
             )
             effective_price = price or market_price
-            quantity = quote_amount / effective_price
+            raw_balance = await self._await_preflight(exchange.fetch_balance(), submission_timeout_s)
+            free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
+            required_currency = "USDT" if side == "buy" else str(market.get("base") or "")
+            available = self._decimal_or_zero(free.get(required_currency))
+            nominal_quantity = quote_amount / effective_price
+            # A sell's quote amount is a sizing/risk ceiling, not an instruction
+            # to liquidate the whole shared Demo balance.
+            quantity = (
+                nominal_quantity if side == "buy" else min(available, nominal_quantity)
+            )
             precision = getattr(exchange, "amount_to_precision", None)
             if callable(precision):
                 quantity = self._decimal(precision(symbol, float(quantity)), "Order amount unavailable")
             limits = market.get("limits") or {}
             min_amount = self._decimal_or_zero((limits.get("amount") or {}).get("min"))
             min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
-            if quantity <= 0 or (min_amount > 0 and quantity < min_amount) or (min_cost > 0 and quote_amount < min_cost):
+            order_cost = quantity * effective_price
+            # Precision adapters are expected to truncate. Fail closed if an
+            # adapter ever rounds above either the nominal or available ceiling.
+            if quantity > nominal_quantity or (side == "sell" and quantity > available):
+                raise SandboxTradingError("Order amount exceeds safe Demo sizing limit")
+            if quantity <= 0 or (min_amount > 0 and quantity < min_amount) or (min_cost > 0 and order_cost < min_cost):
                 raise SandboxTradingError("Order does not satisfy OKX Demo minimum size")
-            raw_balance = await self._await_preflight(exchange.fetch_balance(), submission_timeout_s)
-            free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
-            required_currency = "USDT" if side == "buy" else str(market.get("base") or "")
             required_amount = quote_amount if side == "buy" else quantity
-            if self._decimal_or_zero(free.get(required_currency)) < required_amount:
+            if available < required_amount:
                 raise SandboxTradingError("Insufficient available Demo balance")
             if order_type == "limit" and price is None:
                 raise SandboxTradingError("Limit orders require a price")
             exchange.set_sandbox_mode(True)
+            order.requested_quantity = str(quantity)
+            if intent is not None:
+                intent.requested_quantity = str(quantity)
+                intent.request_payload = {
+                    **(intent.request_payload or {}),
+                    "order_cost": str(order_cost),
+                }
             create = exchange.create_order(
                 symbol,
                 order_type,
@@ -310,7 +341,6 @@ class SandboxExchangeTradingService:
                 if submission_timeout_s is not None
                 else await create
             )
-            order.requested_quantity = str(quantity)
             order.status = self._normalise_status(exchange_order.get("status") or "submitted")
             exchange_id = exchange_order.get("id")
             order.exchange_order_id = str(exchange_id) if exchange_id is not None else None
@@ -327,7 +357,7 @@ class SandboxExchangeTradingService:
                 intent.error_code = order.error_code
                 intent.error_message = str(exc)
                 intent.terminal_at = datetime.now(timezone.utc)
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             # Cancellation can race a remote create. Persist ambiguity before
             # propagating it so a caller's rollback cannot erase the audit row.
             order.status = INTENT_SUBMISSION_UNKNOWN
@@ -368,6 +398,7 @@ class SandboxExchangeTradingService:
             order.status = self._normalise_status(raw.get("status") or order.status)
             order.response_metadata = self._safe_exchange_metadata(raw)
             self._sync_intent_from_order(order)
+            self._sync_evaluation_execution(order=order)
             self.db.commit()
             self.db.refresh(order)
         finally:
@@ -418,6 +449,7 @@ class SandboxExchangeTradingService:
                 intent.error_message = str(exc)
                 if intent.status == INTENT_SUBMITTING:
                     intent.status = INTENT_SUBMISSION_UNKNOWN
+                self._sync_evaluation_execution(intent=intent)
                 self.db.commit()
                 results.append(self._intent_metadata(intent, None))
                 continue
@@ -431,6 +463,7 @@ class SandboxExchangeTradingService:
                     # never turn this into another create_order request.
                     if intent.status == INTENT_SUBMITTING:
                         intent.status = INTENT_SUBMISSION_UNKNOWN
+                    self._sync_evaluation_execution(intent=intent)
                     self.db.commit()
                     results.append(self._intent_metadata(intent, None))
                     continue
@@ -442,6 +475,7 @@ class SandboxExchangeTradingService:
                 order.exchange_order_id = str(raw["id"]) if raw.get("id") is not None else None
                 order.response_metadata = self._safe_exchange_metadata(raw)
                 self._sync_intent_from_order(order)
+                self._sync_evaluation_execution(order=order, intent=intent)
                 self.db.commit()
                 results.append(self._order_metadata(order))
             except Exception as exc:
@@ -451,6 +485,7 @@ class SandboxExchangeTradingService:
                 intent.error_message = str(exc)
                 if intent.status == INTENT_SUBMITTING:
                     intent.status = INTENT_SUBMISSION_UNKNOWN
+                self._sync_evaluation_execution(intent=intent)
                 self.db.commit()
                 results.append(self._intent_metadata(intent, None))
             finally:
@@ -514,6 +549,10 @@ class SandboxExchangeTradingService:
         if credential.provider != "okx":
             raise SandboxTradingError("Only an OKX Demo spot connection can execute a strategy")
         return credential
+
+    @staticmethod
+    def _canonical_exchange_symbol(symbol: str) -> str:
+        return symbol.strip().upper().replace("-", "/")
 
     @staticmethod
     def _connection_metadata(credential: TenantCredential) -> dict[str, Any]:
@@ -597,7 +636,9 @@ class SandboxExchangeTradingService:
         """Persist order and attributed-intent lifecycle atomically."""
         if not order.execution_intent_id:
             return
-        intent = self.db.query(RuleStrategyExecutionIntent).filter_by(id=order.execution_intent_id).first()
+        intent = self.db.query(RuleStrategyExecutionIntent).filter_by(
+            id=order.execution_intent_id, tenant_id=order.tenant_id
+        ).first()
         if intent is None:
             return
         intent.status = order.status
@@ -605,6 +646,55 @@ class SandboxExchangeTradingService:
             intent.terminal_at = datetime.now(timezone.utc)
         if order.error_code:
             intent.error_code = order.error_code
+
+    def _sync_evaluation_execution(
+        self,
+        *,
+        order: SandboxExchangeOrder | None = None,
+        intent: RuleStrategyExecutionIntent | None = None,
+    ) -> None:
+        """Merge later venue facts into an exactly tenant-attributed journal."""
+        source = order or intent
+        if source is None or getattr(source, "execution_source", None) != "rule_strategy":
+            return
+        tenant_id = getattr(source, "tenant_id", None)
+        strategy_id = getattr(source, "strategy_id", None)
+        evaluation_id = getattr(source, "evaluation_id", None)
+        if not all((tenant_id, strategy_id, evaluation_id)):
+            return
+        if order is not None and intent is not None and any(
+            getattr(order, field, None) != getattr(intent, field, None)
+            for field in ("tenant_id", "strategy_id", "evaluation_id", "execution_generation")
+        ):
+            return
+        journal = self.db.query(RuleStrategyEvaluationJournal).filter_by(
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            evaluation_id=evaluation_id,
+        ).first()
+        if journal is None:
+            return
+        previous = (journal.result or {}).get("execution")
+        execution = dict(previous) if isinstance(previous, dict) else {}
+        status = order.status if order is not None else getattr(intent, "status", None)
+        intent_id = order.execution_intent_id if order is not None else getattr(intent, "id", None)
+        error_code = order.error_code if order is not None else getattr(intent, "error_code", None)
+        execution.update(
+            {
+                "execution_ledger": "okx_demo",
+                "paper_fill": False,
+                "sandbox": True,
+                "status": status,
+                "execution_intent_id": intent_id,
+                "order_id": order.id if order is not None else execution.get("order_id"),
+                "error_code": error_code,
+            }
+        )
+        if order is not None and isinstance(order.response_metadata, dict):
+            for field in ("filled", "remaining", "amount", "cost", "price"):
+                if field in order.response_metadata:
+                    execution[field] = order.response_metadata[field]
+        journal.result = {**(journal.result or {}), "execution": execution}
 
     @staticmethod
     async def _find_exchange_order_by_client_id(exchange: Any, symbol: str, client_order_id: str) -> dict[str, Any] | None:

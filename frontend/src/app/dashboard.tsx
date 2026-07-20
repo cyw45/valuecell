@@ -33,6 +33,11 @@ import {
   useRuleStrategyPnlCurve,
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
+import {
+  buildDashboardFunnel,
+  conditionDisplayName,
+  formatConditionValues,
+} from "@/app/dashboard-funnel";
 import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,11 +66,11 @@ import {
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
 import { ThresholdGauge } from "@/components/valuecell/charts/threshold-gauge";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
+import { cn } from "@/lib/utils";
 import {
   demoExecutionCheckedAtLabel,
   demoExecutionUnvaluedAssetCount,
 } from "@/types/rule-strategy-demo-execution";
-import { cn } from "@/lib/utils";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -365,7 +370,7 @@ export default function DashboardPage() {
             symbol: position.symbol.replace("/", "-"),
             position: {
               quantity: position.quantity,
-              entry_price: position.mark_price ?? 0,
+              entry_price: null,
               mark_price: position.mark_price ?? 0,
             },
             value: position.notional_usdt ?? 0,
@@ -431,7 +436,23 @@ export default function DashboardPage() {
       : null,
   ].filter((item): item is string => item !== null);
   const recentlyScanned = evaluations.slice(0, 8);
-  const requestedCapital = latestEvaluation?.sizing.requested_quote ?? 0;
+  const requestedCapital = latestEvaluation?.sizing?.requested_quote ?? 0;
+  const latestConfirmation = latestEvaluation?.entry_confirmation;
+  const latestConditionSummary =
+    latestEvaluation?.condition_summary ??
+    (latestConfirmation
+      ? {
+          matched: latestConfirmation.passed,
+          total: latestConfirmation.enabled,
+          required: latestConfirmation.required,
+          available: latestConfirmation.available,
+        }
+      : null);
+  const latestConditions = latestEvaluation?.conditions ?? [];
+  const { steps: funnelSteps, firstBlocker } = buildDashboardFunnel({
+    strategyRunning: ruleStrategy?.status === "running",
+    evaluation: latestEvaluation,
+  });
 
   const scrollToStrategyConfiguration = useCallback(() => {
     document.getElementById("strategy-configuration")?.scrollIntoView({
@@ -619,20 +640,20 @@ export default function DashboardPage() {
               <span className="text-muted-foreground text-xs">个当前持仓</span>
             </p>
             <p className="mt-1 text-muted-foreground text-xs">
-              合格币种按本轮数量均分资金
+              各币种独立评估，持仓数不参与额度分配
             </p>
           </div>
           <div className="bg-card/95 px-3 py-3">
             <div className="flex items-center gap-2 text-amber-500">
               <CircleDollarSign className="size-3.5" />
-              <span className="terminal-label">最新单币额度</span>
+              <span className="terminal-label">固定单笔开仓额度</span>
             </div>
             <p className="terminal-number mt-2 font-semibold text-lg">
               <TerminalValue value={requestedCapital} />{" "}
               <span className="text-muted-foreground text-xs">USDT</span>
             </p>
             <p className="mt-1 text-muted-foreground text-xs">
-              总资金 ÷ 本轮合格币种数，向下取整
+              每次新开仓使用配置的固定 USDT 金额，不按币种均分
             </p>
           </div>
           <div className="bg-card/95 px-3 py-3">
@@ -655,6 +676,159 @@ export default function DashboardPage() {
                 : "策略启动后自动更新"}
             </p>
           </div>
+        </section>
+
+        <section
+          className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]"
+          aria-label="最新策略评估"
+        >
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <div className="flex flex-col gap-2 border-border/70 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-semibold">本轮执行漏斗</h2>
+                <p className="mt-0.5 text-muted-foreground text-xs">
+                  固定六步流程；优先展示后端记录的实际阶段状态
+                </p>
+              </div>
+              {firstBlocker ? (
+                <Badge
+                  className="border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300"
+                  variant="outline"
+                >
+                  首个阻塞：{firstBlocker}
+                </Badge>
+              ) : (
+                <Badge
+                  className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                  variant="outline"
+                >
+                  当前无阻塞
+                </Badge>
+              )}
+            </div>
+            <CardContent className="grid gap-2 p-4 sm:grid-cols-2 xl:grid-cols-6">
+              {funnelSteps.map((step, index) => {
+                const passed =
+                  step.status === "passed" || step.status === "filled";
+                const blocked =
+                  step.status === "blocked" || step.status === "rejected";
+                const partial = step.status === "partial";
+                return (
+                  <div
+                    className={cn(
+                      "relative rounded-md border p-3",
+                      passed && "border-emerald-500/35 bg-emerald-500/8",
+                      blocked && "border-rose-500/40 bg-rose-500/10",
+                      partial && "border-amber-500/40 bg-amber-500/10",
+                      !passed &&
+                        !blocked &&
+                        !partial &&
+                        "border-border bg-muted/25",
+                    )}
+                    key={step.code}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-muted-foreground tabular-nums">
+                        0{index + 1}
+                      </span>
+                      <span
+                        className={cn(
+                          "font-semibold text-[11px]",
+                          passed
+                            ? "text-emerald-500"
+                            : blocked
+                              ? "text-rose-500"
+                              : partial
+                                ? "text-amber-500"
+                                : "text-muted-foreground",
+                        )}
+                      >
+                        {passed
+                          ? "通过"
+                          : blocked
+                            ? "阻塞"
+                            : partial
+                              ? "部分成交"
+                              : "等待"}
+                      </span>
+                    </div>
+                    <p className="mt-2 font-medium text-sm">{step.label}</p>
+                    <p className="mt-1 text-muted-foreground text-xs leading-5">
+                      {step.detail}
+                    </p>
+                  </div>
+                );
+              })}
+            </CardContent>
+          </Card>
+
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <div className="border-border/70 border-b px-4 py-3">
+              <h2 className="font-semibold">最新评估条件</h2>
+              <p className="mt-0.5 text-muted-foreground text-xs">
+                {latestConditionSummary
+                  ? `通过 ${latestConditionSummary.matched}/${latestConditionSummary.total}，要求 ${latestConditionSummary.required} 项；${latestConditionSummary.available} 项数据可用`
+                  : latestEvaluation
+                    ? "旧版评估未提供条件汇总，以下展示逐项原始结果"
+                    : "等待首轮策略评估"}
+              </p>
+            </div>
+            <CardContent className="p-0">
+              {latestConditions.length === 0 ? (
+                <p className="px-4 py-10 text-center text-muted-foreground text-sm">
+                  暂无逐项条件结果。
+                </p>
+              ) : (
+                <div className="max-h-80 divide-y divide-border/70 overflow-y-auto">
+                  {latestConditions.map((condition, index) => {
+                    const passed = condition.state === "triggered";
+                    const unavailable = condition.state === "unavailable";
+                    const blocked = condition.state === "blocked";
+                    return (
+                      <div
+                        className="px-4 py-3"
+                        key={`${condition.code}-${index}`}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium text-sm">
+                            {conditionDisplayName(condition.code)}
+                          </span>
+                          <Badge
+                            className={cn(
+                              passed &&
+                                "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+                              unavailable &&
+                                "border-slate-500/30 bg-slate-500/10 text-muted-foreground",
+                              (blocked || (!passed && !unavailable)) &&
+                                "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                            )}
+                            variant="outline"
+                          >
+                            {passed
+                              ? "通过"
+                              : unavailable
+                                ? "数据不可用"
+                                : blocked
+                                  ? "风控阻塞"
+                                  : "未通过"}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-muted-foreground text-xs">
+                          {condition.detail}
+                        </p>
+                        <p
+                          className="mt-1 break-words font-mono text-[11px] text-sky-600 dark:text-sky-300"
+                          title={formatConditionValues(condition.values)}
+                        >
+                          {formatConditionValues(condition.values)}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </section>
 
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
@@ -973,8 +1147,10 @@ export default function DashboardPage() {
                           {toDashboardSymbol(symbol)}
                         </span>
                         <span className="block text-muted-foreground text-xs">
-                          {position.quantity.toFixed(6)} 个，入场价{" "}
-                          {compactCurrency.format(position.entry_price)}
+                          {position.quantity.toFixed(6)} 个，成本价{" "}
+                          {position.entry_price == null
+                            ? "不可用"
+                            : compactCurrency.format(position.entry_price ?? 0)}
                         </span>
                       </span>
                       <span className="text-right tabular-nums">

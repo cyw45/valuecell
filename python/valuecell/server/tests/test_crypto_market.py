@@ -239,7 +239,11 @@ async def test_crypto_market_service_falls_back_to_second_provider(
         providers=["broken", "binance"],
     )
 
-    assert calls == [("broken", "BTC-USDT"), ("binance", "BTC-USDT")]
+    assert calls == [
+        ("broken", "BTC-USDT"),
+        ("broken", "BTC-USDT"),
+        ("binance", "BTC-USDT"),
+    ]
     assert result.failed_symbols == {}
     assert result.providers == ["broken", "binance"]
     assert result.symbols[0].provider == "binance"
@@ -279,7 +283,7 @@ async def test_crypto_market_service_reports_symbol_fetch_failures(
 
     assert [item.symbol for item in result.symbols] == ["BTC-USDT"]
     assert result.failed_symbols == {
-        "ETH-USDT": "okx: exchange returned no candles",
+        "ETH-USDT": "okx: empty_response; okx: empty_response",
     }
 
 
@@ -311,7 +315,9 @@ async def test_historical_fetch_failure_does_not_open_shared_provider_cooldown(
     )
 
     assert result.symbols == []
-    assert "historical range unavailable" in result.failed_symbols["BTC-USDT"]
+    assert result.failed_symbols["BTC-USDT"] == (
+        "okx: provider_error; okx: provider_error"
+    )
     assert CryptoMarketService._provider_health["okx"].consecutive_failures == 0
 
 

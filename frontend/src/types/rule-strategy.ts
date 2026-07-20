@@ -120,7 +120,9 @@ export interface AdvancedBrarRuleConfig extends AdvancedThresholdRuleConfig {
 
 export interface AdvancedRuleSetConfig {
   enabled: boolean;
-  entry_confirmation_mode: "all" | "any";
+  entry_confirmation_mode: "all" | "any" | "at_least" | "ratio";
+  entry_confirmation_count?: number;
+  entry_confirmation_ratio?: number;
   exit_confirmation_mode: "all" | "any";
   moving_average: AdvancedMovingAverageRuleConfig;
   macd: AdvancedMacdRuleConfig;
@@ -216,6 +218,44 @@ export interface RuleStrategyFundingImpact {
   direction: "credit" | "debit" | "none";
 }
 
+export interface RuleStrategyEntryConfirmation {
+  enabled: number;
+  available: number;
+  passed: number;
+  required: number;
+  mode: "all" | "any" | "at_least" | "ratio";
+}
+
+export type RuleStrategyFunnelCode =
+  | "strategy_run"
+  | "market_ready"
+  | "conditions"
+  | "risk"
+  | "order_submission"
+  | "fill";
+
+export type RuleStrategyFunnelStatus =
+  | "passed"
+  | "blocked"
+  | "pending"
+  | "rejected"
+  | "filled"
+  | "partial";
+
+export interface RuleStrategyFunnelStage {
+  code: RuleStrategyFunnelCode;
+  label: string;
+  status: RuleStrategyFunnelStatus;
+  detail: string;
+}
+
+export interface RuleStrategyConditionSummary {
+  matched: number;
+  total: number;
+  required: number;
+  available: number;
+}
+
 export interface RuleStrategyEvaluation {
   strategy_id: string;
   evaluation_id: string;
@@ -227,7 +267,24 @@ export interface RuleStrategyEvaluation {
   indicators: RuleStrategyIndicators;
   sizing: RuleStrategySizing;
   funding: RuleStrategyFundingImpact;
-  account: RuleStrategyPaperAccount;
+  entry_confirmation?: RuleStrategyEntryConfirmation | null;
+  account: RuleStrategyPaperAccount | Record<string, unknown>;
+  stage?:
+    | "market_data"
+    | "account_sync"
+    | "strategy"
+    | "risk"
+    | "order"
+    | "fill";
+  status?: "ready" | "blocked" | "passed" | "pending" | "completed";
+  checked_at?: string;
+  next_check_at?: string;
+  execution?: Record<string, unknown> | null;
+  execution_ledger?: "paper" | "external" | "okx_demo" | null;
+  paper_fill?: boolean | null;
+  funnel?: RuleStrategyFunnelStage[] | null;
+  blocked_stage?: RuleStrategyFunnelCode | null;
+  condition_summary?: RuleStrategyConditionSummary | null;
 }
 
 export interface RuleStrategyTextImportConfig {

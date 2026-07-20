@@ -44,8 +44,6 @@ class RuleStrategyPosition(RuleStrategyModel):
 
     @model_validator(mode="after")
     def validate_entry_price(self) -> RuleStrategyPosition:
-        if self.quantity > 0 and self.entry_price is None:
-            raise ValueError("entry_price is required when position quantity is positive")
         if self.quantity == 0 and self.entry_price is not None:
             raise ValueError("entry_price must be omitted when position quantity is zero")
         return self
@@ -217,7 +215,9 @@ class AdvancedRuleSetConfig(RuleStrategyModel):
     """Fully configurable multi-timeframe indicator rule set."""
 
     enabled: bool = False
-    entry_confirmation_mode: Literal["all", "any"] = "all"
+    entry_confirmation_mode: Literal["all", "any", "at_least", "ratio"] = "all"
+    entry_confirmation_count: int = Field(default=1, ge=1, le=6)
+    entry_confirmation_ratio: float = Field(default=1.0, gt=0, le=1)
     exit_confirmation_mode: Literal["all", "any"] = "any"
     moving_average: AdvancedMovingAverageRuleConfig = Field(
         default_factory=AdvancedMovingAverageRuleConfig
@@ -233,6 +233,22 @@ class AdvancedRuleSetConfig(RuleStrategyModel):
         default_factory=lambda: AdvancedThresholdRuleConfig(period=14)
     )
     brar: AdvancedBrarRuleConfig = Field(default_factory=AdvancedBrarRuleConfig)
+
+    @model_validator(mode="after")
+    def validate_entry_confirmation_count(self) -> "AdvancedRuleSetConfig":
+        enabled_count = sum(
+            rule.enabled
+            for rule in (
+                self.moving_average, self.macd, self.bollinger,
+                self.rsi, self.momentum, self.brar,
+            )
+        )
+        if (self.enabled and self.entry_confirmation_mode == "at_least"
+                and self.entry_confirmation_count > enabled_count):
+            raise ValueError(
+                "entry_confirmation_count cannot exceed enabled entry conditions"
+            )
+        return self
 
 
 class RuleStrategyExecutionConfig(RuleStrategyModel):
@@ -374,6 +390,18 @@ class RuleStrategyFundingImpact(BaseModel):
     direction: Literal["credit", "debit", "none"]
 
 
+class RuleStrategyEntryConfirmation(BaseModel):
+    """Aggregate entry evidence; ratio requirements are rounded up."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: int = Field(ge=0)
+    available: int = Field(ge=0)
+    passed: int = Field(ge=0)
+    required: int = Field(ge=0)
+    mode: Literal["all", "any", "at_least", "ratio"]
+
+
 class RuleStrategyEvaluationResult(BaseModel):
     """Explainable recommendation only; it never creates or submits an order."""
 
@@ -387,6 +415,7 @@ class RuleStrategyEvaluationResult(BaseModel):
     indicators: RuleStrategyIndicatorValues
     sizing: RuleStrategySizing
     funding: RuleStrategyFundingImpact
+    entry_confirmation: RuleStrategyEntryConfirmation
 
 
 class RuleStrategyTextImportConfig(RuleStrategyModel):

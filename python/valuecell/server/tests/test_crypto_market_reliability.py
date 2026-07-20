@@ -159,7 +159,7 @@ async def test_provider_attempts_use_default_or_environment_override(
         fetch = AsyncMock(side_effect=RuntimeError("temporary outage"))
         monkeypatch.setattr(service, "_fetch_uncached", fetch)
 
-        with pytest.raises(RuntimeError, match=r"okx: temporary outage"):
+        with pytest.raises(RuntimeError, match=r"okx: provider_error"):
             await service._fetch_with_fallback(
                 symbol="BTC-USDT", interval="1h", lookback=1, providers=["okx"]
             )
@@ -210,7 +210,7 @@ async def test_failed_provider_enters_cooldown_and_fallback_skips_it(
     assert second.symbols[0].provider == "binance"
     assert health_by_provider["broken"]["status"] == "cooldown"
     assert health_by_provider["broken"]["consecutive_failures"] == 1
-    assert health_by_provider["broken"]["last_error"] == "primary unavailable"
+    assert health_by_provider["broken"]["last_error"] == "provider_error"
     assert health_by_provider["broken"]["cooldown_remaining_s"] > 0
 
 
@@ -286,3 +286,29 @@ def test_rule_strategy_config_defaults_market_schedule() -> None:
     assert config.symbols == ["BTC-USDT"]
     assert config.interval == "1h"
     assert config.decide_interval_s is None
+
+
+@pytest.mark.asyncio
+async def test_provider_diagnostics_do_not_expose_exception_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", "1")
+    get_settings.cache_clear()
+    service = CryptoMarketService(providers=("okx",))
+    secret = "api-key-secret-in-provider-body"
+    monkeypatch.setattr(service, "_fetch_uncached", AsyncMock(side_effect=RuntimeError(secret)))
+    warnings: list[tuple] = []
+    monkeypatch.setattr(
+        crypto_market_service.logger,
+        "warning",
+        lambda message, *args: warnings.append((message, args)),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        await service._fetch_with_fallback(
+            symbol="BTC-USDT", interval="1h", lookback=1, providers=["okx"]
+        )
+
+    assert secret not in str(warnings)
+    assert secret not in str(service.get_health())
+    assert secret not in str(raised.value)

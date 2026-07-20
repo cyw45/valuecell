@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from loguru import logger
 from sqlalchemy.orm import Session
@@ -15,7 +16,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
+    RuleStrategyEngineMarketSnapshot,
     RuleStrategyMarketSnapshot,
+    RuleStrategyPosition,
 )
 from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import (
@@ -96,6 +99,24 @@ def _market_data_unavailable_reason(symbol_result: Any | None) -> str:
     return "primary candles unavailable"
 
 
+_MARKET_DATA_REASONS: dict[str, str] = {
+    "missing_candles": "行情数据尚未就绪，已安全跳过本次评估。",
+    "stale_candles": "行情数据已过期，已安全跳过本次评估。",
+    "fetch_failed": "行情数据获取失败，已安全跳过本次评估。",
+}
+_DEMO_ACCOUNT_UNAVAILABLE_REASON = "Demo账户暂不可用，已安全跳过本次评估。"
+
+
+def _safe_warning(code: str, *, count: int, exc: BaseException | None = None) -> None:
+    """Emit scheduler failures without serializing provider or exception details."""
+    logger.warning(
+        "StrategyScheduler warning safe_code={} err_type={} symbol_count={}",
+        code,
+        type(exc).__name__ if exc is not None else "None",
+        count,
+    )
+
+
 class StrategyScheduler:
     """Wraps AsyncIOScheduler to drive paper or explicitly bound OKX Demo strategies."""
 
@@ -153,10 +174,10 @@ class StrategyScheduler:
             try:
                 config = RuleStrategyConfig.model_validate(strategy.config)
             except ValueError as exc:
-                logger.warning(
-                    "StrategyScheduler skipped invalid config strategy_id={} err={}",
-                    strategy.strategy_id,
-                    exc,
+                _safe_warning(
+                    "SCHEDULER_INVALID_CONFIG",
+                    count=1,
+                    exc=exc,
                 )
                 continue
             interval_s = max(
@@ -220,6 +241,43 @@ class StrategyScheduler:
             )
             return
 
+        demo_account: dict[str, Any] | None = None
+        demo_positions: dict[str, dict[str, Any]] = {}
+        if config.execution.environment == "okx_demo":
+            credential_id = config.execution.sandbox_connection_id
+            session = get_database_manager().get_session()
+            try:
+                trading_service = SandboxExchangeTradingService(session)
+                demo_account = await trading_service.balance(tenant_id, credential_id or "")
+                position_snapshot = await trading_service.positions(
+                    tenant_id,
+                    credential_id or "",
+                    account=demo_account,
+                )
+                demo_positions = {
+                    str(item["symbol"]).upper().replace("/", "-"): item
+                    for item in position_snapshot.get("positions", [])
+                }
+            except Exception as exc:  # noqa: BLE001
+                _safe_warning(
+                    "SCHEDULER_DEMO_ACCOUNT_SYNC_FAILED",
+                    count=len(symbols),
+                    exc=exc,
+                )
+                self._record_diagnostics(
+                    strategy_id,
+                    tenant_id,
+                    symbols,
+                    stage="account_sync",
+                    reason_code="demo_account_unavailable",
+                    reason=_DEMO_ACCOUNT_UNAVAILABLE_REASON,
+                    retry_after_s=config.decide_interval_s
+                    or _INTERVAL_SECONDS[config.interval],
+                )
+                return
+            finally:
+                session.close()
+
         market_service = get_crypto_market_service()
         try:
             fetched_sets = await asyncio.gather(
@@ -233,10 +291,17 @@ class StrategyScheduler:
                 ]
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "StrategyScheduler OHLCV fetch failed strategy_id={} err={}",
+            _safe_warning(
+                "SCHEDULER_MARKET_FETCH_FAILED",
+                count=len(symbols),
+                exc=exc,
+            )
+            self._record_market_data_diagnostics(
                 strategy_id,
-                exc,
+                tenant_id,
+                symbols,
+                "fetch_failed",
+                config.decide_interval_s or _INTERVAL_SECONDS[config.interval],
             )
             return
         market_data_by_interval = {
@@ -253,9 +318,24 @@ class StrategyScheduler:
             try:
                 candle_sets: dict[str, list[RuleStrategyCandle]] = {}
                 latest_price: float | None = None
+                unavailable_intervals: list[tuple[str, str]] = []
                 for interval, by_symbol in market_data_by_interval.items():
                     symbol_result = by_symbol.get(symbol)
                     if symbol_result is None:
+                        fetch_failed = next(
+                            (
+                                symbol in data.failed_symbols
+                                for fetched_interval, data in zip(intervals, fetched_sets)
+                                if fetched_interval == interval
+                            ),
+                            False,
+                        )
+                        unavailable_intervals.append(
+                            (interval, "fetch_failed" if fetch_failed else "missing_candles")
+                        )
+                        continue
+                    if symbol_result.freshness_status != "fresh":
+                        unavailable_intervals.append((interval, "stale_candles"))
                         continue
                     candles = [
                         RuleStrategyCandle(
@@ -270,6 +350,8 @@ class StrategyScheduler:
                     ]
                     if candles:
                         candle_sets[interval] = candles
+                    else:
+                        unavailable_intervals.append((interval, "missing_candles"))
                     if (
                         interval == config.interval
                         and symbol_result.latest_price is not None
@@ -277,38 +359,73 @@ class StrategyScheduler:
                         latest_price = symbol_result.latest_price
                 primary_result = market_data_by_interval[config.interval].get(symbol)
                 primary_candles = candle_sets.get(config.interval)
-                if (
-                    not primary_candles
-                    or primary_result is None
-                    or primary_result.freshness_status != "fresh"
-                ):
-                    reason = _market_data_unavailable_reason(primary_result)
-                    logger.warning(
-                        "StrategyScheduler market-data unavailable strategy_id={} symbol={} "
-                        "interval={} reason={} failed_symbols={}",
+                if unavailable_intervals or not primary_candles or primary_result is None:
+                    reason_codes = {reason for _, reason in unavailable_intervals}
+                    reason_code = (
+                        "fetch_failed"
+                        if "fetch_failed" in reason_codes
+                        else "stale_candles"
+                        if "stale_candles" in reason_codes
+                        else "missing_candles"
+                    )
+                    _safe_warning(
+                        "SCHEDULER_MARKET_DATA_BLOCKED",
+                        count=max(1, len(unavailable_intervals)),
+                    )
+                    self._record_market_data_diagnostics(
                         strategy_id,
-                        symbol,
-                        config.interval,
-                        reason,
-                        {
-                            interval: data.failed_symbols.get(symbol)
-                            for interval, data in zip(intervals, fetched_sets)
-                            if symbol in data.failed_symbols
-                        },
+                        tenant_id,
+                        [symbol],
+                        reason_code,
+                        config.decide_interval_s
+                        or _INTERVAL_SECONDS[config.interval],
                     )
                     continue
-                market_snapshot = RuleStrategyMarketSnapshot(
-                    symbol=symbol,
-                    price=latest_price or primary_candles[-1].close,
-                    funding_rate=0.0,
-                )
+                if demo_account is not None:
+                    usdt_balance = next(
+                        (
+                            item
+                            for item in demo_account.get("balances", [])
+                            if str(item.get("currency", "")).upper() == "USDT"
+                        ),
+                        {},
+                    )
+                    demo_position = demo_positions.get(
+                        symbol.strip().upper().replace("/", "-"),
+                        {},
+                    )
+                    position_quantity = float(demo_position.get("quantity") or 0.0)
+                    market_snapshot = RuleStrategyEngineMarketSnapshot(
+                        symbol=symbol,
+                        price=latest_price or primary_candles[-1].close,
+                        funding_rate=0.0,
+                        equity_quote=float(demo_account.get("total_usdt_value") or 0.0),
+                        quote_balance=float(usdt_balance.get("free") or 0.0),
+                        open_position_count=len(demo_positions),
+                        position=RuleStrategyPosition(
+                            quantity=position_quantity,
+                            entry_price=None if position_quantity > 0 else None,
+                        ),
+                    )
+                else:
+                    market_snapshot = RuleStrategyMarketSnapshot(
+                        symbol=symbol,
+                        price=latest_price or primary_candles[-1].close,
+                        funding_rate=0.0,
+                    )
                 market_inputs.append((candle_sets, market_snapshot))
             except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "StrategyScheduler tick error strategy_id={} symbol={} err={}",
+                _safe_warning(
+                    "SCHEDULER_MARKET_INPUT_FAILED",
+                    count=1,
+                    exc=exc,
+                )
+                self._record_market_data_diagnostics(
                     strategy_id,
-                    symbol,
-                    exc,
+                    tenant_id,
+                    [symbol],
+                    "fetch_failed",
+                    config.decide_interval_s or _INTERVAL_SECONDS[config.interval],
                 )
                 continue
 
@@ -317,10 +434,10 @@ class StrategyScheduler:
         try:
             results = service.evaluate_batch(strategy_id, tenant_id, market_inputs)
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "StrategyScheduler batch tick failed strategy_id={} err={}",
-                strategy_id,
-                exc,
+            _safe_warning(
+                "SCHEDULER_BATCH_EVALUATION_FAILED",
+                count=len(market_inputs),
+                exc=exc,
             )
             return
         for result in results:
@@ -362,9 +479,14 @@ class StrategyScheduler:
                     result["evaluation_id"],
                 )
                 if config.execution.environment == "okx_demo":
-                    # The durable intent/order is the execution audit trail; never
-                    # mutate the paper journal's trade JSON for exchange routing.
-                    result["execution"] = execution
+                    # Close the durable evaluation funnel; mutating only this local
+                    # result leaves API history permanently pending.
+                    service.update_execution(
+                        tenant_id,
+                        strategy_id,
+                        result["evaluation_id"],
+                        execution,
+                    )
                 else:
                     self._record_execution(
                         tenant_id,
@@ -372,6 +494,71 @@ class StrategyScheduler:
                         result["evaluation_id"],
                         execution,
                     )
+
+    @staticmethod
+    def _record_market_data_diagnostics(
+        strategy_id: str,
+        tenant_id: str,
+        symbols: list[str],
+        reason_code: str,
+        retry_after_s: int,
+    ) -> None:
+        """Persist safe, non-signal market readiness in the existing journal."""
+        StrategyScheduler._record_diagnostics(
+            strategy_id,
+            tenant_id,
+            symbols,
+            stage="market_data",
+            reason_code=reason_code,
+            reason=_MARKET_DATA_REASONS[reason_code],
+            retry_after_s=retry_after_s,
+        )
+
+    @staticmethod
+    def _record_diagnostics(
+        strategy_id: str,
+        tenant_id: str,
+        symbols: list[str],
+        *,
+        stage: str,
+        reason_code: str,
+        reason: str,
+        retry_after_s: int,
+    ) -> None:
+        """Persist a safe, non-signal blocker without provider error details."""
+        checked_at = datetime.now(timezone.utc)
+        next_check_at = checked_at + timedelta(
+            seconds=max(_MIN_INTERVAL_S, retry_after_s)
+        )
+        session = get_database_manager().get_session()
+        try:
+            for symbol in symbols:
+                session.add(
+                    RuleStrategyEvaluationJournal(
+                        evaluation_id=f"diagnostic_{uuid4().hex}",
+                        strategy_id=strategy_id,
+                        tenant_id=tenant_id,
+                        result={
+                            "stage": stage,
+                            "status": "blocked",
+                            "action": "no_op",
+                            "reason_code": reason_code,
+                            "reason": reason,
+                            "symbol": symbol,
+                            "checked_at": checked_at.isoformat(),
+                            "next_check_at": next_check_at.isoformat(),
+                        },
+                        signals=[],
+                        trades=[],
+                        funding=[],
+                    )
+                )
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     @staticmethod
     def _record_execution(
@@ -536,14 +723,21 @@ class StrategyScheduler:
                 "open",
                 "partially_filled",
             }
+            def reserved_cost(row: RuleStrategyExecutionIntent) -> Decimal:
+                # Once preflight has sized an order, its actual notional is the
+                # quota fact. Older/in-flight rows retain the conservative nominal
+                # reservation until a factual cost exists.
+                payload = getattr(row, "request_payload", None) or {}
+                return Decimal(str(payload.get("order_cost", row.requested_quote)))
+
             existing_total = sum(
-                Decimal(str(row.requested_quote))
+                reserved_cost(row)
                 for row in intents
                 if row.status in active_statuses
             )
             daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
             daily_total = sum(
-                Decimal(str(row.requested_quote))
+                reserved_cost(row)
                 for row in intents
                 if row.status not in {"rejected", "stale"}
                 and (

@@ -51,6 +51,8 @@ def _real_provider_result() -> CandleFetchResult:
 async def test_serves_last_successful_provider_candles_during_failure_and_cooldown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", "1")
+    get_settings.cache_clear()
     service = CryptoMarketService(providers=("okx",))
     first_result = _real_provider_result()
     fetch = AsyncMock(side_effect=[first_result, RuntimeError("temporary outage")])
@@ -86,7 +88,9 @@ async def test_provider_failure_without_prior_candle_cache_is_surfaced(
         AsyncMock(side_effect=RuntimeError("temporary outage")),
     )
 
-    with pytest.raises(RuntimeError, match=r"okx: temporary outage"):
+    with pytest.raises(
+        RuntimeError, match=r"okx: provider_error; okx: provider_error"
+    ):
         await service._fetch_with_fallback(
             symbol="BTC-USDT", interval="1h", lookback=1, providers=["okx"]
         )

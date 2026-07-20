@@ -55,6 +55,18 @@ class InMemoryRuleStrategyRepository:
             return []
         return list(reversed(self.evaluations[-limit:]))
 
+    def update_evaluation_execution(
+        self, tenant_id, strategy_id, evaluation_id, execution
+    ):
+        if strategy_id != STRATEGY_ID or tenant_id != FIXED_PRINCIPAL.tenant_id:
+            return None
+        journal = next(
+            (item for item in self.evaluations if item.evaluation_id == evaluation_id), None
+        )
+        if journal is not None:
+            journal.result = {**journal.result, "execution": execution}
+        return journal
+
 
 def _config() -> dict:
     return {
@@ -408,35 +420,115 @@ def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None
     assert history.status_code == 200
     body = history.json()
     assert body["code"] == 0
-    assert body["data"] == [
+    item = body["data"][0]
+    assert {
+        key: item[key]
+        for key in (
+            "strategy_id",
+            "evaluation_id",
+            "evaluated_at",
+            "action",
+            "reason_code",
+            "reason",
+            "conditions",
+            "indicators",
+            "sizing",
+            "funding",
+            "account",
+        )
+    } == {
+        "strategy_id": STRATEGY_ID,
+        "evaluation_id": EVALUATION_ID,
+        "evaluated_at": "2026-07-10T00:00:00Z",
+        "action": result["action"],
+        "reason_code": result["reason_code"],
+        "reason": result["reason"],
+        "conditions": result["conditions"],
+        "indicators": result["indicators"],
+        "sizing": result["sizing"],
+        "funding": result["funding"],
+        "account": result["account"],
+    }
+    assert item["trades"] == [
         {
-            "strategy_id": STRATEGY_ID,
-            "evaluation_id": EVALUATION_ID,
-            "evaluated_at": "2026-07-10T00:00:00Z",
             "action": result["action"],
             "reason_code": result["reason_code"],
             "reason": result["reason"],
-            "conditions": result["conditions"],
-            "indicators": result["indicators"],
             "sizing": result["sizing"],
-            "funding": result["funding"],
-            "account": result["account"],
-            "trades": [
-                {
-                    "action": result["action"],
-                    "reason_code": result["reason_code"],
-                    "reason": result["reason"],
-                    "sizing": result["sizing"],
-                    "execution": "paper_filled",
-                    "symbol": "BTC-USDT",
-                    "price": 80.0,
-                    "quantity": 1.25,
-                    "quote_amount": 100.0,
-                    "realized_pnl_quote": 0.0,
-                }
-            ],
+            "execution": "paper_filled",
+            "symbol": "BTC-USDT",
+            "price": 80.0,
+            "quantity": 1.25,
+            "quote_amount": 100.0,
+            "realized_pnl_quote": 0.0,
         }
     ]
+    assert [stage["code"] for stage in item["funnel"]] == [
+        "strategy_run",
+        "market_ready",
+        "conditions",
+        "risk",
+        "order_submission",
+        "fill",
+    ]
+    assert [stage["status"] for stage in item["funnel"]] == [
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "filled",
+    ]
+    assert item["blocked_stage"] is None
+    assert item["condition_summary"] == {
+        "matched": result["entry_confirmation"]["passed"],
+        "total": result["entry_confirmation"]["enabled"],
+        "required": result["entry_confirmation"]["required"],
+        "available": result["entry_confirmation"]["available"],
+    }
     assert [condition["code"] for condition in body["data"][0]["conditions"]] == [
         condition["code"] for condition in result["conditions"]
     ]
+
+
+@pytest.mark.parametrize(
+    ("order_status", "submission", "fill"),
+    [
+        ("open", "passed", "pending"),
+        ("rejected", "rejected", "rejected"),
+        ("partially_filled", "passed", "partial"),
+        ("filled", "passed", "filled"),
+    ],
+)
+def test_evaluations_api_reads_back_durable_demo_execution_mapping(
+    order_status, submission, fill
+):
+    repository = InMemoryRuleStrategyRepository()
+    service = RuleStrategyService(repository=repository)
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(service=service))
+    app.dependency_overrides[get_current_principal] = lambda: FIXED_PRINCIPAL
+    app.dependency_overrides[get_db] = lambda: SimpleNamespace()
+    service.create(FIXED_PRINCIPAL.tenant_id, "demo", None, __import__(
+        "valuecell.server.api.schemas.rule_strategy", fromlist=["RuleStrategyConfig"]
+    ).RuleStrategyConfig())
+    repository.append_evaluation(SimpleNamespace(
+        evaluation_id=EVALUATION_ID,
+        created_at=CREATED_AT,
+        result={
+            "action": "buy", "reason_code": "buy", "reason": "buy",
+            "conditions": [
+                {"code": "rsi", "category": "indicator", "state": "triggered", "detail": "yes"}
+            ],
+            "entry_confirmation": {"enabled": 1, "available": 1, "passed": 1, "required": 1, "mode": "all"},
+            "execution": {"execution": "okx_demo_submitted", "status": order_status},
+        },
+        trades=[],
+    ))
+
+    response = TestClient(app).get(f"/rule-strategies/{STRATEGY_ID}/evaluations")
+    assert response.status_code == 200
+    item = response.json()["data"][0]
+    assert item["execution"]["status"] == order_status
+    assert item["funnel"][4]["status"] == submission
+    assert item["funnel"][5]["status"] == fill

@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -60,6 +60,13 @@ class SandboxOrderRequest(BaseModel):
     price: Decimal | None = Field(default=None, gt=0)
     idempotency_key: str | None = Field(default=None, min_length=16, max_length=128)
     sandbox: Literal[True]
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def canonicalize_symbol(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().upper().replace("-", "/")
+        return value
 
     @model_validator(mode="after")
     def require_limit_price(self) -> "SandboxOrderRequest":

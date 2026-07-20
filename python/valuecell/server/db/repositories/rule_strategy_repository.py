@@ -121,6 +121,71 @@ class RuleStrategyRepository:
             if self.db_session is None:
                 session.close()
 
+    def update_evaluation_execution(
+        self,
+        tenant_id: str,
+        strategy_id: str,
+        evaluation_id: str,
+        execution: dict,
+    ) -> Optional[RuleStrategyEvaluationJournal]:
+        """Attach execution facts to exactly one tenant-scoped evaluation."""
+        session = self._get_session()
+        try:
+            journal = (
+                session.query(RuleStrategyEvaluationJournal)
+                .filter(
+                    RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+                    RuleStrategyEvaluationJournal.strategy_id == strategy_id,
+                    RuleStrategyEvaluationJournal.evaluation_id == evaluation_id,
+                )
+                .first()
+            )
+            if journal is None:
+                return None
+            journal.result = {**(journal.result or {}), "execution": dict(execution)}
+            session.commit()
+            session.refresh(journal)
+            session.expunge(journal)
+            return journal
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def get_latest_account_evaluations(
+        self, strategy_id: str, tenant_id: str
+    ) -> list[RuleStrategyEvaluationJournal]:
+        """Return all account-bearing journals newest-first for ledger recovery.
+
+        This intentionally has no read-model limit: arbitrary newer diagnostics
+        must never hide and reset the last durable paper account snapshot.
+        """
+        session = self._get_session()
+        try:
+            journals = (
+                session.query(RuleStrategyEvaluationJournal)
+                .filter(
+                    RuleStrategyEvaluationJournal.strategy_id == strategy_id,
+                    RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+                )
+                .order_by(desc(RuleStrategyEvaluationJournal.created_at))
+                .all()
+            )
+            journals = [
+                journal
+                for journal in journals
+                if isinstance(journal.result, dict)
+                and journal.result.get("account") is not None
+            ]
+            for journal in journals:
+                session.expunge(journal)
+            return journals
+        finally:
+            if self.db_session is None:
+                session.close()
+
     def list_running(self) -> list[RuleStrategy]:
         """Return all strategies across all tenants where status='running'."""
         session = self._get_session()

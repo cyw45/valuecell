@@ -96,6 +96,8 @@ class RuleStrategyTextImportService:
     "advanced_rules": {
       "enabled": true,
       "entry_confirmation_mode": "all",
+      "entry_confirmation_count": 1,
+      "entry_confirmation_ratio": 1.0,
       "exit_confirmation_mode": "any",
       "moving_average": {"enabled": true, "interval": "1d", "period": 20, "entry_comparator": "above"},
       "macd": {"enabled": true, "interval": "5m", "fast_window": 12, "slow_window": 26, "signal_window": 9, "entry_cross": "golden"},
@@ -109,4 +111,5 @@ class RuleStrategyTextImportService:
   "summary": "简体中文策略摘要",
   "unresolved_items": ["无法明确判断的规则"]
 }
+entry_confirmation_mode 只可为 all（全部）、any（任一项）、at_least（至少N项）或 ratio（至少比例）。at_least 同时填写 entry_confirmation_count；ratio 同时填写 0 到 1 之间（不含 0）的 entry_confirmation_ratio，所需项数按启用条件数乘比例后向上取整。
 将“cDMA”按 MACD 处理；将“RSL”按 RSI 处理。仅根据明确描述设置参数；无法确定时填入 unresolved_items，并保留上面对应字段的安全默认值。"""

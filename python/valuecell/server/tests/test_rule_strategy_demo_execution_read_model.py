@@ -59,8 +59,8 @@ async def test_demo_read_model_fetches_only_current_connection_and_refreshes_ord
             calls.append(("balance", tenant_id, connection_id))
             return {"balances": []}
 
-        async def positions(self, tenant_id, connection_id):
-            calls.append(("positions", tenant_id, connection_id))
+        async def positions(self, tenant_id, connection_id, *, account=None):
+            calls.append(("positions", tenant_id, connection_id, account))
             return {"positions": []}
 
         async def refresh_open_orders(self, tenant_id, connection_id):
@@ -75,7 +75,7 @@ async def test_demo_read_model_fetches_only_current_connection_and_refreshes_ord
     assert result["orders"]
     assert calls == [
         ("balance", "tenant-a", "conn-a"),
-        ("positions", "tenant-a", "conn-a"),
+        ("positions", "tenant-a", "conn-a", {"balances": []}),
         ("refresh", "tenant-a", "conn-a"),
         ("orders", "tenant-a", "conn-a"),
     ]

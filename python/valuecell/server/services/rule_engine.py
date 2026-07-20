@@ -10,6 +10,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyConditionCheck,
     RuleStrategyEvaluationRequest,
     RuleStrategyEvaluationResult,
+    RuleStrategyEntryConfirmation,
     RuleStrategyFundingImpact,
     RuleStrategyIndicatorValues,
     RuleStrategySizing,
@@ -74,6 +75,9 @@ class RuleEngine:
         conditions = [assessment.check for assessment in assessments]
         sizing = self._sizing(request)
         entry_side = self._confirmed_side(assessments, config.confirmation_mode)
+        _, entry_confirmation = self._entry_confirmation(
+            assessments, config.confirmation_mode
+        )
         exit_conditions, exit_reason = self._exit_conditions(request)
         conditions.extend(exit_conditions)
 
@@ -106,6 +110,7 @@ class RuleEngine:
             indicators=indicators,
             sizing=sizing,
             funding=funding,
+            entry_confirmation=entry_confirmation,
         )
 
     def _evaluate_advanced(
@@ -173,8 +178,11 @@ class RuleEngine:
         conditions = [assessment.check for assessment in entry_assessments]
         conditions.extend(assessment.check for assessment in exit_assessments)
         sizing = self._sizing(request)
-        entry_side = self._confirmed_side(
-            entry_assessments, rules.entry_confirmation_mode
+        entry_side, entry_confirmation = self._entry_confirmation(
+            entry_assessments,
+            rules.entry_confirmation_mode,
+            rules.entry_confirmation_count,
+            rules.entry_confirmation_ratio,
         )
         exit_side = self._confirmed_side(exit_assessments, rules.exit_confirmation_mode)
         risk_exit_conditions, risk_exit_reason = self._exit_conditions(request)
@@ -233,11 +241,16 @@ class RuleEngine:
             indicators=indicators,
             sizing=sizing,
             funding=funding,
+            entry_confirmation=entry_confirmation,
         )
 
     @staticmethod
     def _candles_for(request: RuleStrategyEvaluationRequest, interval: str):
-        return request.candle_sets.get(interval, request.candles)
+        # The generic candles belong only to the configured primary interval.
+        # Never evaluate another timeframe against unrelated primary candles.
+        if interval == request.config.interval:
+            return request.candles
+        return request.candle_sets.get(interval, [])
 
     def _advanced_ma_assessment(
         self, candles, period: int, comparator: str, interval: str
@@ -601,7 +614,24 @@ class RuleEngine:
                 ),
             ], None
         entry_price = position.entry_price
-        assert entry_price is not None
+        if entry_price is None:
+            # Exchange spot balances expose quantity but no trustworthy cost
+            # basis. Keep indicator exits available while explicitly disabling
+            # price-relative exits rather than inventing an entry price.
+            return [
+                RuleStrategyConditionCheck(
+                    code="take_profit",
+                    category="exit",
+                    state="unavailable",
+                    detail="position entry price is unavailable",
+                ),
+                RuleStrategyConditionCheck(
+                    code="stop_loss",
+                    category="exit",
+                    state="unavailable",
+                    detail="position entry price is unavailable",
+                ),
+            ], None
         return_pct = request.market.price / entry_price - 1.0
         take_profit_hit = (
             risk.take_profit_pct is not None and return_pct >= risk.take_profit_pct
@@ -827,6 +857,38 @@ class RuleEngine:
         if all(signal == "unavailable" for signal in signals):
             return "unavailable"
         return "neutral"
+
+    @staticmethod
+    def _entry_confirmation(
+        assessments: list[_SignalAssessment],
+        mode: Literal["all", "any", "at_least", "ratio"],
+        count: int = 1,
+        ratio: float = 1.0,
+    ) -> tuple[Signal, RuleStrategyEntryConfirmation]:
+        enabled = len(assessments)
+        available_assessments = [
+            assessment for assessment in assessments if assessment.signal != "unavailable"
+        ]
+        available = len(available_assessments)
+        passed = sum(assessment.signal == "buy" for assessment in available_assessments)
+        required = (
+            1 if mode == "any" else enabled if mode == "all" else count
+            if mode == "at_least" else math.ceil(enabled * ratio)
+        )
+        summary = RuleStrategyEntryConfirmation(
+            enabled=enabled,
+            available=available,
+            passed=passed,
+            required=required,
+            mode=mode,
+        )
+        if not assessments:
+            return "neutral", summary
+        if available < required:
+            return "unavailable", summary
+        if passed >= required:
+            return "buy", summary
+        return "neutral", summary
 
     @staticmethod
     def _assessment(

@@ -7,7 +7,9 @@ from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyConfig,
+    RuleStrategyEngineMarketSnapshot,
     RuleStrategyMarketSnapshot,
+    RuleStrategyPosition,
 )
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
@@ -307,12 +309,25 @@ def test_okx_demo_batch_cycle_journals_signals_without_mutating_paper_account():
     results = service.evaluate_batch(
         created["strategy_id"],
         "tenant-a",
-        [(_candles(100, 90, 80), RuleStrategyMarketSnapshot(symbol="BTC-USDT", price=80))],
+        [
+            (
+                _candles(100, 90, 80),
+                RuleStrategyEngineMarketSnapshot(
+                    symbol="BTC-USDT",
+                    price=80,
+                    equity_quote=1_000,
+                    quote_balance=1_000,
+                    open_position_count=0,
+                    position=RuleStrategyPosition(),
+                ),
+            )
+        ],
     )
 
     assert results[0]["action"] == "buy"
     assert results[0]["paper_fill"] is False
     assert results[0]["execution_ledger"] == "external"
     assert results[0]["account"]["quote_balance"] == 1_000.0
-    assert results[0]["account"]["positions"] == {}
+    assert results[0]["account"]["source"] == "okx_demo"
+    assert results[0]["account"]["position"]["quantity"] == 0.0
     assert repository.evaluations[0].trades == []

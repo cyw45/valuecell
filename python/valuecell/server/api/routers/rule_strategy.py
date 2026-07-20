@@ -21,6 +21,7 @@ from valuecell.server.services.rule_strategy_service import (
     RuleStrategyNotFoundError,
     RuleStrategyNotRunningError,
     RuleStrategyService,
+    RuleStrategyUnsupportedEvaluationError,
 )
 from valuecell.server.services.rule_strategy_advisory_service import (
     RuleStrategyAdvisoryService,
@@ -302,6 +303,17 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuleStrategyNotRunningError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuleStrategyUnsupportedEvaluationError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "okx_demo_manual_evaluation_unsupported",
+                    "message": (
+                        "Manual evaluation cannot reliably synchronize the bound "
+                        "OKX Demo account; use scheduled Demo evaluation instead."
+                    ),
+                },
+            ) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy evaluated")
 
     @router.get(

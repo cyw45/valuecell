@@ -68,7 +68,7 @@ async def get_demo_execution_read_model(
         raise DemoExecutionReadModelError("OKX Demo connection is unavailable")
     try:
         account = await service.balance(tenant_id, connection_id)
-        positions = await service.positions(tenant_id, connection_id)
+        positions = await service.positions(tenant_id, connection_id, account=account)
         await service.refresh_open_orders(tenant_id, connection_id)
         orders = service.list_orders(tenant_id, connection_id)
     except SandboxTradingError:

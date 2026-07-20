@@ -86,6 +86,8 @@ const DEFAULT_STRATEGY_SYMBOLS = ["BTC/USDT", "ETH/USDT", "SOL/USDT"];
 const PAPER_DEMO_ADVANCED_RULES: AdvancedRuleSetConfig = {
   enabled: true,
   entry_confirmation_mode: "any",
+  entry_confirmation_count: 1,
+  entry_confirmation_ratio: 1,
   exit_confirmation_mode: "any",
   moving_average: {
     enabled: false,
@@ -186,10 +188,13 @@ type StrategyFormValues = {
   maxDemoTotalQuoteAmount: number;
 };
 
-type AdvancedIndicatorKey = Exclude<
-  keyof AdvancedRuleSetConfig,
-  "enabled" | "entry_confirmation_mode" | "exit_confirmation_mode"
->;
+type AdvancedIndicatorKey =
+  | "moving_average"
+  | "macd"
+  | "bollinger"
+  | "rsi"
+  | "momentum"
+  | "brar";
 
 const initialValues: StrategyFormValues = {
   symbols: [],
@@ -212,6 +217,8 @@ const initialValues: StrategyFormValues = {
   advancedRules: {
     enabled: true,
     entry_confirmation_mode: "all",
+    entry_confirmation_count: 1,
+    entry_confirmation_ratio: 1,
     exit_confirmation_mode: "any",
     moving_average: {
       enabled: true,
@@ -1035,7 +1042,7 @@ export function RuleStrategyConfiguration({
                 className="border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                 variant="outline"
               >
-                <ShieldCheck /> {t("saas.operations.strategy.paperOnly")}
+                <ShieldCheck /> 执行环境：纸面交易 / OKX Demo
               </Badge>
             </div>
             <p className="mt-1 text-muted-foreground text-sm">
@@ -1131,11 +1138,11 @@ export function RuleStrategyConfiguration({
           </Alert>
           <Alert className="border-amber-500/35 bg-amber-500/5">
             <Activity className="text-amber-500" />
-            <AlertTitle>纸面交易演示预设</AlertTitle>
+            <AlertTitle>策略规则演示预设</AlertTitle>
             <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <span>
                 使用 1 分钟 RSI 高于 -1
-                的必过规则：行情数据就绪即模拟买入，下一轮扫描模拟卖出。仅用于验证买卖、持仓和盈亏链路，不适用于真实策略。
+                的必过规则：行情数据就绪即产生买入信号，下一轮扫描产生卖出信号。实际记录写入当前选择的执行环境；仅用于验证策略链路，不适用于真实策略。
               </span>
               <Button
                 className="w-fit shrink-0"
@@ -1151,7 +1158,7 @@ export function RuleStrategyConfiguration({
             <RuleHeading
               icon={ShieldCheck}
               title="执行环境"
-              description="执行路径固定为纸面验证 → OKX Demo 自动下单 → 独立实盘风控与人工授权；当前切换不会触发实盘。"
+              description="明确选择纸面账本或 OKX Demo 交易所执行。两者记录来源严格分离；当前页面不会触发实盘。"
             />
             <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
               <div className="grid gap-1.5">
@@ -1268,6 +1275,16 @@ export function RuleStrategyConfiguration({
                       凭证发送订单。系统强制杠杆为
                       1、限价由以上额度控制，并以确定性订单号防止同一根 K
                       线重复下单；不会访问实盘账户。
+                    </AlertDescription>
+                  </Alert>
+                  <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
+                    <ShieldCheck />
+                    <AlertTitle>共享连接账户语义</AlertTitle>
+                    <AlertDescription>
+                      OKX Demo
+                      余额和现货持仓属于所选交易所连接的共享账户，并非本策略独占；同一连接上的其他策略或手动
+                      Demo 订单都可能改变它们。交易记录页只显示归属于当前策略的
+                      Demo 订单。
                     </AlertDescription>
                   </Alert>
                   <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
@@ -1619,7 +1636,11 @@ export function RuleStrategyConfiguration({
                     onValueChange={(value) =>
                       update("advancedRules", {
                         ...values.advancedRules,
-                        entry_confirmation_mode: value as "all" | "any",
+                        entry_confirmation_mode: value as
+                          | "all"
+                          | "any"
+                          | "at_least"
+                          | "ratio",
                       })
                     }
                   >
@@ -1627,10 +1648,51 @@ export function RuleStrategyConfiguration({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">全部条件满足才买入</SelectItem>
-                      <SelectItem value="any">任一条件满足即可买入</SelectItem>
+                      <SelectItem value="any">任一项</SelectItem>
+                      <SelectItem value="at_least">至少N项</SelectItem>
+                      <SelectItem value="ratio">至少X%</SelectItem>
+                      <SelectItem value="all">全部</SelectItem>
                     </SelectContent>
                   </Select>
+                  {values.advancedRules.entry_confirmation_mode === "at_least" ? (
+                    <NumericField
+                      id="advanced-entry-count"
+                      label="至少满足项数"
+                      min={1}
+                      max={Math.max(
+                        1,
+                        [
+                          values.advancedRules.moving_average,
+                          values.advancedRules.macd,
+                          values.advancedRules.bollinger,
+                          values.advancedRules.rsi,
+                          values.advancedRules.momentum,
+                          values.advancedRules.brar,
+                        ].filter((rule) => rule.enabled).length,
+                      )}
+                      value={values.advancedRules.entry_confirmation_count ?? 1}
+                      onChange={(entry_confirmation_count) => update("advancedRules", {
+                        ...values.advancedRules,
+                        entry_confirmation_count,
+                      })}
+                    />
+                  ) : null}
+                  {values.advancedRules.entry_confirmation_mode === "ratio" ? (
+                    <NumericField
+                      id="advanced-entry-ratio"
+                      label="至少满足比例"
+                      hint="按启用条件数计算，所需项数向上取整。"
+                      min={1}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      value={(values.advancedRules.entry_confirmation_ratio ?? 1) * 100}
+                      onChange={(percentage) => update("advancedRules", {
+                        ...values.advancedRules,
+                        entry_confirmation_ratio: percentage / 100,
+                      })}
+                    />
+                  ) : null}
                 </div>
                 <div className="grid gap-1.5">
                   <Label htmlFor="advanced-exit-mode">卖出确认方式</Label>

@@ -473,22 +473,27 @@ class CryptoMarketService:
                     health.last_success_at = datetime.now(timezone.utc).isoformat()
                     return result
                 except Exception as exc:
-                    errors.append(f"{provider}: {exc}")
+                    failure_type = self._failure_type(exc)
+                    errors.append(f"{provider}: {failure_type}")
                     if not any(time_range) and stale_result is None and cached is not None:
                         stale_result = cached.result
                     if attempt + 1 < settings.MARKET_DATA_PROVIDER_ATTEMPTS:
                         await asyncio.sleep(0.25 * (attempt + 1) + random.uniform(0, 0.1))
                         continue
-                    self._record_provider_failure(provider, exc)
+                    # A caller-selected historical range can be unavailable even
+                    # while the provider's live market endpoint is healthy. Do
+                    # not poison the shared live-provider circuit breaker for a
+                    # range-specific failure.
+                    if not any(time_range):
+                        self._record_provider_failure(provider, exc)
                     logger.warning(
                         "Crypto OHLCV fetch failed provider={} symbol={} interval={} attempts={} "
-                        "failure_type={} err={}",
+                        "failure_type={}",
                         provider,
                         symbol,
                         interval,
                         attempt + 1,
-                        self._failure_type(exc),
-                        str(exc),
+                        failure_type,
                     )
         if stale_result is not None and not any(time_range):
             logger.warning(
@@ -603,7 +608,7 @@ class CryptoMarketService:
             * (2 ** (health.consecutive_failures - 1)),
         )
         health.cooldown_until = time.monotonic() + cooldown_s
-        health.last_error = str(exc)[:500]
+        health.last_error = self._failure_type(exc)
 
     async def _fetch_uncached(
         self,

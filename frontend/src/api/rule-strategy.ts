@@ -210,6 +210,7 @@ export function useParseRuleStrategyText() {
 function useRuleStrategyLog<T>(
   strategyId: string | undefined,
   logType: "signals" | "trades" | "funding",
+  enabled = true,
 ) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
@@ -220,14 +221,18 @@ function useRuleStrategyLog<T>(
         { requiresAuth: true },
       ),
     select: (response) => response.data.entries,
-    enabled: Boolean(strategyId && tenantId),
+    enabled: Boolean(strategyId && tenantId && enabled),
   });
 }
 export function useRuleStrategySignals(strategyId?: string) {
   return useRuleStrategyLog<RuleStrategyLogEntry>(strategyId, "signals");
 }
-export function useRuleStrategyTrades(strategyId?: string) {
-  return useRuleStrategyLog<RuleStrategyTradeLogEntry>(strategyId, "trades");
+export function useRuleStrategyTrades(strategyId?: string, enabled = true) {
+  return useRuleStrategyLog<RuleStrategyTradeLogEntry>(
+    strategyId,
+    "trades",
+    enabled,
+  );
 }
 export function useRuleStrategyFunding(strategyId?: string) {
   return useRuleStrategyLog<RuleStrategyFundingLogEntry>(strategyId, "funding");

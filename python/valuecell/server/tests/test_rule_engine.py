@@ -508,6 +508,7 @@ def test_advanced_rsi_full_range_rule_always_cycles_paper_positions(
     result = _evaluate(
         [10.0, 10.0],
         config={
+            "interval": "1m",
             "advanced_rules": {
                 "enabled": True,
                 "entry_confirmation_mode": "all",
@@ -529,3 +530,49 @@ def test_advanced_rsi_full_range_rule_always_cycles_paper_positions(
 
     assert result.action == expected_action
     assert result.reason_code == expected_reason
+
+
+def test_advanced_rule_missing_non_primary_interval_is_unavailable_not_primary_fallback():
+    request = _request(
+        [10.0, 10.0, 10.0],
+        config={
+            "interval": "15m",
+            "advanced_rules": {
+                "enabled": True,
+                "rsi": {
+                    "enabled": True,
+                    "interval": "1h",
+                    "period": 2,
+                    "entry_comparator": "above",
+                    "entry_threshold": -1,
+                },
+            },
+        },
+    )
+    result = RuleEngine().evaluate(request)
+    assert result.action == "no_op"
+    assert result.reason_code == "insufficient_candle_history"
+    condition = _condition(result, "rsi_entry")
+    assert condition.state == "unavailable"
+    assert condition.values == {"required_candles": 3, "supplied_candles": 0}
+
+
+def test_advanced_rule_on_primary_interval_uses_request_candles_without_candle_set():
+    result = _evaluate(
+        [10.0, 10.0, 10.0],
+        config={
+            "interval": "15m",
+            "advanced_rules": {
+                "enabled": True,
+                "rsi": {
+                    "enabled": True,
+                    "interval": "15m",
+                    "period": 2,
+                    "entry_comparator": "above",
+                    "entry_threshold": -1,
+                },
+            },
+        },
+    )
+    assert result.action == "buy"
+    assert _condition(result, "rsi_entry").state == "triggered"
