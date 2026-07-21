@@ -20,6 +20,7 @@ from valuecell.server.api.schemas.rule_strategy import (
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyNotFoundError,
     RuleStrategyNotRunningError,
+    RuleStrategyRunningUpdateError,
     RuleStrategyService,
     RuleStrategyUnsupportedEvaluationError,
 )
@@ -239,6 +240,8 @@ def create_rule_strategy_router(
             )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuleStrategyRunningUpdateError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy updated")
 
     @router.post(

@@ -19,10 +19,7 @@ function readActiveRuleStrategyId(userId: string, tenantId: string): string {
 }
 
 /** Keeps every strategy entry point focused on a user- and tenant-scoped strategy. */
-export function useActiveRuleStrategyId(): readonly [
-  string,
-  (strategyId: string) => void,
-] {
+export function useActiveRuleStrategyId() {
   const { userId, tenantId } = useSaaSSession();
   const strategiesQuery = useRuleStrategies(tenantId);
   const [strategyId, setStrategyId] = useState(() =>
@@ -71,5 +68,5 @@ export function useActiveRuleStrategyId(): readonly [
     [userId, tenantId],
   );
 
-  return [strategyId, setActiveRuleStrategyId] as const;
+  return [strategyId, setActiveRuleStrategyId, strategiesQuery] as const;
 }

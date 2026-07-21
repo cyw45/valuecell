@@ -35,6 +35,10 @@ class RuleStrategyNotRunningError(Exception):
     """Raised when evaluation is requested for a stopped strategy."""
 
 
+class RuleStrategyRunningUpdateError(Exception):
+    """Raised when configuration changes are requested for a running strategy."""
+
+
 class RuleStrategyUnsupportedEvaluationError(Exception):
     """Raised when manual evaluation cannot use authoritative account facts."""
 
@@ -90,7 +94,9 @@ class RuleStrategyService:
         return self._locked_mutate(
             strategy_id,
             tenant_id,
-            lambda strategy: self._apply_update(strategy, name, description, config),
+            lambda strategy: self._apply_stopped_update(
+                strategy, name, description, config
+            ),
         )
 
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
@@ -732,6 +738,19 @@ class RuleStrategyService:
             strategy.status = status
             strategy.execution_generation = (strategy.execution_generation or 1) + 1
         return self._locked_mutate(strategy_id, tenant_id, apply)
+
+    @staticmethod
+    def _apply_stopped_update(
+        strategy: RuleStrategy,
+        name: str | None,
+        description: str | None,
+        config: RuleStrategyConfig | None,
+    ) -> None:
+        if strategy.status == "running":
+            raise RuleStrategyRunningUpdateError(
+                "Stop the strategy before updating its configuration"
+            )
+        RuleStrategyService._apply_update(strategy, name, description, config)
 
     @staticmethod
     def _apply_update(

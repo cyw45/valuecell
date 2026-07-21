@@ -1,3 +1,4 @@
+from copy import deepcopy
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -8,7 +9,11 @@ from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.db.connection import get_db
 
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
-from valuecell.server.services.rule_strategy_service import RuleStrategyService
+from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
+from valuecell.server.services.rule_strategy_service import (
+    RuleStrategyRunningUpdateError,
+    RuleStrategyService,
+)
 
 
 STRATEGY_ID = "rule_deterministic"
@@ -273,6 +278,75 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
     )
 
     assert rejected.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"name": "Renamed while running"},
+        {
+            "config": {
+                **_config(),
+                "risk": {
+                    **_config()["risk"],
+                    "order_quote_amount": 250,
+                },
+            }
+        },
+    ],
+)
+def test_rule_strategy_api_rejects_all_running_updates_without_persisting(update):
+    client = _client()
+    created = client.post(
+        "/rule-strategies",
+        json={"name": "Immutable while running", "config": _config()},
+    ).json()["data"]
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/start").status_code == 200
+
+    response = client.patch(f"/rule-strategies/{STRATEGY_ID}", json=update)
+
+    assert response.status_code == 409
+    persisted = client.get(f"/rule-strategies/{STRATEGY_ID}").json()["data"]
+    assert persisted["name"] == created["name"]
+    assert persisted["description"] == created["description"]
+    assert persisted["config"] == created["config"]
+
+
+def test_rule_strategy_service_rejects_running_updates_but_updates_stopped_strategy():
+    repository = InMemoryRuleStrategyRepository()
+    service = RuleStrategyService(repository=repository)
+    config = RuleStrategyConfig.model_validate(_config())
+    service.create(FIXED_PRINCIPAL.tenant_id, "Original", "Original description", config)
+
+    stopped = service.update(
+        STRATEGY_ID,
+        FIXED_PRINCIPAL.tenant_id,
+        "Updated while stopped",
+        None,
+        config.model_copy(
+            update={
+                "risk": config.risk.model_copy(update={"order_quote_amount": 250})
+            }
+        ),
+    )
+    assert stopped["name"] == "Updated while stopped"
+    assert stopped["config"]["risk"]["order_quote_amount"] == 250
+
+    service.start(STRATEGY_ID, FIXED_PRINCIPAL.tenant_id)
+    assert repository.strategy is not None
+    persisted_before = deepcopy(repository.strategy.config)
+    with pytest.raises(
+        RuleStrategyRunningUpdateError, match="Stop the strategy before updating"
+    ):
+        service.update(
+            STRATEGY_ID,
+            FIXED_PRINCIPAL.tenant_id,
+            "Must not persist",
+            None,
+            config,
+        )
+    assert repository.strategy.name == "Updated while stopped"
+    assert repository.strategy.config == persisted_before
 
 
 def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evaluation():

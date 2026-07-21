@@ -57,9 +57,15 @@ import { cn } from "@/lib/utils";
 import { useSaaSSession } from "@/store/system-store";
 import type {
   AdvancedRuleSetConfig,
-  RuleStrategyConfig,
   RuleStrategyInterval,
 } from "@/types/rule-strategy";
+import {
+  configurationLifecycle,
+  defaultStrategyFormValues,
+  ruleStrategyConfigToFormValues,
+  strategyFormValuesToConfig,
+  type StrategyFormValues,
+} from "./strategy-configuration-lifecycle";
 
 const TIMEFRAME_OPTIONS: RuleStrategyInterval[] = [
   "1m",
@@ -156,38 +162,6 @@ function createPaperDemoAdvancedRules(): AdvancedRuleSetConfig {
   };
 }
 
-type StrategyFormValues = {
-  symbols: string[];
-  timeframe: RuleStrategyInterval;
-  fastMa: number;
-  slowMa: number;
-  rsiEnabled: boolean;
-  rsiPeriod: number;
-  rsiOversold: number;
-  rsiOverbought: number;
-  bollingerEnabled: boolean;
-  bollingerPeriod: number;
-  bollingerDeviation: number;
-  momentumEnabled: boolean;
-  macdFast: number;
-  macdSlow: number;
-  macdSignal: number;
-  initialCapital: number;
-  orderQuoteAmount: number;
-  advancedRules: AdvancedRuleSetConfig;
-  takeProfitEnabled: boolean;
-  takeProfit: number;
-  stopLossEnabled: boolean;
-  stopLoss: number;
-  maximumPositions: number;
-  leverage: number;
-  executionEnvironment: "paper" | "okx_demo";
-  sandboxConnectionId: string;
-  maxDemoOrderQuoteAmount: number;
-  maxDemoDailyQuoteAmount: number;
-  maxDemoTotalQuoteAmount: number;
-};
-
 type AdvancedIndicatorKey =
   | "moving_average"
   | "macd"
@@ -195,97 +169,6 @@ type AdvancedIndicatorKey =
   | "rsi"
   | "momentum"
   | "brar";
-
-const initialValues: StrategyFormValues = {
-  symbols: [],
-  timeframe: "15m",
-  fastMa: 20,
-  slowMa: 50,
-  rsiEnabled: true,
-  rsiPeriod: 14,
-  rsiOversold: 30,
-  rsiOverbought: 70,
-  bollingerEnabled: true,
-  bollingerPeriod: 20,
-  bollingerDeviation: 2,
-  momentumEnabled: true,
-  macdFast: 12,
-  macdSlow: 26,
-  macdSignal: 9,
-  initialCapital: 10_000,
-  orderQuoteAmount: 100,
-  advancedRules: {
-    enabled: true,
-    entry_confirmation_mode: "all",
-    entry_confirmation_count: 1,
-    entry_confirmation_ratio: 1,
-    exit_confirmation_mode: "any",
-    moving_average: {
-      enabled: true,
-      interval: "1d",
-      period: 20,
-      entry_comparator: "above",
-    },
-    macd: {
-      enabled: true,
-      interval: "5m",
-      fast_window: 12,
-      slow_window: 26,
-      signal_window: 9,
-      entry_cross: "golden",
-    },
-    bollinger: {
-      enabled: true,
-      interval: "15m",
-      period: 20,
-      standard_deviations: 2,
-      entry_reference: "middle",
-      entry_comparator: "above",
-    },
-    rsi: {
-      enabled: true,
-      interval: "15m",
-      period: 14,
-      entry_comparator: "below",
-      entry_threshold: 20,
-      exit_enabled: true,
-      exit_comparator: "above",
-      exit_threshold: 85,
-    },
-    momentum: {
-      enabled: true,
-      interval: "15m",
-      period: 14,
-      entry_comparator: "below",
-      entry_threshold: 20,
-      exit_enabled: true,
-      exit_comparator: "above",
-      exit_threshold: 85,
-    },
-    brar: {
-      enabled: true,
-      interval: "15m",
-      period: 26,
-      component: "br",
-      entry_comparator: "below",
-      entry_threshold: 30,
-      exit_enabled: false,
-      exit_comparator: "above",
-      exit_threshold: 85,
-    },
-  },
-  takeProfitEnabled: false,
-  takeProfit: 4,
-  stopLossEnabled: false,
-  stopLoss: 2,
-  maximumPositions: 100,
-  leverage: 1,
-  executionEnvironment: "paper",
-  sandboxConnectionId: "",
-  maxDemoOrderQuoteAmount: 100,
-  maxDemoDailyQuoteAmount: 500,
-  maxDemoTotalQuoteAmount: 1_000,
-};
 
 function NumericField({
   id,
@@ -585,66 +468,15 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-function toRuleStrategyConfig(values: StrategyFormValues): RuleStrategyConfig {
-  return {
-    mode: "paper",
-    initial_capital_quote: values.initialCapital,
-    confirmation_mode: "all",
-    symbols: values.symbols.map((symbol) => symbol.replace("/", "-")),
-    interval: values.timeframe,
-    decide_interval_s: null,
-    moving_average: {
-      enabled: true,
-      short_window: values.fastMa,
-      long_window: values.slowMa,
-    },
-    rsi: {
-      enabled: values.rsiEnabled,
-      period: values.rsiPeriod,
-      oversold: values.rsiOversold,
-      overbought: values.rsiOverbought,
-    },
-    bollinger: {
-      enabled: values.bollingerEnabled,
-      period: values.bollingerPeriod,
-      standard_deviations: values.bollingerDeviation,
-    },
-    momentum_macd: {
-      enabled: values.momentumEnabled,
-      momentum_period: values.macdSignal,
-      macd_fast_window: values.macdFast,
-      macd_slow_window: values.macdSlow,
-      macd_signal_window: values.macdSignal,
-    },
-    advanced_rules: values.advancedRules,
-    execution: {
-      environment: values.executionEnvironment,
-      ...(values.executionEnvironment === "okx_demo"
-        ? { sandbox_connection_id: values.sandboxConnectionId }
-        : {}),
-      max_order_quote_amount: values.maxDemoOrderQuoteAmount,
-      max_daily_quote_amount: values.maxDemoDailyQuoteAmount,
-      max_total_quote_amount: values.maxDemoTotalQuoteAmount,
-    },
-    risk: {
-      order_quote_amount: values.orderQuoteAmount,
-      take_profit_pct: values.takeProfitEnabled
-        ? values.takeProfit / 100
-        : undefined,
-      stop_loss_pct: values.stopLossEnabled ? values.stopLoss / 100 : undefined,
-      max_positions: values.maximumPositions,
-      leverage: values.leverage,
-    },
-  };
-}
-
 export function RuleStrategyConfiguration({
   embedded = false,
 }: {
   embedded?: boolean;
 }) {
   const { t } = useTranslation();
-  const [values, setValues] = useState<StrategyFormValues>(initialValues);
+  const [values, setValues] = useState<StrategyFormValues>(
+    defaultStrategyFormValues,
+  );
   const [strategyId, setStrategyId] = useActiveRuleStrategyId();
   const { tenantId } = useSaaSSession();
   const [name, setName] = useState(() =>
@@ -654,6 +486,8 @@ export function RuleStrategyConfiguration({
   const [strategyText, setStrategyText] = useState("");
   const [textImportSummary, setTextImportSummary] = useState("");
   const [unresolvedItems, setUnresolvedItems] = useState<string[]>([]);
+  const [savedSignature, setSavedSignature] = useState("");
+  const [hydratedStrategyId, setHydratedStrategyId] = useState("");
   const strategiesQuery = useRuleStrategies(tenantId);
   const symbolsQuery = useGetCryptoSymbols();
   const strategyQuery = useRuleStrategy(strategyId);
@@ -676,41 +510,20 @@ export function RuleStrategyConfiguration({
 
   useEffect(() => {
     if (!strategyQuery.data) return;
-    setValues((current) => ({
-      ...current,
-      initialCapital: strategyQuery.data.config.initial_capital_quote,
-      orderQuoteAmount: strategyQuery.data.config.risk.order_quote_amount,
-      symbols:
-        strategyQuery.data.config.symbols?.map((symbol) =>
-          symbol.replace("-", "/"),
-        ) ?? initialValues.symbols,
-      timeframe: strategyQuery.data.config.interval ?? initialValues.timeframe,
-      advancedRules:
-        strategyQuery.data.config.advanced_rules ?? initialValues.advancedRules,
-      executionEnvironment:
-        strategyQuery.data.config.execution?.environment ?? "paper",
-      sandboxConnectionId:
-        strategyQuery.data.config.execution?.sandbox_connection_id ?? "",
-      maxDemoOrderQuoteAmount:
-        strategyQuery.data.config.execution?.max_order_quote_amount ??
-        current.maxDemoOrderQuoteAmount,
-      maxDemoDailyQuoteAmount:
-        strategyQuery.data.config.execution?.max_daily_quote_amount ??
-        current.maxDemoDailyQuoteAmount,
-      maxDemoTotalQuoteAmount:
-        strategyQuery.data.config.execution?.max_total_quote_amount ??
-        current.maxDemoTotalQuoteAmount,
-      takeProfitEnabled:
-        strategyQuery.data.config.risk.take_profit_pct !== undefined,
-      takeProfit:
-        (strategyQuery.data.config.risk.take_profit_pct ??
-          current.takeProfit / 100) * 100,
-      stopLossEnabled:
-        strategyQuery.data.config.risk.stop_loss_pct !== undefined,
-      stopLoss:
-        (strategyQuery.data.config.risk.stop_loss_pct ??
-          current.stopLoss / 100) * 100,
-    }));
+    const nextValues = ruleStrategyConfigToFormValues(strategyQuery.data.config);
+    const nextName = strategyQuery.data.name;
+    const nextDescription = strategyQuery.data.description ?? "";
+    setValues(nextValues);
+    setName(nextName);
+    setDescription(nextDescription);
+    setHydratedStrategyId(strategyQuery.data.strategy_id);
+    setSavedSignature(
+      JSON.stringify({
+        values: nextValues,
+        name: nextName,
+        description: nextDescription,
+      }),
+    );
   }, [strategyQuery.data]);
 
   useEffect(() => {
@@ -933,29 +746,31 @@ export function RuleStrategyConfiguration({
     stopStrategy.isPending ||
     parseStrategyText.isPending;
   const storedStrategy = strategyQuery.data;
-  const executionTargetLocked = storedStrategy?.status === "running";
+  const currentSignature = JSON.stringify({ values, name, description });
+  const isDirty = Boolean(strategyId) && currentSignature !== savedSignature;
+  const lifecycle = configurationLifecycle({
+    strategiesPending: strategiesQuery.isPending,
+    strategyCount: strategiesQuery.data?.length ?? 0,
+    activeStrategyId: strategyId,
+    detailPending: strategyQuery.isPending,
+    hasDetail:
+      Boolean(storedStrategy) && hydratedStrategyId === strategyId,
+    hasError: strategiesQuery.isError || strategyQuery.isError,
+    status: storedStrategy?.status,
+    dirty: isDirty,
+  });
+  const configurationLocked = lifecycle.readOnly;
   const savePending = createStrategy.isPending || updateStrategy.isPending;
   const selectionLimitReached = values.symbols.length >= 100;
   const ConfigurationHeading = embedded ? "h2" : "h1";
 
   const saveStrategy = async () => {
-    if (
-      executionTargetLocked &&
-      (storedStrategy.config.execution.environment !==
-        values.executionEnvironment ||
-        storedStrategy.config.execution.sandbox_connection_id !==
-          (values.executionEnvironment === "okx_demo"
-            ? values.sandboxConnectionId
-            : undefined))
-    ) {
-      toast.error("请先停止策略，再切换执行环境或 OKX Demo 连接。");
-      return;
-    }
+    if (configurationLocked) return;
     if (!isValid) return;
     const request = {
       name: name.trim() || t("saas.operations.strategy.defaultName"),
       description: description.trim() || undefined,
-      config: toRuleStrategyConfig(values),
+      config: strategyFormValuesToConfig(values),
     };
     try {
       const response = strategyId
@@ -1013,6 +828,31 @@ export function RuleStrategyConfiguration({
       toast.error(err instanceof Error ? err.message : "策略文本解析失败。");
     }
   };
+
+  if (lifecycle.loading) {
+    return (
+      <div
+        aria-busy="true"
+        className="flex size-full items-center justify-center bg-background p-8 text-muted-foreground text-sm"
+      >
+        正在加载策略配置…
+      </div>
+    );
+  }
+
+  if (strategiesQuery.isError || strategyQuery.isError) {
+    return (
+      <div className="grid size-full place-items-center bg-background p-8">
+        <Alert className="max-w-xl border-destructive/40" variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>策略配置加载失败</AlertTitle>
+          <AlertDescription>
+            无法读取服务器上的策略运行状态和配置。请稍后重试，页面不会使用空配置替代正在执行的参数。
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1086,6 +926,11 @@ export function RuleStrategyConfiguration({
                   <Button
                     aria-pressed={strategy.selected}
                     className="h-auto items-start justify-start whitespace-normal p-3 text-left"
+                    disabled={
+                      Boolean(
+                        strategyItems.find((item) => item.status === "running"),
+                      ) && strategy.status !== "running"
+                    }
                     key={strategy.strategyId}
                     onClick={() => setStrategyId(strategy.strategyId)}
                     type="button"
@@ -1127,6 +972,19 @@ export function RuleStrategyConfiguration({
         )}
       >
         <form className="grid min-w-0 gap-4" noValidate>
+          <fieldset
+            className="contents disabled:cursor-not-allowed disabled:opacity-70"
+            disabled={configurationLocked}
+          >
+            {configurationLocked ? (
+              <Alert className="border-amber-500/35 bg-amber-500/5">
+                <LockKeyhole className="text-amber-500" />
+                <AlertTitle>策略正在模拟评估，当前配置为只读</AlertTitle>
+                <AlertDescription>
+                  页面展示的是服务器正在执行的已保存参数。请先点击“停止模拟评估”，停止成功后才能编辑并保存。
+                </AlertDescription>
+              </Alert>
+            ) : null}
           <Alert className="border-sky-500/30 bg-sky-500/5">
             <AlertTriangle />
             <AlertTitle>
@@ -1164,7 +1022,7 @@ export function RuleStrategyConfiguration({
               <div className="grid gap-1.5">
                 <Label htmlFor="execution-environment">执行模式</Label>
                 <Select
-                  disabled={executionTargetLocked}
+                  disabled={configurationLocked}
                   value={values.executionEnvironment}
                   onValueChange={(value) => {
                     const environment = value as "paper" | "okx_demo";
@@ -1189,7 +1047,7 @@ export function RuleStrategyConfiguration({
                   </SelectContent>
                 </Select>
                 <p className="text-muted-foreground text-xs">
-                  {executionTargetLocked
+                  {configurationLocked
                     ? "策略运行中。请先停止，保存新的执行目标后再启动。"
                     : "切换会保留策略规则与单笔金额，只替换订单执行目标。"}
                 </p>
@@ -1199,7 +1057,7 @@ export function RuleStrategyConfiguration({
                   <div className="grid gap-1.5">
                     <Label htmlFor="okx-demo-connection">OKX Demo 连接</Label>
                     <Select
-                      disabled={executionTargetLocked}
+                      disabled={configurationLocked}
                       value={values.sandboxConnectionId}
                       onValueChange={(value) =>
                         update("sandboxConnectionId", value)
@@ -1430,30 +1288,64 @@ export function RuleStrategyConfiguration({
                   </p>
                 ) : null}
               </fieldset>
-              <div className="grid gap-1.5 sm:max-w-56">
-                <Label htmlFor="timeframe">
-                  {t("saas.operations.strategy.fields.candleTimeframe")}
-                </Label>
-                <Select
-                  value={values.timeframe}
-                  onValueChange={(value) =>
-                    update("timeframe", value as RuleStrategyInterval)
+              <div className="grid gap-4 sm:grid-cols-3">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="timeframe">
+                    {t("saas.operations.strategy.fields.candleTimeframe")}
+                  </Label>
+                  <Select
+                    value={values.timeframe}
+                    onValueChange={(value) =>
+                      update("timeframe", value as RuleStrategyInterval)
+                    }
+                  >
+                    <SelectTrigger id="timeframe">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {TIMEFRAME_OPTIONS.map((timeframe) => (
+                        <SelectItem key={timeframe} value={timeframe}>
+                          {timeframe}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-muted-foreground text-xs">
+                    {t("saas.operations.strategy.fields.candleTimeframeHint")}
+                  </p>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="base-confirmation-mode">基础条件确认方式</Label>
+                  <Select
+                    value={values.confirmationMode}
+                    onValueChange={(value) =>
+                      update("confirmationMode", value as "all" | "any")
+                    }
+                  >
+                    <SelectTrigger id="base-confirmation-mode">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">全部条件满足</SelectItem>
+                      <SelectItem value="any">任一条件满足</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-muted-foreground text-xs">
+                    仅用于基础指标；高级规则使用下方独立确认方式。
+                  </p>
+                </div>
+                <NumericField
+                  hint="0 表示由系统按 K 线周期自动调度。"
+                  id="decide-interval-seconds"
+                  label="评估调度间隔"
+                  max={86_400}
+                  min={0}
+                  onChange={(value) =>
+                    update("decideIntervalSeconds", value <= 0 ? null : value)
                   }
-                >
-                  <SelectTrigger id="timeframe">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {TIMEFRAME_OPTIONS.map((timeframe) => (
-                      <SelectItem key={timeframe} value={timeframe}>
-                        {timeframe}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-muted-foreground text-xs">
-                  {t("saas.operations.strategy.fields.candleTimeframeHint")}
-                </p>
+                  unit="秒"
+                  value={values.decideIntervalSeconds ?? 0}
+                />
               </div>
             </CardContent>
           </Card>
@@ -1466,8 +1358,24 @@ export function RuleStrategyConfiguration({
                 "saas.operations.strategy.sections.trendEntry.description",
               )}
             />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
+            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-3 sm:px-5">
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2">
+                <div>
+                  <Label htmlFor="moving-average-enabled">启用基础均线条件</Label>
+                  <p className="text-muted-foreground text-xs">
+                    控制快慢均线条件是否参与基础策略判断。
+                  </p>
+                </div>
+                <Switch
+                  checked={values.movingAverageEnabled}
+                  id="moving-average-enabled"
+                  onCheckedChange={(enabled) =>
+                    update("movingAverageEnabled", enabled)
+                  }
+                />
+              </div>
               <NumericField
+                disabled={!values.movingAverageEnabled}
                 error={errors.fastMa}
                 id="fast-ma"
                 label={t("saas.operations.strategy.fields.fastMovingAverage")}
@@ -1477,6 +1385,7 @@ export function RuleStrategyConfiguration({
                 value={values.fastMa}
               />
               <NumericField
+                disabled={!values.movingAverageEnabled}
                 error={errors.slowMa}
                 id="slow-ma"
                 label={t("saas.operations.strategy.fields.slowMovingAverage")}
@@ -1583,7 +1492,16 @@ export function RuleStrategyConfiguration({
                 "saas.operations.strategy.sections.momentum.description",
               )}
             />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-3 sm:px-5">
+            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4">
+              <NumericField
+                disabled={!values.momentumEnabled}
+                id="momentum-period"
+                label="动量计算周期"
+                max={500}
+                min={1}
+                onChange={(value) => update("momentumPeriod", value)}
+                value={values.momentumPeriod}
+              />
               <NumericField
                 disabled={!values.momentumEnabled}
                 error={errors.macdFast}
@@ -2122,6 +2040,7 @@ export function RuleStrategyConfiguration({
               />
             </CardContent>
           </Card>
+          </fieldset>
         </form>
 
         <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-0 xl:self-start">
@@ -2242,7 +2161,7 @@ export function RuleStrategyConfiguration({
             </CardHeader>
             <CardContent className="grid gap-3 px-4 py-4">
               <Button
-                disabled={!isValid || isPending}
+                disabled={configurationLocked || !isValid || isPending}
                 onClick={saveStrategy}
                 type="button"
               >
@@ -2253,7 +2172,7 @@ export function RuleStrategyConfiguration({
                     : t("saas.operations.strategy.actions.save")}
                 </span>
               </Button>
-              {storedStrategy?.status === "running" ? (
+              {lifecycle.actions.includes("stop") ? (
                 <Button
                   disabled={isPending}
                   onClick={async () => {
@@ -2275,11 +2194,15 @@ export function RuleStrategyConfiguration({
                   type="button"
                   variant="outline"
                 >
-                  {t("saas.operations.strategy.actions.stop")}
+                  停止模拟评估
                 </Button>
               ) : (
                 <Button
-                  disabled={!strategyId || isPending}
+                  disabled={
+                    !lifecycle.actions.includes("start") ||
+                    !strategyId ||
+                    isPending
+                  }
                   onClick={async () => {
                     try {
                       await startStrategy.mutateAsync();
@@ -2299,7 +2222,7 @@ export function RuleStrategyConfiguration({
                   type="button"
                   variant="outline"
                 >
-                  {t("saas.operations.strategy.actions.start")}
+                  开始模拟评估
                 </Button>
               )}
               <p className="text-muted-foreground text-xs leading-relaxed">
@@ -2363,6 +2286,7 @@ export function RuleStrategyConfiguration({
             </CardHeader>
             <CardContent className="grid gap-3 px-4 py-4">
               <Textarea
+                disabled={configurationLocked}
                 className="min-h-44 text-sm"
                 onChange={(event) => setStrategyText(event.target.value)}
                 placeholder="例如：买入以 15 分钟为主，价格高于日线 20 日均线；5 分钟 MACD 金叉；15 分钟价格高于布林中线；RSI 低于 20；动能低于 20；BR 低于 30。卖出：RSI 或动能高于 85 时全部卖出。"
@@ -2370,7 +2294,9 @@ export function RuleStrategyConfiguration({
               />
               <Button
                 disabled={
-                  parseStrategyText.isPending || strategyText.trim().length < 10
+                  configurationLocked ||
+                  parseStrategyText.isPending ||
+                  strategyText.trim().length < 10
                 }
                 onClick={importStrategyText}
                 type="button"

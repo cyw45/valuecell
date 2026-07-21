@@ -1,5 +1,6 @@
 import {
   ArrowUpRight,
+  AlertTriangle,
   BarChart3,
   CandlestickChart,
   CircleDollarSign,
@@ -38,7 +39,16 @@ import {
   conditionDisplayName,
   formatConditionValues,
 } from "@/app/dashboard-funnel";
+import {
+  shouldShowCandlestickLoading,
+  shouldShowDashboardPageLoading,
+} from "@/app/dashboard-loading";
 import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -240,8 +250,9 @@ function KpiCard({
 export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const [strategyId] = useActiveRuleStrategyId();
-  const { data: ruleStrategy } = useRuleStrategy(strategyId);
+  const [strategyId, , strategiesQuery] = useActiveRuleStrategyId();
+  const { data: ruleStrategy, isError: ruleStrategyError } =
+    useRuleStrategy(strategyId);
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
   const {
@@ -326,6 +337,7 @@ export default function DashboardPage() {
   const {
     data: marketData,
     isFetching: marketLoading,
+    isPlaceholderData: marketDataIsPrevious,
     isError: marketError,
   } = useGetCryptoMarketIndicators({
     symbols: [effectiveSymbol],
@@ -337,6 +349,18 @@ export default function DashboardPage() {
   });
   const market = marketData?.symbols[0];
   const marketFailure = marketData?.failed_symbols[effectiveSymbol];
+  const pageLoading = shouldShowDashboardPageLoading({
+    strategies: strategiesQuery.data,
+    strategyId,
+    ruleStrategy,
+    demoExecution,
+    hasError:
+      strategiesQuery.isError || ruleStrategyError || demoExecutionError,
+  });
+  const candlestickLoading = shouldShowCandlestickLoading(
+    marketLoading,
+    marketData,
+  );
 
   const candles: CandlestickData[] =
     market?.candles.map((candle) => ({
@@ -466,6 +490,35 @@ export default function DashboardPage() {
     const frameId = window.requestAnimationFrame(scrollToStrategyConfiguration);
     return () => window.cancelAnimationFrame(frameId);
   }, [scrollToStrategyConfiguration]);
+
+  if (pageLoading) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label="正在加载仪表盘"
+        className="grid size-full place-items-center text-muted-foreground"
+      >
+        <div className="flex items-center gap-2 text-sm">
+          <RefreshCw className="size-4 animate-spin" />
+          正在加载仪表盘…
+        </div>
+      </div>
+    );
+  }
+
+  if (strategiesQuery.isError || ruleStrategyError || demoExecutionError) {
+    return (
+      <div className="grid size-full place-items-center p-8">
+        <Alert className="max-w-xl border-destructive/40" variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>仪表盘数据加载失败</AlertTitle>
+          <AlertDescription>
+            无法确认当前策略或模拟账户的权威状态。请稍后重试，页面不会先显示 0 作为真实账户数据。
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="scroll-container dashboard-shell flex size-full flex-col">
@@ -987,6 +1040,9 @@ export default function DashboardPage() {
                       <RadioTower className="size-3" />{" "}
                       {market?.provider ?? "行情数据源"}
                     </Badge>
+                    {marketDataIsPrevious ? (
+                      <Badge variant="outline">参数行情更新中</Badge>
+                    ) : null}
                     {market?.freshness_status === "stale" ? (
                       <Badge variant="outline">数据延迟</Badge>
                     ) : null}
@@ -1102,7 +1158,7 @@ export default function DashboardPage() {
                   currentPrice={market?.latest_price}
                   data={candles}
                   movingAverages={movingAverages}
-                  loading={marketLoading}
+                  loading={candlestickLoading}
                   height={410}
                   theme={isDark ? "dark" : "light"}
                 />

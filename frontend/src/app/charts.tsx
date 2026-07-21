@@ -270,7 +270,7 @@ export default function ChartsPage() {
               <CandlestickChart
                 data={candles}
                 movingAverages={movingAverages}
-                loading={isFetching}
+                loading={isFetching && data === undefined}
                 height={430}
               />
             )}

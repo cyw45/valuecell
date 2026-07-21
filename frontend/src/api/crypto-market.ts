@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { API_QUERY_KEYS } from "@/constants/api";
 import { type ApiResponse, apiClient } from "@/lib/api-client";
 import {
@@ -78,6 +78,7 @@ export const useGetCryptoMarketIndicators = (
       );
     },
     select: (data) => data.data,
+    placeholderData: keepPreviousData,
     enabled: (params.enabled ?? true) && symbols.length > 0,
     refetchInterval,
     staleTime: 10_000,

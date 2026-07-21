@@ -32,6 +32,42 @@ test("keeps a local selection only when it belongs to the tenant strategy list",
   );
 });
 
+test("a running strategy overrides a persisted stopped selection", () => {
+  const strategies = [
+    {
+      strategy_id: "active-running",
+      status: "running" as const,
+      created_at: "2026-07-18T10:00:00Z",
+    },
+    {
+      strategy_id: "persisted-stopped",
+      status: "stopped" as const,
+      created_at: "2026-07-18T12:00:00Z",
+    },
+  ];
+
+  assert.equal(
+    selectActiveRuleStrategyId(strategies, "persisted-stopped"),
+    "active-running",
+  );
+});
+
+test("keeps an explicitly selected running strategy when several are running", () => {
+  const strategies = [
+    { strategy_id: "older-running", status: "running" as const, created_at: "2026-07-18T10:00:00Z" },
+    { strategy_id: "newer-running", status: "running" as const, created_at: "2026-07-18T12:00:00Z" },
+  ];
+  assert.equal(selectActiveRuleStrategyId(strategies, "older-running"), "older-running");
+});
+
+test("selects the newest stopped strategy when none is running or persisted", () => {
+  const strategies = [
+    { strategy_id: "older-stopped", status: "stopped" as const, created_at: "2026-07-18T10:00:00Z" },
+    { strategy_id: "newer-stopped", status: "stopped" as const, created_at: "2026-07-18T12:00:00Z" },
+  ];
+  assert.equal(selectActiveRuleStrategyId(strategies, ""), "newer-stopped");
+});
+
 test("fresh browser selects the newest running strategy", () => {
   const strategies = [
     {

@@ -23,21 +23,22 @@ export function selectActiveRuleStrategyId(
   strategies: StrategySelection[],
   selectedStrategyId: string,
 ) {
-  if (
-    strategies.some((strategy) => strategy.strategy_id === selectedStrategyId)
-  ) {
-    return selectedStrategyId;
-  }
-
-  return (
-    strategies
-      .filter((strategy) => strategy.status === "running")
-      .sort(
-        (left, right) =>
-          new Date(right.created_at ?? 0).getTime() -
-          new Date(left.created_at ?? 0).getTime(),
-      )[0]?.strategy_id ?? ""
+  const selected = strategies.find(
+    (strategy) => strategy.strategy_id === selectedStrategyId,
   );
+  if (selected?.status === "running") return selected.strategy_id;
+
+  const sortedByNewest = [...strategies].sort(
+    (left, right) =>
+      new Date(right.created_at ?? 0).getTime() -
+      new Date(left.created_at ?? 0).getTime(),
+  );
+  const runningStrategyId = sortedByNewest.find(
+    (strategy) => strategy.status === "running",
+  )?.strategy_id;
+  if (runningStrategyId) return runningStrategyId;
+  if (selected) return selected.strategy_id;
+  return sortedByNewest[0]?.strategy_id ?? "";
 }
 
 export function strategyPickerItems(

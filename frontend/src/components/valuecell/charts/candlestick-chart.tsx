@@ -278,12 +278,12 @@ function CandlestickChart({
     if (!chartRef.current) return;
 
     chartInstance.current = echarts.init(chartRef.current);
-    chartInstance.current.setOption(option);
 
     return () => {
       chartInstance.current?.dispose();
+      chartInstance.current = null;
     };
-  }, [option]);
+  }, []);
 
   useEffect(() => {
     if (chartInstance.current) {
