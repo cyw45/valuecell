@@ -3,11 +3,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import Session
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
 from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
+from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyEvaluationJournal
+from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyService,
     RuleStrategyUnsupportedEvaluationError,
@@ -136,6 +140,49 @@ def test_account_recovery_survives_more_than_one_hundred_newer_diagnostics():
 
     assert account.quote_balance == 750.0
     assert account.positions["BTC-USDT"].quantity == 2.5
+
+
+def test_account_recovery_query_filters_and_bounds_history_in_database():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    statements: list[str] = []
+    event.listen(
+        engine,
+        "before_cursor_execute",
+        lambda _conn, _cursor, statement, _parameters, _context, _many: statements.append(
+            statement
+        ),
+    )
+    with Session(engine) as session:
+        session.add(_strategy())
+        session.flush()
+        session.add(_journal(1, _paper_account()))
+        for index in range(2, 203):
+            session.add(
+                _journal(
+                    index,
+                    {
+                        "source": "okx_demo",
+                        "quote_balance": float(index),
+                        "equity_quote": float(index),
+                    },
+                )
+            )
+        session.commit()
+
+        journals = RuleStrategyRepository(session).get_latest_account_evaluations(
+            STRATEGY_ID, TENANT_ID
+        )
+
+    select_statement = next(
+        statement
+        for statement in reversed(statements)
+        if "rule_strategy_evaluation_journal" in statement
+        and statement.lstrip().upper().startswith("SELECT")
+    )
+    assert [journal.evaluation_id for journal in journals] == ["evaluation_1"]
+    assert "LIMIT" in select_statement.upper()
+    assert "JSON_EXTRACT" in select_statement.upper()
 
 
 def test_manual_okx_demo_evaluation_is_rejected_before_using_paper_history():

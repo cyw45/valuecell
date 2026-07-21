@@ -157,28 +157,29 @@ class RuleStrategyRepository:
     def get_latest_account_evaluations(
         self, strategy_id: str, tenant_id: str
     ) -> list[RuleStrategyEvaluationJournal]:
-        """Return all account-bearing journals newest-first for ledger recovery.
-
-        This intentionally has no read-model limit: arbitrary newer diagnostics
-        must never hide and reset the last durable paper account snapshot.
-        """
+        """Return bounded complete paper-account journals newest-first."""
         session = self._get_session()
         try:
+            account = RuleStrategyEvaluationJournal.result["account"]
+            required_fields = (
+                "initial_capital_quote",
+                "quote_balance",
+                "positions",
+                "realized_pnl_quote",
+                "unrealized_pnl_quote",
+                "equity_quote",
+            )
             journals = (
                 session.query(RuleStrategyEvaluationJournal)
                 .filter(
                     RuleStrategyEvaluationJournal.strategy_id == strategy_id,
                     RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+                    *(account[field].as_string().is_not(None) for field in required_fields),
                 )
                 .order_by(desc(RuleStrategyEvaluationJournal.created_at))
+                .limit(100)
                 .all()
             )
-            journals = [
-                journal
-                for journal in journals
-                if isinstance(journal.result, dict)
-                and journal.result.get("account") is not None
-            ]
             for journal in journals:
                 session.expunge(journal)
             return journals

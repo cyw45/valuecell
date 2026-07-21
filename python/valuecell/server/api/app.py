@@ -167,6 +167,7 @@ def create_app() -> FastAPI:
         try:
             from ..db.connection import get_database_manager
             from ..db.migrations import (
+                ensure_rule_strategy_journal_read_index,
                 migrate_fixed_order_amounts,
                 migrate_tenant_profiles,
             )
@@ -176,6 +177,7 @@ def create_app() -> FastAPI:
 
             session = get_database_manager().get_session()
             try:
+                ensure_rule_strategy_journal_read_index(session)
                 migrate_fixed_order_amounts(session)
                 migrate_tenant_profiles(session)
                 result = bootstrap_platform_administrator(

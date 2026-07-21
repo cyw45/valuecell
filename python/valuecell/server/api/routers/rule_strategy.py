@@ -40,9 +40,6 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
     SandboxExchangeTradingService,
     SandboxTradingError,
 )
-from valuecell.server.db.repositories.rule_strategy_repository import (
-    RuleStrategyRepository,
-)
 from valuecell.server.services.saas_access_service import (
     require_active_tenant,
     require_tenant_permission,
@@ -352,17 +349,23 @@ def create_rule_strategy_router(
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        repository = RuleStrategyRepository()
         journals = list(
             reversed(
-                repository.get_evaluations(strategy_id, principal.tenant_id, limit=500)
+                rule_service.repository.get_evaluations(
+                    strategy_id, principal.tenant_id, limit=500
+                )
             )
         )
         points: list[dict[str, Any]] = []
         for journal in journals:
             result: dict[str, Any] = journal.result or {}
             raw_account = result.get("account")
-            if raw_account is None:
+            if (
+                not isinstance(raw_account, dict)
+                or raw_account.get("source") == "okx_demo"
+                or "initial_capital_quote" not in raw_account
+                or "equity_quote" not in raw_account
+            ):
                 continue
             initial_capital = float(raw_account["initial_capital_quote"])
             equity = float(raw_account["equity_quote"])

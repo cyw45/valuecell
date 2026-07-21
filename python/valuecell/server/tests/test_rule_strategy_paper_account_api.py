@@ -11,6 +11,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyMarketSnapshot,
     RuleStrategyPosition,
 )
+from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
 
@@ -245,6 +246,33 @@ def test_paper_account_endpoint_is_tenant_scoped():
     account = client.get(f"/rule-strategies/{strategy_id}/account")
     assert account.status_code == 200
     assert account.json()["data"]["initial_capital_quote"] == 1_000.0
+
+
+def test_pnl_curve_skips_demo_and_incomplete_legacy_account_snapshots():
+    repository = PaperAccountRepository()
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(RuleStrategyService(repository=repository)))
+    app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
+        user_id="user-a", tenant_id="tenant-a"
+    )
+    client = TestClient(app)
+    strategy_id = _create_strategy(client, "PnL compatibility")
+    repository.append_evaluation(
+        RuleStrategyEvaluationJournal(
+            evaluation_id="legacy-demo-snapshot",
+            strategy_id=strategy_id,
+            tenant_id="tenant-a",
+            result={"account": {"source": "okx_demo", "equity_quote": 123.0}},
+            signals=[],
+            trades=[],
+            funding=[],
+        )
+    )
+
+    response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
 
 
 def test_batch_cycle_uses_fixed_amount_and_blocks_unaffordable_entries():

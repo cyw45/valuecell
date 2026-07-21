@@ -50,6 +50,15 @@ class RuleStrategyEvaluationJournal(Base):
     funding = Column(JSON, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    __table_args__ = (
+        Index(
+            "ix_rule_strategy_journal_tenant_strategy_created",
+            "tenant_id",
+            "strategy_id",
+            created_at.desc(),
+        ),
+    )
+
 
 class RuleStrategyExecutionIntent(Base):
     """Durable, tenant-scoped request to execute one strategy evaluation."""

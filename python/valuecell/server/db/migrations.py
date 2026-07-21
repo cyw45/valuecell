@@ -12,6 +12,19 @@ from valuecell.server.db.models.tenant import Tenant, TenantProfile
 EXECUTION_ATTRIBUTION_MIGRATION_VERSION = "20260719_rule_strategy_execution_attribution_v2"
 # Stable, namespaced advisory-lock key for the duration of the migration transaction.
 EXECUTION_ATTRIBUTION_MIGRATION_LOCK_KEY = 7720250719
+RULE_STRATEGY_JOURNAL_INDEX_NAME = "ix_rule_strategy_journal_tenant_strategy_created"
+
+
+def ensure_rule_strategy_journal_read_index(session: Session) -> None:
+    """Create the tenant/strategy/history index used by strategy read models."""
+    session.execute(
+        text(
+            f"CREATE INDEX IF NOT EXISTS {RULE_STRATEGY_JOURNAL_INDEX_NAME} "
+            "ON rule_strategy_evaluation_journal "
+            "(tenant_id, strategy_id, created_at DESC)"
+        )
+    )
+    session.commit()
 
 
 def migrate_rule_strategy_execution_attribution(session: Session) -> bool:

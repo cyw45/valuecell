@@ -138,6 +138,21 @@ def test_execution_attribution_models_define_intent_contract_and_attribution():
     }
 
 
+def test_rule_strategy_journal_read_index_is_idempotent():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    migrations.ensure_rule_strategy_journal_read_index(session)
+    migrations.ensure_rule_strategy_journal_read_index(session)
+
+    indexes = {
+        index["name"]
+        for index in inspect(engine).get_indexes("rule_strategy_evaluation_journal")
+    }
+    assert migrations.RULE_STRATEGY_JOURNAL_INDEX_NAME in indexes
+
+
 def test_app_lifespan_wires_required_migration_before_best_effort_migrations():
     from pathlib import Path
 
