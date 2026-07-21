@@ -13,6 +13,24 @@ EXECUTION_ATTRIBUTION_MIGRATION_VERSION = "20260719_rule_strategy_execution_attr
 # Stable, namespaced advisory-lock key for the duration of the migration transaction.
 EXECUTION_ATTRIBUTION_MIGRATION_LOCK_KEY = 7720250719
 RULE_STRATEGY_JOURNAL_INDEX_NAME = "ix_rule_strategy_journal_tenant_strategy_created"
+RULE_STRATEGY_SINGLE_RUNNING_INDEX_NAME = "uq_rule_strategies_tenant_single_running"
+
+
+def ensure_single_running_rule_strategy_index(session: Session) -> None:
+    """Enforce at most one running strategy per tenant across concurrent requests."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "single-running strategy migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    session.execute(
+        text(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {RULE_STRATEGY_SINGLE_RUNNING_INDEX_NAME} "
+            "ON rule_strategies (tenant_id) WHERE status = 'running'"
+        )
+    )
+    session.commit()
 
 
 def ensure_rule_strategy_journal_read_index(session: Session) -> None:

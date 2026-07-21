@@ -4,10 +4,15 @@ from __future__ import annotations
 from typing import Optional
 
 from sqlalchemy import desc
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..connection import get_database_manager
-from ..models.rule_strategy import RuleStrategy, RuleStrategyEvaluationJournal
+from ..models.rule_strategy import (
+    RuleStrategy,
+    RuleStrategyEvaluationJournal,
+    RuleStrategyExecutionIntent,
+)
 
 
 class RuleStrategyRepository:
@@ -75,6 +80,90 @@ class RuleStrategyRepository:
             session.refresh(managed)
             session.expunge(managed)
             return managed
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def start_exclusive(
+        self, strategy_id: str, tenant_id: str
+    ) -> tuple[Optional[RuleStrategy], bool]:
+        """Atomically start unless the tenant already has another runner."""
+        session = self._get_session()
+        try:
+            strategies = (
+                session.query(RuleStrategy)
+                .filter(RuleStrategy.tenant_id == tenant_id)
+                .order_by(RuleStrategy.id)
+                .with_for_update()
+                .all()
+            )
+            strategy = next(
+                (item for item in strategies if item.strategy_id == strategy_id), None
+            )
+            if strategy is None:
+                session.rollback()
+                return None, False
+            if any(
+                item.status == "running" and item.strategy_id != strategy_id
+                for item in strategies
+            ):
+                session.rollback()
+                return strategy, True
+            strategy.status = "running"
+            strategy.execution_generation = (strategy.execution_generation or 1) + 1
+            session.commit()
+            session.refresh(strategy)
+            session.expunge(strategy)
+            return strategy, False
+        except IntegrityError:
+            session.rollback()
+            current = (
+                session.query(RuleStrategy)
+                .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+                .first()
+            )
+            if current is None:
+                return None, False
+            session.expunge(current)
+            return current, True
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def delete_if_allowed(self, strategy_id: str, tenant_id: str) -> str:
+        """Delete a stopped unaudited strategy in one locked transaction."""
+        session = self._get_session()
+        try:
+            strategy = (
+                session.query(RuleStrategy)
+                .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+                .with_for_update()
+                .first()
+            )
+            if strategy is None:
+                session.rollback()
+                return "not_found"
+            if strategy.status == "running":
+                session.rollback()
+                return "running"
+            has_intent = (
+                session.query(RuleStrategyExecutionIntent.id)
+                .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+                .first()
+                is not None
+            )
+            if has_intent:
+                session.rollback()
+                return "audited"
+            session.delete(strategy)
+            session.commit()
+            return "deleted"
         except Exception:
             session.rollback()
             raise

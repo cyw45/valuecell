@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
+from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
 
@@ -19,6 +20,7 @@ class TenantRuleStrategyRepository:
         self.evaluations = []
         self._strategy_sequence = 0
         self._evaluation_sequence = 0
+        self.execution_intent_strategy_ids = set()
 
     def create(self, strategy):
         self._strategy_sequence += 1
@@ -57,6 +59,35 @@ class TenantRuleStrategyRepository:
             if journal.strategy_id == strategy_id and journal.tenant_id == tenant_id
         ]
         return list(reversed(matching[-limit:]))
+
+    def start_exclusive(self, strategy_id: str, tenant_id: str):
+        strategy = self.get(strategy_id, tenant_id)
+        if strategy is None:
+            return None, False
+        if any(
+            item.status == "running" and item.strategy_id != strategy_id
+            for item in self.list(tenant_id)
+        ):
+            return strategy, True
+        strategy.status = "running"
+        strategy.execution_generation = (strategy.execution_generation or 1) + 1
+        return strategy, False
+
+    def delete_if_allowed(self, strategy_id: str, tenant_id: str):
+        strategy = self.get(strategy_id, tenant_id)
+        if strategy is None:
+            return "not_found"
+        if strategy.status == "running":
+            return "running"
+        if strategy_id in self.execution_intent_strategy_ids:
+            return "audited"
+        del self.strategies[(tenant_id, strategy_id)]
+        self.evaluations = [
+            item
+            for item in self.evaluations
+            if not (item.tenant_id == tenant_id and item.strategy_id == strategy_id)
+        ]
+        return "deleted"
 
 
 def _config() -> dict:
@@ -181,3 +212,78 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
     assert [item["strategy_id"] for item in tenant_a_list.json()["data"]] == [
         strategy_id
     ]
+
+
+def test_only_one_rule_strategy_can_run_per_tenant_without_implicit_stop():
+    client, principal = _tenant_client()
+    first = _create_strategy(client, "first")
+    second = _create_strategy(client, "second")
+
+    assert client.post(f"/rule-strategies/{first}/start").status_code == 200
+    rejected = client.post(f"/rule-strategies/{second}/start")
+    assert rejected.status_code == 409
+    assert client.get(f"/rule-strategies/{first}").json()["data"]["status"] == "running"
+    assert client.get(f"/rule-strategies/{second}").json()["data"]["status"] == "stopped"
+
+    principal[0] = CurrentPrincipal(user_id="user-b", tenant_id="tenant-b")
+    other_tenant = _create_strategy(client, "other tenant")
+    assert client.post(f"/rule-strategies/{other_tenant}/start").status_code == 200
+
+
+def test_rule_strategy_delete_lifecycle_and_tenant_isolation():
+    repository = TenantRuleStrategyRepository()
+    service = RuleStrategyService(repository=repository)
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(service=service))
+    principal = [CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")]
+    app.dependency_overrides[get_current_principal] = lambda: principal[0]
+    client = TestClient(app)
+
+    running = _create_strategy(client, "running")
+    assert client.post(f"/rule-strategies/{running}/start").status_code == 200
+    assert client.delete(f"/rule-strategies/{running}").status_code == 409
+    assert client.get(f"/rule-strategies/{running}").status_code == 200
+
+    assert client.post(f"/rule-strategies/{running}/stop").status_code == 200
+    repository.execution_intent_strategy_ids.add(running)
+    assert client.delete(f"/rule-strategies/{running}").status_code == 409
+    assert client.get(f"/rule-strategies/{running}").status_code == 200
+
+    deletable = _create_strategy(client, "deletable")
+    repository.append_evaluation(
+        RuleStrategyEvaluationJournal(
+            evaluation_id="temporary",
+            tenant_id="tenant-a",
+            strategy_id=deletable,
+            result={},
+            signals=[],
+            trades=[],
+            funding=[],
+        )
+    )
+    assert client.delete(f"/rule-strategies/{deletable}").status_code == 200
+    assert client.get(f"/rule-strategies/{deletable}").status_code == 404
+    assert repository.get_evaluations(deletable, "tenant-a") == []
+
+    isolated = _create_strategy(client, "isolated")
+    principal[0] = CurrentPrincipal(user_id="user-b", tenant_id="tenant-b")
+    assert client.delete(f"/rule-strategies/{isolated}").status_code == 404
+    principal[0] = CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")
+    assert client.get(f"/rule-strategies/{isolated}").status_code == 200
+
+
+def test_rule_strategy_delete_requires_strategy_manage_permission():
+    repository = TenantRuleStrategyRepository()
+    service = RuleStrategyService(repository=repository)
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(service=service))
+    principal = [CurrentPrincipal(user_id="owner", tenant_id="tenant-a")]
+    app.dependency_overrides[get_current_principal] = lambda: principal[0]
+    client = TestClient(app)
+    strategy_id = _create_strategy(client, "protected")
+
+    principal[0] = CurrentPrincipal(
+        user_id="viewer", tenant_id="tenant-a", role="viewer"
+    )
+    assert client.delete(f"/rule-strategies/{strategy_id}").status_code == 403
+    assert repository.get(strategy_id, "tenant-a") is not None

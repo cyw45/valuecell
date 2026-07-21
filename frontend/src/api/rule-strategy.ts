@@ -120,6 +120,28 @@ export function useUpdateRuleStrategy(strategyId?: string) {
   });
 }
 
+export function useDeleteRuleStrategy(strategyId?: string) {
+  const queryClient = useQueryClient();
+  const tenantId = useSaaSSession().tenantId;
+  return useMutation({
+    mutationFn: () =>
+      apiClient.delete<ApiResponse<{ strategy_id: string }>>(
+        `/rule-strategies/${strategyId}`,
+        { requiresAuth: true },
+      ),
+    onSuccess: () => {
+      if (strategyId) {
+        queryClient.removeQueries({
+          queryKey: ruleStrategyKey(tenantId, strategyId),
+        });
+      }
+      return queryClient.invalidateQueries({
+        queryKey: ruleStrategiesKey(tenantId),
+      });
+    },
+  });
+}
+
 function useRuleStrategyStatusMutation(
   strategyId: string | undefined,
   status: "start" | "stop",

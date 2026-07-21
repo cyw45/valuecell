@@ -2,7 +2,7 @@
 
 from typing import Generator
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -39,6 +39,12 @@ class DatabaseManager:
             connect_args=connect_args,
             **engine_options,
         )
+        if database_config["url"].startswith("sqlite"):
+            @event.listens_for(self.engine, "connect")
+            def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
 
         self.SessionLocal = sessionmaker(
             autocommit=False, autoflush=False, bind=self.engine

@@ -18,8 +18,10 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyTextImportProposal,
 )
 from valuecell.server.services.rule_strategy_service import (
+    RuleStrategyDeleteConflictError,
     RuleStrategyNotFoundError,
     RuleStrategyNotRunningError,
+    RuleStrategyRunConflictError,
     RuleStrategyRunningUpdateError,
     RuleStrategyService,
     RuleStrategyUnsupportedEvaluationError,
@@ -241,6 +243,22 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy updated")
 
+    @router.delete("/{strategy_id}", response_model=SuccessResponse[dict[str, Any]])
+    async def delete_rule_strategy(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_manage(principal)
+        try:
+            rule_service.delete(strategy_id, principal.tenant_id)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuleStrategyDeleteConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return SuccessResponse.create(
+            data={"strategy_id": strategy_id}, msg="Rule strategy deleted"
+        )
+
     @router.post(
         "/{strategy_id}/advisory-analysis",
         response_model=SuccessResponse[dict[str, Any]],
@@ -272,6 +290,8 @@ def create_rule_strategy_router(
             data = rule_service.start(strategy_id, principal.tenant_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuleStrategyRunConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy started")
 
     @router.post("/{strategy_id}/stop", response_model=SuccessResponse[dict[str, Any]])

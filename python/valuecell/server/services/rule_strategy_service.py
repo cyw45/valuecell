@@ -39,6 +39,14 @@ class RuleStrategyRunningUpdateError(Exception):
     """Raised when configuration changes are requested for a running strategy."""
 
 
+class RuleStrategyRunConflictError(Exception):
+    """Raised when another strategy already runs for the tenant."""
+
+
+class RuleStrategyDeleteConflictError(Exception):
+    """Raised when runtime state or execution evidence prevents deletion."""
+
+
 class RuleStrategyUnsupportedEvaluationError(Exception):
     """Raised when manual evaluation cannot use authoritative account facts."""
 
@@ -100,10 +108,57 @@ class RuleStrategyService:
         )
 
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
-        return self._set_status(strategy_id, tenant_id, "running")
+        start_exclusive = getattr(self.repository, "start_exclusive", None)
+        if start_exclusive is None:
+            strategy = self._require_strategy(strategy_id, tenant_id)
+            if any(
+                item.status == "running" and item.strategy_id != strategy_id
+                for item in self.repository.list(tenant_id)
+            ):
+                raise RuleStrategyRunConflictError(
+                    "Another rule strategy is already running for this tenant"
+                )
+            strategy.status = "running"
+            strategy.execution_generation = (strategy.execution_generation or 1) + 1
+            return self._strategy_data(self.repository.update(strategy))
+        strategy, conflict = start_exclusive(strategy_id, tenant_id)
+        if strategy is None:
+            raise RuleStrategyNotFoundError(
+                f"Rule strategy '{strategy_id}' was not found"
+            )
+        if conflict:
+            raise RuleStrategyRunConflictError(
+                "Another rule strategy is already running for this tenant"
+            )
+        return self._strategy_data(strategy)
 
     def stop(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         return self._set_status(strategy_id, tenant_id, "stopped")
+
+    def delete(self, strategy_id: str, tenant_id: str) -> None:
+        """Delete only stopped strategies that have no durable execution intent."""
+        delete_if_allowed = getattr(self.repository, "delete_if_allowed", None)
+        if delete_if_allowed is None:
+            strategy = self._require_strategy(strategy_id, tenant_id)
+            if strategy.status == "running":
+                raise RuleStrategyDeleteConflictError(
+                    "Stop the strategy before deleting it"
+                )
+            getattr(self.repository, "delete")(strategy_id, tenant_id)
+            return
+        outcome = delete_if_allowed(strategy_id, tenant_id)
+        if outcome == "not_found":
+            raise RuleStrategyNotFoundError(
+                f"Rule strategy '{strategy_id}' was not found"
+            )
+        if outcome == "running":
+            raise RuleStrategyDeleteConflictError(
+                "Stop the strategy before deleting it"
+            )
+        if outcome == "audited":
+            raise RuleStrategyDeleteConflictError(
+                "Rule strategy has execution audit evidence and cannot be deleted"
+            )
 
     def evaluate(
         self,

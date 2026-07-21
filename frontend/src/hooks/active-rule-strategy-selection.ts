@@ -26,7 +26,7 @@ export function selectActiveRuleStrategyId(
   const selected = strategies.find(
     (strategy) => strategy.strategy_id === selectedStrategyId,
   );
-  if (selected?.status === "running") return selected.strategy_id;
+  if (selected) return selected.strategy_id;
 
   const sortedByNewest = [...strategies].sort(
     (left, right) =>
@@ -37,7 +37,6 @@ export function selectActiveRuleStrategyId(
     (strategy) => strategy.status === "running",
   )?.strategy_id;
   if (runningStrategyId) return runningStrategyId;
-  if (selected) return selected.strategy_id;
   return sortedByNewest[0]?.strategy_id ?? "";
 }
 

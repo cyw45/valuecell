@@ -4,14 +4,17 @@ import {
   BarChart3,
   BrainCircuit,
   CandlestickChart,
-  CircleDollarSign,
   FileText,
   Gauge,
   Layers3,
   LockKeyhole,
+  Play,
+  Plus,
+  Save,
   ShieldCheck,
   SlidersHorizontal,
-  Target,
+  Square,
+  Trash2,
   TrendingUp,
   WandSparkles,
 } from "lucide-react";
@@ -22,6 +25,7 @@ import { toast } from "sonner";
 import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
   useCreateRuleStrategy,
+  useDeleteRuleStrategy,
   useParseRuleStrategyText,
   useRuleStrategies,
   useRuleStrategy,
@@ -31,6 +35,17 @@ import {
 } from "@/api/rule-strategy";
 import { useSandboxConnections } from "@/api/sandbox-exchange";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,9 +78,10 @@ import {
   configurationLifecycle,
   defaultStrategyFormValues,
   ruleStrategyConfigToFormValues,
-  strategyFormValuesToConfig,
   type StrategyFormValues,
+  strategyFormValuesToConfig,
 } from "./strategy-configuration-lifecycle";
+import { strategyManagementActions } from "./strategy-management";
 
 const TIMEFRAME_OPTIONS: RuleStrategyInterval[] = [
   "1m",
@@ -483,6 +499,7 @@ export function RuleStrategyConfiguration({
     t("saas.operations.strategy.defaultName"),
   );
   const [description, setDescription] = useState("");
+  const [creatingDraft, setCreatingDraft] = useState(false);
   const [strategyText, setStrategyText] = useState("");
   const [textImportSummary, setTextImportSummary] = useState("");
   const [unresolvedItems, setUnresolvedItems] = useState<string[]>([]);
@@ -493,6 +510,7 @@ export function RuleStrategyConfiguration({
   const strategyQuery = useRuleStrategy(strategyId);
   const createStrategy = useCreateRuleStrategy();
   const updateStrategy = useUpdateRuleStrategy(strategyId);
+  const deleteStrategy = useDeleteRuleStrategy(strategyId);
   const startStrategy = useStartRuleStrategy(strategyId);
   const stopStrategy = useStopRuleStrategy(strategyId);
   const parseStrategyText = useParseRuleStrategyText();
@@ -509,8 +527,10 @@ export function RuleStrategyConfiguration({
   );
 
   useEffect(() => {
-    if (!strategyQuery.data) return;
-    const nextValues = ruleStrategyConfigToFormValues(strategyQuery.data.config);
+    if (!strategyQuery.data || creatingDraft) return;
+    const nextValues = ruleStrategyConfigToFormValues(
+      strategyQuery.data.config,
+    );
     const nextName = strategyQuery.data.name;
     const nextDescription = strategyQuery.data.description ?? "";
     setValues(nextValues);
@@ -524,7 +544,7 @@ export function RuleStrategyConfiguration({
         description: nextDescription,
       }),
     );
-  }, [strategyQuery.data]);
+  }, [strategyQuery.data, creatingDraft]);
 
   useEffect(() => {
     if (strategyId || symbolOptions.length === 0) return;
@@ -742,19 +762,32 @@ export function RuleStrategyConfiguration({
   const isPending =
     createStrategy.isPending ||
     updateStrategy.isPending ||
+    deleteStrategy.isPending ||
     startStrategy.isPending ||
     stopStrategy.isPending ||
     parseStrategyText.isPending;
-  const storedStrategy = strategyQuery.data;
+  const storedStrategy = creatingDraft ? undefined : strategyQuery.data;
+  const runningStrategy = strategiesQuery.data?.find(
+    (strategy) => strategy.status === "running",
+  );
+  const managementActions = strategyManagementActions({
+    selectedStatus: storedStrategy?.status,
+    anotherRunning: Boolean(
+      runningStrategy && runningStrategy.strategy_id !== strategyId,
+    ),
+  });
   const currentSignature = JSON.stringify({ values, name, description });
-  const isDirty = Boolean(strategyId) && currentSignature !== savedSignature;
+  const isDirty = creatingDraft
+    ? true
+    : Boolean(strategyId) && currentSignature !== savedSignature;
   const lifecycle = configurationLifecycle({
     strategiesPending: strategiesQuery.isPending,
     strategyCount: strategiesQuery.data?.length ?? 0,
-    activeStrategyId: strategyId,
-    detailPending: strategyQuery.isPending,
+    activeStrategyId: creatingDraft ? "__new__" : strategyId,
+    detailPending: creatingDraft ? false : strategyQuery.isPending,
     hasDetail:
-      Boolean(storedStrategy) && hydratedStrategyId === strategyId,
+      creatingDraft ||
+      (Boolean(storedStrategy) && hydratedStrategyId === strategyId),
     hasError: strategiesQuery.isError || strategyQuery.isError,
     status: storedStrategy?.status,
     dirty: isDirty,
@@ -773,18 +806,84 @@ export function RuleStrategyConfiguration({
       config: strategyFormValuesToConfig(values),
     };
     try {
-      const response = strategyId
-        ? await updateStrategy.mutateAsync(request)
-        : await createStrategy.mutateAsync({
-            ...request,
-            initial_capital_quote: values.initialCapital,
-          });
+      const response =
+        strategyId && !creatingDraft
+          ? await updateStrategy.mutateAsync(request)
+          : await createStrategy.mutateAsync({
+              ...request,
+              initial_capital_quote: values.initialCapital,
+            });
       const saved = response.data;
+      setCreatingDraft(false);
       setStrategyId(saved.strategy_id);
       if (saved.strategy_id === strategyId) {
         await strategyQuery.refetch();
       }
       toast.success(t("saas.operations.strategy.toasts.saved"));
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t("saas.operations.strategy.toasts.operationFailed"),
+      );
+    }
+  };
+
+  const beginNewStrategy = () => {
+    setCreatingDraft(true);
+    setValues({
+      ...defaultStrategyFormValues,
+      advancedRules: structuredClone(defaultStrategyFormValues.advancedRules),
+      symbols: DEFAULT_STRATEGY_SYMBOLS.filter((symbol) =>
+        symbolOptions.includes(symbol),
+      ),
+    });
+    setName(t("saas.operations.strategy.defaultName"));
+    setDescription("");
+    setSavedSignature("");
+    setHydratedStrategyId("");
+  };
+
+  const selectStrategy = (nextStrategyId: string) => {
+    setCreatingDraft(false);
+    setStrategyId(nextStrategyId);
+  };
+
+  const deleteSelectedStrategy = async () => {
+    if (!strategyId || !managementActions.canDelete) return;
+    try {
+      await deleteStrategy.mutateAsync();
+      setCreatingDraft(false);
+      setStrategyId("");
+      toast.success("策略已删除。");
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "无法删除策略。请确认策略已停止且没有交易执行审计记录。",
+      );
+    }
+  };
+
+  const startSelectedStrategy = async () => {
+    if (!managementActions.canStart) return;
+    try {
+      await startStrategy.mutateAsync();
+      toast.success(t("saas.operations.strategy.toasts.started"));
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t("saas.operations.strategy.toasts.operationFailed"),
+      );
+    }
+  };
+
+  const stopSelectedStrategy = async () => {
+    if (!managementActions.canStop) return;
+    try {
+      await stopStrategy.mutateAsync();
+      toast.success(t("saas.operations.strategy.toasts.stopped"));
     } catch (err) {
       toast.error(
         err instanceof Error
@@ -905,13 +1004,23 @@ export function RuleStrategyConfiguration({
         )}
       >
         <Card className="gap-0 rounded-lg py-0 shadow-none">
-          <CardHeader className="px-4 py-4 sm:px-5">
-            <CardTitle className="text-base">已保存策略</CardTitle>
-            <CardDescription>
-              选择要查看和编辑的租户策略。新浏览器会自动选中最新运行中的策略。
-            </CardDescription>
+          <CardHeader className="flex flex-row items-start justify-between gap-4 border-b px-4 py-4 sm:px-5">
+            <div>
+              <CardTitle className="text-base">策略管理</CardTitle>
+              <CardDescription>
+                选择策略后在此保存、启停或删除。每个租户同一时间只能运行一个策略。
+              </CardDescription>
+            </div>
+            <Button
+              onClick={beginNewStrategy}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <Plus /> 新建策略
+            </Button>
           </CardHeader>
-          <CardContent className="px-4 pb-4 sm:px-5">
+          <CardContent className="grid gap-4 px-4 py-4 sm:px-5">
             {strategiesQuery.isLoading ? (
               <p className="text-muted-foreground text-sm">正在加载策略…</p>
             ) : strategiesQuery.isError ? (
@@ -919,32 +1028,38 @@ export function RuleStrategyConfiguration({
                 无法加载已保存的策略。
               </p>
             ) : strategyItems.length === 0 ? (
-              <p className="text-muted-foreground text-sm">尚未保存策略。</p>
+              <p className="text-muted-foreground text-sm">
+                尚未保存策略，请新建策略。
+              </p>
             ) : (
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {strategyItems.map((strategy) => (
                   <Button
-                    aria-pressed={strategy.selected}
+                    aria-pressed={!creatingDraft && strategy.selected}
                     className="h-auto items-start justify-start whitespace-normal p-3 text-left"
-                    disabled={
-                      Boolean(
-                        strategyItems.find((item) => item.status === "running"),
-                      ) && strategy.status !== "running"
-                    }
                     key={strategy.strategyId}
-                    onClick={() => setStrategyId(strategy.strategyId)}
+                    onClick={() => selectStrategy(strategy.strategyId)}
                     type="button"
-                    variant={strategy.selected ? "default" : "outline"}
+                    variant={
+                      !creatingDraft && strategy.selected
+                        ? "secondary"
+                        : "outline"
+                    }
                   >
                     <span className="grid min-w-0 gap-1">
-                      <span className="truncate font-medium">
-                        {strategy.name}
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-medium">
+                          {strategy.name}
+                        </span>
+                        {strategy.status === "running" ? (
+                          <span className="size-2 shrink-0 rounded-full bg-emerald-500" />
+                        ) : null}
                       </span>
                       <span className="flex flex-wrap gap-1 text-xs">
                         <Badge
                           variant={
                             strategy.status === "running"
-                              ? "secondary"
+                              ? "default"
                               : "outline"
                           }
                         >
@@ -961,6 +1076,91 @@ export function RuleStrategyConfiguration({
                 ))}
               </div>
             )}
+
+            <div className="flex flex-col gap-3 border-t pt-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <p className="truncate font-medium text-sm">
+                  {creatingDraft
+                    ? "新策略草稿"
+                    : (storedStrategy?.name ?? "请选择策略")}
+                </p>
+                <p className="text-muted-foreground text-xs">
+                  {runningStrategy && runningStrategy.strategy_id !== strategyId
+                    ? `“${runningStrategy.name}”正在运行；启动当前策略前必须先停止它。`
+                    : storedStrategy?.status === "running"
+                      ? "当前策略运行中，配置只读。"
+                      : "已停止的策略可以编辑、保存、启动或删除。"}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  disabled={!managementActions.canSave || !isValid || isPending}
+                  onClick={saveStrategy}
+                  size="sm"
+                  type="button"
+                >
+                  <Save />{" "}
+                  {savePending
+                    ? "保存中"
+                    : creatingDraft
+                      ? "保存新策略"
+                      : "保存修改"}
+                </Button>
+                {managementActions.canStop ? (
+                  <Button
+                    disabled={isPending}
+                    onClick={stopSelectedStrategy}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Square /> 停止
+                  </Button>
+                ) : (
+                  <Button
+                    disabled={!managementActions.canStart || isPending}
+                    onClick={startSelectedStrategy}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                  >
+                    <Play /> 启动
+                  </Button>
+                )}
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      aria-label="删除当前策略"
+                      disabled={!managementActions.canDelete || isPending}
+                      size="icon"
+                      type="button"
+                      variant="ghost"
+                    >
+                      <Trash2 />
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>
+                        删除策略“{storedStrategy?.name}”？
+                      </AlertDialogTitle>
+                      <AlertDialogDescription>
+                        此操作不可撤销。运行中的策略不能删除；包含交易执行审计的策略会由服务器拒绝删除，以保留订单追踪证据。
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>取消</AlertDialogCancel>
+                      <AlertDialogAction
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                        onClick={deleteSelectedStrategy}
+                      >
+                        删除策略
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -985,1061 +1185,1091 @@ export function RuleStrategyConfiguration({
                 </AlertDescription>
               </Alert>
             ) : null}
-          <Alert className="border-sky-500/30 bg-sky-500/5">
-            <AlertTriangle />
-            <AlertTitle>
-              {t("saas.operations.strategy.explicitInputs.title")}
-            </AlertTitle>
-            <AlertDescription>
-              {t("saas.operations.strategy.explicitInputs.description")}
-            </AlertDescription>
-          </Alert>
-          <Alert className="border-amber-500/35 bg-amber-500/5">
-            <Activity className="text-amber-500" />
-            <AlertTitle>策略规则演示预设</AlertTitle>
-            <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <span>
-                使用 1 分钟 RSI 高于 -1
-                的必过规则：行情数据就绪即产生买入信号，下一轮扫描产生卖出信号。实际记录写入当前选择的执行环境；仅用于验证策略链路，不适用于真实策略。
-              </span>
-              <Button
-                className="w-fit shrink-0"
-                onClick={applyPaperDemoPreset}
-                type="button"
-                variant="secondary"
-              >
-                应用演示预设
-              </Button>
-            </AlertDescription>
-          </Alert>
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <RuleHeading
-              icon={ShieldCheck}
-              title="执行环境"
-              description="明确选择纸面账本或 OKX Demo 交易所执行。两者记录来源严格分离；当前页面不会触发实盘。"
-            />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
-              <div className="grid gap-1.5">
-                <Label htmlFor="execution-environment">执行模式</Label>
-                <Select
-                  disabled={configurationLocked}
-                  value={values.executionEnvironment}
-                  onValueChange={(value) => {
-                    const environment = value as "paper" | "okx_demo";
-                    setValues((current) => ({
-                      ...current,
-                      executionEnvironment: environment,
-                      leverage:
-                        environment === "okx_demo" ? 1 : current.leverage,
-                    }));
-                  }}
+            <Alert className="border-sky-500/30 bg-sky-500/5">
+              <AlertTriangle />
+              <AlertTitle>
+                {t("saas.operations.strategy.explicitInputs.title")}
+              </AlertTitle>
+              <AlertDescription>
+                {t("saas.operations.strategy.explicitInputs.description")}
+              </AlertDescription>
+            </Alert>
+            <Alert className="border-amber-500/35 bg-amber-500/5">
+              <Activity className="text-amber-500" />
+              <AlertTitle>策略规则演示预设</AlertTitle>
+              <AlertDescription className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <span>
+                  使用 1 分钟 RSI 高于 -1
+                  的必过规则：行情数据就绪即产生买入信号，下一轮扫描产生卖出信号。实际记录写入当前选择的执行环境；仅用于验证策略链路，不适用于真实策略。
+                </span>
+                <Button
+                  className="w-fit shrink-0"
+                  onClick={applyPaperDemoPreset}
+                  type="button"
+                  variant="secondary"
                 >
-                  <SelectTrigger id="execution-environment">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="paper">
-                      纸面交易（不向交易所下单）
-                    </SelectItem>
-                    <SelectItem value="okx_demo">
-                      OKX Demo 模拟币（现货自动下单）
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-muted-foreground text-xs">
-                  {configurationLocked
-                    ? "策略运行中。请先停止，保存新的执行目标后再启动。"
-                    : "切换会保留策略规则与单笔金额，只替换订单执行目标。"}
-                </p>
-              </div>
-              {values.executionEnvironment === "okx_demo" ? (
-                <>
+                  应用演示预设
+                </Button>
+              </AlertDescription>
+            </Alert>
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <RuleHeading
+                icon={ShieldCheck}
+                title="执行环境"
+                description="明确选择纸面账本或 OKX Demo 交易所执行。两者记录来源严格分离；当前页面不会触发实盘。"
+              />
+              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="execution-environment">执行模式</Label>
+                  <Select
+                    disabled={configurationLocked}
+                    value={values.executionEnvironment}
+                    onValueChange={(value) => {
+                      const environment = value as "paper" | "okx_demo";
+                      setValues((current) => ({
+                        ...current,
+                        executionEnvironment: environment,
+                        leverage:
+                          environment === "okx_demo" ? 1 : current.leverage,
+                      }));
+                    }}
+                  >
+                    <SelectTrigger id="execution-environment">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="paper">
+                        纸面交易（不向交易所下单）
+                      </SelectItem>
+                      <SelectItem value="okx_demo">
+                        OKX Demo 模拟币（现货自动下单）
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-muted-foreground text-xs">
+                    {configurationLocked
+                      ? "策略运行中。请先停止，保存新的执行目标后再启动。"
+                      : "切换会保留策略规则与单笔金额，只替换订单执行目标。"}
+                  </p>
+                </div>
+                {values.executionEnvironment === "okx_demo" ? (
+                  <>
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="okx-demo-connection">OKX Demo 连接</Label>
+                      <Select
+                        disabled={configurationLocked}
+                        value={values.sandboxConnectionId}
+                        onValueChange={(value) =>
+                          update("sandboxConnectionId", value)
+                        }
+                      >
+                        <SelectTrigger
+                          aria-invalid={Boolean(errors.sandboxConnectionId)}
+                          id="okx-demo-connection"
+                        >
+                          <SelectValue placeholder="选择已验证的 OKX Demo 连接" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {okxDemoConnections.map((connection) => (
+                            <SelectItem
+                              key={connection.id}
+                              value={connection.id}
+                            >
+                              {connection.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {errors.sandboxConnectionId ? (
+                        <p className="text-destructive text-xs" role="alert">
+                          {errors.sandboxConnectionId}
+                        </p>
+                      ) : null}
+                      {okxDemoConnections.length === 0 ? (
+                        <p className="text-destructive text-xs">
+                          未发现已验证的 OKX Demo 现货连接，请先前往“设置 →
+                          模拟交易所”保存并验证。
+                        </p>
+                      ) : null}
+                    </div>
+                    <NumericField
+                      error={errors.maxDemoOrderQuoteAmount}
+                      id="okx-demo-order-limit"
+                      label="OKX Demo 单笔最大金额"
+                      value={values.maxDemoOrderQuoteAmount}
+                      onChange={(value) =>
+                        update("maxDemoOrderQuoteAmount", value)
+                      }
+                      min={1}
+                      max={10_000}
+                      unit="USDT"
+                    />
+                    <NumericField
+                      error={errors.maxDemoDailyQuoteAmount}
+                      id="okx-demo-daily-limit"
+                      label="OKX Demo 每日最大金额"
+                      value={values.maxDemoDailyQuoteAmount}
+                      onChange={(value) =>
+                        update("maxDemoDailyQuoteAmount", value)
+                      }
+                      min={1}
+                      max={100_000}
+                      unit="USDT"
+                    />
+                    <NumericField
+                      error={errors.maxDemoTotalQuoteAmount}
+                      id="okx-demo-total-limit"
+                      label="OKX Demo 策略总额度上限"
+                      value={values.maxDemoTotalQuoteAmount}
+                      onChange={(value) =>
+                        update("maxDemoTotalQuoteAmount", value)
+                      }
+                      min={1}
+                      max={100_000}
+                      unit="USDT"
+                    />
+                    <Alert className="border-amber-500/35 bg-amber-500/5 sm:col-span-2">
+                      <AlertTriangle />
+                      <AlertTitle>仅 OKX Demo 现货</AlertTitle>
+                      <AlertDescription>
+                        启动后，买卖信号会通过加密保存的 Demo
+                        凭证发送订单。系统强制杠杆为
+                        1、限价由以上额度控制，并以确定性订单号防止同一根 K
+                        线重复下单；不会访问实盘账户。
+                      </AlertDescription>
+                    </Alert>
+                    <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
+                      <ShieldCheck />
+                      <AlertTitle>共享连接账户语义</AlertTitle>
+                      <AlertDescription>
+                        OKX Demo
+                        余额和现货持仓属于所选交易所连接的共享账户，并非本策略独占；同一连接上的其他策略或手动
+                        Demo
+                        订单都可能改变它们。交易记录页只显示归属于当前策略的
+                        Demo 订单。
+                      </AlertDescription>
+                    </Alert>
+                    <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
+                      <LockKeyhole />
+                      <AlertTitle>实盘过渡需要独立授权</AlertTitle>
+                      <AlertDescription>
+                        当前策略页不会把纸面或 Demo 策略自动切换为实盘。完成
+                        Demo 验证后，必须在 “设置 →
+                        实盘交易”单独配置交易所连接、服务端风控、策略绑定与启动授权。
+                      </AlertDescription>
+                    </Alert>
+                  </>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="strategy-name">
+                    {t("saas.operations.strategy.fields.name")}
+                  </Label>
+                  <Input
+                    id="strategy-name"
+                    maxLength={200}
+                    onChange={(event) => setName(event.target.value)}
+                    value={name}
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="strategy-description">
+                    {t("saas.operations.strategy.fields.description")}{" "}
+                    <span className="text-muted-foreground">
+                      {t("saas.operations.strategy.fields.optional")}
+                    </span>
+                  </Label>
+                  <Input
+                    id="strategy-description"
+                    maxLength={1000}
+                    onChange={(event) => setDescription(event.target.value)}
+                    value={description}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <RuleHeading
+                icon={CandlestickChart}
+                title={t("saas.operations.strategy.sections.marketScope.title")}
+                description={t(
+                  "saas.operations.strategy.sections.marketScope.description",
+                )}
+              />
+              <CardContent className="grid gap-5 px-4 py-4 sm:px-5">
+                <fieldset
+                  aria-describedby={
+                    errors.symbols ? "symbols-error" : "symbols-hint"
+                  }
+                >
+                  <legend className="font-medium text-sm">
+                    {t("saas.operations.strategy.fields.markets")}
+                  </legend>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-muted-foreground text-xs">
+                      已选择 {values.symbols.length} / {symbolOptions.length}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        disabled={
+                          symbolOptions.length === 0 ||
+                          values.symbols.length === symbolOptions.length
+                        }
+                        onClick={() => update("symbols", symbolOptions)}
+                        size="sm"
+                        type="button"
+                        variant="secondary"
+                      >
+                        全选
+                      </Button>
+                      <Button
+                        disabled={values.symbols.length === 0}
+                        onClick={() => update("symbols", [])}
+                        size="sm"
+                        type="button"
+                        variant="ghost"
+                      >
+                        清空
+                      </Button>
+                    </div>
+                  </div>
+                  <p
+                    className="mt-1 text-muted-foreground text-xs"
+                    id="symbols-hint"
+                  >
+                    扫描器会逐一计算技术指标；每个满足入场条件的币种均按固定单笔金额尝试开仓。可用资金不足该金额时会阻塞交易，不会部分成交。
+                  </p>
+                  {symbolsQuery.isLoading ? (
+                    <output className="mt-2 block text-muted-foreground text-xs">
+                      {t("saas.operations.strategy.fields.marketsLoading")}
+                    </output>
+                  ) : null}
+                  {symbolsQuery.isError ? (
+                    <p className="mt-2 text-destructive text-xs" role="alert">
+                      {t("saas.operations.strategy.fields.marketsError")}
+                    </p>
+                  ) : null}
+                  {!symbolsQuery.isLoading && !symbolsQuery.isError ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {symbolOptions.map((symbol) => {
+                        const selected = values.symbols.includes(symbol);
+                        return (
+                          <Button
+                            aria-pressed={selected}
+                            disabled={!selected && selectionLimitReached}
+                            key={symbol}
+                            onClick={() =>
+                              update(
+                                "symbols",
+                                selected
+                                  ? values.symbols.filter(
+                                      (item) => item !== symbol,
+                                    )
+                                  : [...values.symbols, symbol],
+                              )
+                            }
+                            type="button"
+                            variant={selected ? "default" : "outline"}
+                          >
+                            {symbol}
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {errors.symbols ? (
+                    <p
+                      className="mt-2 text-destructive text-xs"
+                      id="symbols-error"
+                      role="alert"
+                    >
+                      {errors.symbols}
+                    </p>
+                  ) : null}
+                </fieldset>
+                <div className="grid gap-4 sm:grid-cols-3">
                   <div className="grid gap-1.5">
-                    <Label htmlFor="okx-demo-connection">OKX Demo 连接</Label>
+                    <Label htmlFor="timeframe">
+                      {t("saas.operations.strategy.fields.candleTimeframe")}
+                    </Label>
                     <Select
-                      disabled={configurationLocked}
-                      value={values.sandboxConnectionId}
+                      value={values.timeframe}
                       onValueChange={(value) =>
-                        update("sandboxConnectionId", value)
+                        update("timeframe", value as RuleStrategyInterval)
                       }
                     >
-                      <SelectTrigger
-                        aria-invalid={Boolean(errors.sandboxConnectionId)}
-                        id="okx-demo-connection"
-                      >
-                        <SelectValue placeholder="选择已验证的 OKX Demo 连接" />
+                      <SelectTrigger id="timeframe">
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {okxDemoConnections.map((connection) => (
-                          <SelectItem key={connection.id} value={connection.id}>
-                            {connection.label}
+                        {TIMEFRAME_OPTIONS.map((timeframe) => (
+                          <SelectItem key={timeframe} value={timeframe}>
+                            {timeframe}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                    {errors.sandboxConnectionId ? (
-                      <p className="text-destructive text-xs" role="alert">
-                        {errors.sandboxConnectionId}
-                      </p>
-                    ) : null}
-                    {okxDemoConnections.length === 0 ? (
-                      <p className="text-destructive text-xs">
-                        未发现已验证的 OKX Demo 现货连接，请先前往“设置 →
-                        模拟交易所”保存并验证。
-                      </p>
-                    ) : null}
+                    <p className="text-muted-foreground text-xs">
+                      {t("saas.operations.strategy.fields.candleTimeframeHint")}
+                    </p>
                   </div>
-                  <NumericField
-                    error={errors.maxDemoOrderQuoteAmount}
-                    id="okx-demo-order-limit"
-                    label="OKX Demo 单笔最大金额"
-                    value={values.maxDemoOrderQuoteAmount}
-                    onChange={(value) =>
-                      update("maxDemoOrderQuoteAmount", value)
-                    }
-                    min={1}
-                    max={10_000}
-                    unit="USDT"
-                  />
-                  <NumericField
-                    error={errors.maxDemoDailyQuoteAmount}
-                    id="okx-demo-daily-limit"
-                    label="OKX Demo 每日最大金额"
-                    value={values.maxDemoDailyQuoteAmount}
-                    onChange={(value) =>
-                      update("maxDemoDailyQuoteAmount", value)
-                    }
-                    min={1}
-                    max={100_000}
-                    unit="USDT"
-                  />
-                  <NumericField
-                    error={errors.maxDemoTotalQuoteAmount}
-                    id="okx-demo-total-limit"
-                    label="OKX Demo 策略总额度上限"
-                    value={values.maxDemoTotalQuoteAmount}
-                    onChange={(value) =>
-                      update("maxDemoTotalQuoteAmount", value)
-                    }
-                    min={1}
-                    max={100_000}
-                    unit="USDT"
-                  />
-                  <Alert className="border-amber-500/35 bg-amber-500/5 sm:col-span-2">
-                    <AlertTriangle />
-                    <AlertTitle>仅 OKX Demo 现货</AlertTitle>
-                    <AlertDescription>
-                      启动后，买卖信号会通过加密保存的 Demo
-                      凭证发送订单。系统强制杠杆为
-                      1、限价由以上额度控制，并以确定性订单号防止同一根 K
-                      线重复下单；不会访问实盘账户。
-                    </AlertDescription>
-                  </Alert>
-                  <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
-                    <ShieldCheck />
-                    <AlertTitle>共享连接账户语义</AlertTitle>
-                    <AlertDescription>
-                      OKX Demo
-                      余额和现货持仓属于所选交易所连接的共享账户，并非本策略独占；同一连接上的其他策略或手动
-                      Demo 订单都可能改变它们。交易记录页只显示归属于当前策略的
-                      Demo 订单。
-                    </AlertDescription>
-                  </Alert>
-                  <Alert className="border-sky-500/30 bg-sky-500/5 sm:col-span-2">
-                    <LockKeyhole />
-                    <AlertTitle>实盘过渡需要独立授权</AlertTitle>
-                    <AlertDescription>
-                      当前策略页不会把纸面或 Demo 策略自动切换为实盘。完成 Demo
-                      验证后，必须在 “设置 →
-                      实盘交易”单独配置交易所连接、服务端风控、策略绑定与启动授权。
-                    </AlertDescription>
-                  </Alert>
-                </>
-              ) : null}
-            </CardContent>
-          </Card>
-
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5">
-              <div className="grid gap-1.5">
-                <Label htmlFor="strategy-name">
-                  {t("saas.operations.strategy.fields.name")}
-                </Label>
-                <Input
-                  id="strategy-name"
-                  maxLength={200}
-                  onChange={(event) => setName(event.target.value)}
-                  value={name}
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="strategy-description">
-                  {t("saas.operations.strategy.fields.description")}{" "}
-                  <span className="text-muted-foreground">
-                    {t("saas.operations.strategy.fields.optional")}
-                  </span>
-                </Label>
-                <Input
-                  id="strategy-description"
-                  maxLength={1000}
-                  onChange={(event) => setDescription(event.target.value)}
-                  value={description}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <RuleHeading
-              icon={CandlestickChart}
-              title={t("saas.operations.strategy.sections.marketScope.title")}
-              description={t(
-                "saas.operations.strategy.sections.marketScope.description",
-              )}
-            />
-            <CardContent className="grid gap-5 px-4 py-4 sm:px-5">
-              <fieldset
-                aria-describedby={
-                  errors.symbols ? "symbols-error" : "symbols-hint"
-                }
-              >
-                <legend className="font-medium text-sm">
-                  {t("saas.operations.strategy.fields.markets")}
-                </legend>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-muted-foreground text-xs">
-                    已选择 {values.symbols.length} / {symbolOptions.length}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      disabled={
-                        symbolOptions.length === 0 ||
-                        values.symbols.length === symbolOptions.length
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="base-confirmation-mode">
+                      基础条件确认方式
+                    </Label>
+                    <Select
+                      value={values.confirmationMode}
+                      onValueChange={(value) =>
+                        update("confirmationMode", value as "all" | "any")
                       }
-                      onClick={() => update("symbols", symbolOptions)}
-                      size="sm"
-                      type="button"
-                      variant="secondary"
                     >
-                      全选
-                    </Button>
-                    <Button
-                      disabled={values.symbols.length === 0}
-                      onClick={() => update("symbols", [])}
-                      size="sm"
-                      type="button"
-                      variant="ghost"
-                    >
-                      清空
-                    </Button>
+                      <SelectTrigger id="base-confirmation-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">全部条件满足</SelectItem>
+                        <SelectItem value="any">任一条件满足</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-muted-foreground text-xs">
+                      仅用于基础指标；高级规则使用下方独立确认方式。
+                    </p>
                   </div>
-                </div>
-                <p
-                  className="mt-1 text-muted-foreground text-xs"
-                  id="symbols-hint"
-                >
-                  扫描器会逐一计算技术指标；每个满足入场条件的币种均按固定单笔金额尝试开仓。可用资金不足该金额时会阻塞交易，不会部分成交。
-                </p>
-                {symbolsQuery.isLoading ? (
-                  <output className="mt-2 block text-muted-foreground text-xs">
-                    {t("saas.operations.strategy.fields.marketsLoading")}
-                  </output>
-                ) : null}
-                {symbolsQuery.isError ? (
-                  <p className="mt-2 text-destructive text-xs" role="alert">
-                    {t("saas.operations.strategy.fields.marketsError")}
-                  </p>
-                ) : null}
-                {!symbolsQuery.isLoading && !symbolsQuery.isError ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {symbolOptions.map((symbol) => {
-                      const selected = values.symbols.includes(symbol);
-                      return (
-                        <Button
-                          aria-pressed={selected}
-                          disabled={!selected && selectionLimitReached}
-                          key={symbol}
-                          onClick={() =>
-                            update(
-                              "symbols",
-                              selected
-                                ? values.symbols.filter(
-                                    (item) => item !== symbol,
-                                  )
-                                : [...values.symbols, symbol],
-                            )
-                          }
-                          type="button"
-                          variant={selected ? "default" : "outline"}
-                        >
-                          {symbol}
-                        </Button>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {errors.symbols ? (
-                  <p
-                    className="mt-2 text-destructive text-xs"
-                    id="symbols-error"
-                    role="alert"
-                  >
-                    {errors.symbols}
-                  </p>
-                ) : null}
-              </fieldset>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="timeframe">
-                    {t("saas.operations.strategy.fields.candleTimeframe")}
-                  </Label>
-                  <Select
-                    value={values.timeframe}
-                    onValueChange={(value) =>
-                      update("timeframe", value as RuleStrategyInterval)
+                  <NumericField
+                    hint="0 表示由系统按 K 线周期自动调度。"
+                    id="decide-interval-seconds"
+                    label="评估调度间隔"
+                    max={86_400}
+                    min={0}
+                    onChange={(value) =>
+                      update("decideIntervalSeconds", value <= 0 ? null : value)
                     }
-                  >
-                    <SelectTrigger id="timeframe">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {TIMEFRAME_OPTIONS.map((timeframe) => (
-                        <SelectItem key={timeframe} value={timeframe}>
-                          {timeframe}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-muted-foreground text-xs">
-                    {t("saas.operations.strategy.fields.candleTimeframeHint")}
-                  </p>
+                    unit="秒"
+                    value={values.decideIntervalSeconds ?? 0}
+                  />
                 </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="base-confirmation-mode">基础条件确认方式</Label>
-                  <Select
-                    value={values.confirmationMode}
-                    onValueChange={(value) =>
-                      update("confirmationMode", value as "all" | "any")
-                    }
-                  >
-                    <SelectTrigger id="base-confirmation-mode">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">全部条件满足</SelectItem>
-                      <SelectItem value="any">任一条件满足</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-muted-foreground text-xs">
-                    仅用于基础指标；高级规则使用下方独立确认方式。
-                  </p>
-                </div>
-                <NumericField
-                  hint="0 表示由系统按 K 线周期自动调度。"
-                  id="decide-interval-seconds"
-                  label="评估调度间隔"
-                  max={86_400}
-                  min={0}
-                  onChange={(value) =>
-                    update("decideIntervalSeconds", value <= 0 ? null : value)
-                  }
-                  unit="秒"
-                  value={values.decideIntervalSeconds ?? 0}
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <RuleHeading
-              icon={TrendingUp}
-              title={t("saas.operations.strategy.sections.trendEntry.title")}
-              description={t(
-                "saas.operations.strategy.sections.trendEntry.description",
-              )}
-            />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-3 sm:px-5">
-              <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2">
-                <div>
-                  <Label htmlFor="moving-average-enabled">启用基础均线条件</Label>
-                  <p className="text-muted-foreground text-xs">
-                    控制快慢均线条件是否参与基础策略判断。
-                  </p>
-                </div>
-                <Switch
-                  checked={values.movingAverageEnabled}
-                  id="moving-average-enabled"
-                  onCheckedChange={(enabled) =>
-                    update("movingAverageEnabled", enabled)
-                  }
-                />
-              </div>
-              <NumericField
-                disabled={!values.movingAverageEnabled}
-                error={errors.fastMa}
-                id="fast-ma"
-                label={t("saas.operations.strategy.fields.fastMovingAverage")}
-                max={200}
-                min={2}
-                onChange={(value) => update("fastMa", value)}
-                value={values.fastMa}
-              />
-              <NumericField
-                disabled={!values.movingAverageEnabled}
-                error={errors.slowMa}
-                id="slow-ma"
-                label={t("saas.operations.strategy.fields.slowMovingAverage")}
-                max={400}
-                min={3}
-                onChange={(value) => update("slowMa", value)}
-                value={values.slowMa}
-              />
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card className="gap-0 rounded-lg py-0 shadow-none">
-              <RuleHeading
-                enabled={values.rsiEnabled}
-                icon={Gauge}
-                onEnabledChange={(enabled) => update("rsiEnabled", enabled)}
-                title={t("saas.operations.strategy.sections.rsi.title")}
-                description={t(
-                  "saas.operations.strategy.sections.rsi.description",
-                )}
-              />
-              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-                <NumericField
-                  disabled={!values.rsiEnabled}
-                  error={errors.rsiPeriod}
-                  id="rsi-period"
-                  label={t("saas.operations.strategy.fields.period")}
-                  max={100}
-                  min={2}
-                  onChange={(value) => update("rsiPeriod", value)}
-                  value={values.rsiPeriod}
-                />
-                <NumericField
-                  disabled={!values.rsiEnabled}
-                  error={errors.rsiOversold}
-                  id="rsi-oversold"
-                  label={t("saas.operations.strategy.fields.lowerThreshold")}
-                  max={98}
-                  min={1}
-                  onChange={(value) => update("rsiOversold", value)}
-                  value={values.rsiOversold}
-                />
-                <NumericField
-                  disabled={!values.rsiEnabled}
-                  error={errors.rsiOverbought}
-                  id="rsi-overbought"
-                  label={t("saas.operations.strategy.fields.upperThreshold")}
-                  max={99}
-                  min={2}
-                  onChange={(value) => update("rsiOverbought", value)}
-                  value={values.rsiOverbought}
-                />
               </CardContent>
             </Card>
 
             <Card className="gap-0 rounded-lg py-0 shadow-none">
               <RuleHeading
-                enabled={values.bollingerEnabled}
-                icon={BarChart3}
-                onEnabledChange={(enabled) =>
-                  update("bollingerEnabled", enabled)
-                }
-                title={t("saas.operations.strategy.sections.bollinger.title")}
+                icon={TrendingUp}
+                title={t("saas.operations.strategy.sections.trendEntry.title")}
                 description={t(
-                  "saas.operations.strategy.sections.bollinger.description",
+                  "saas.operations.strategy.sections.trendEntry.description",
                 )}
               />
-              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2">
+              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-3 sm:px-5">
+                <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2">
+                  <div>
+                    <Label htmlFor="moving-average-enabled">
+                      启用基础均线条件
+                    </Label>
+                    <p className="text-muted-foreground text-xs">
+                      控制快慢均线条件是否参与基础策略判断。
+                    </p>
+                  </div>
+                  <Switch
+                    checked={values.movingAverageEnabled}
+                    id="moving-average-enabled"
+                    onCheckedChange={(enabled) =>
+                      update("movingAverageEnabled", enabled)
+                    }
+                  />
+                </div>
                 <NumericField
-                  disabled={!values.bollingerEnabled}
-                  error={errors.bollingerPeriod}
-                  id="bollinger-period"
-                  label={t("saas.operations.strategy.fields.period")}
-                  max={100}
+                  disabled={!values.movingAverageEnabled}
+                  error={errors.fastMa}
+                  id="fast-ma"
+                  label={t("saas.operations.strategy.fields.fastMovingAverage")}
+                  max={200}
                   min={2}
-                  onChange={(value) => update("bollingerPeriod", value)}
-                  value={values.bollingerPeriod}
+                  onChange={(value) => update("fastMa", value)}
+                  value={values.fastMa}
                 />
                 <NumericField
-                  disabled={!values.bollingerEnabled}
-                  error={errors.bollingerDeviation}
-                  id="bollinger-deviation"
-                  label={t(
-                    "saas.operations.strategy.fields.standardDeviations",
+                  disabled={!values.movingAverageEnabled}
+                  error={errors.slowMa}
+                  id="slow-ma"
+                  label={t("saas.operations.strategy.fields.slowMovingAverage")}
+                  max={400}
+                  min={3}
+                  onChange={(value) => update("slowMa", value)}
+                  value={values.slowMa}
+                />
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              <Card className="gap-0 rounded-lg py-0 shadow-none">
+                <RuleHeading
+                  enabled={values.rsiEnabled}
+                  icon={Gauge}
+                  onEnabledChange={(enabled) => update("rsiEnabled", enabled)}
+                  title={t("saas.operations.strategy.sections.rsi.title")}
+                  description={t(
+                    "saas.operations.strategy.sections.rsi.description",
                   )}
-                  max={5}
-                  min={0.5}
-                  onChange={(value) => update("bollingerDeviation", value)}
-                  step={0.1}
-                  value={values.bollingerDeviation}
+                />
+                <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                  <NumericField
+                    disabled={!values.rsiEnabled}
+                    error={errors.rsiPeriod}
+                    id="rsi-period"
+                    label={t("saas.operations.strategy.fields.period")}
+                    max={100}
+                    min={2}
+                    onChange={(value) => update("rsiPeriod", value)}
+                    value={values.rsiPeriod}
+                  />
+                  <NumericField
+                    disabled={!values.rsiEnabled}
+                    error={errors.rsiOversold}
+                    id="rsi-oversold"
+                    label={t("saas.operations.strategy.fields.lowerThreshold")}
+                    max={98}
+                    min={1}
+                    onChange={(value) => update("rsiOversold", value)}
+                    value={values.rsiOversold}
+                  />
+                  <NumericField
+                    disabled={!values.rsiEnabled}
+                    error={errors.rsiOverbought}
+                    id="rsi-overbought"
+                    label={t("saas.operations.strategy.fields.upperThreshold")}
+                    max={99}
+                    min={2}
+                    onChange={(value) => update("rsiOverbought", value)}
+                    value={values.rsiOverbought}
+                  />
+                </CardContent>
+              </Card>
+
+              <Card className="gap-0 rounded-lg py-0 shadow-none">
+                <RuleHeading
+                  enabled={values.bollingerEnabled}
+                  icon={BarChart3}
+                  onEnabledChange={(enabled) =>
+                    update("bollingerEnabled", enabled)
+                  }
+                  title={t("saas.operations.strategy.sections.bollinger.title")}
+                  description={t(
+                    "saas.operations.strategy.sections.bollinger.description",
+                  )}
+                />
+                <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2">
+                  <NumericField
+                    disabled={!values.bollingerEnabled}
+                    error={errors.bollingerPeriod}
+                    id="bollinger-period"
+                    label={t("saas.operations.strategy.fields.period")}
+                    max={100}
+                    min={2}
+                    onChange={(value) => update("bollingerPeriod", value)}
+                    value={values.bollingerPeriod}
+                  />
+                  <NumericField
+                    disabled={!values.bollingerEnabled}
+                    error={errors.bollingerDeviation}
+                    id="bollinger-deviation"
+                    label={t(
+                      "saas.operations.strategy.fields.standardDeviations",
+                    )}
+                    max={5}
+                    min={0.5}
+                    onChange={(value) => update("bollingerDeviation", value)}
+                    step={0.1}
+                    value={values.bollingerDeviation}
+                  />
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <RuleHeading
+                enabled={values.momentumEnabled}
+                icon={Activity}
+                onEnabledChange={(enabled) =>
+                  update("momentumEnabled", enabled)
+                }
+                title={t("saas.operations.strategy.sections.momentum.title")}
+                description={t(
+                  "saas.operations.strategy.sections.momentum.description",
+                )}
+              />
+              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4">
+                <NumericField
+                  disabled={!values.momentumEnabled}
+                  id="momentum-period"
+                  label="动量计算周期"
+                  max={500}
+                  min={1}
+                  onChange={(value) => update("momentumPeriod", value)}
+                  value={values.momentumPeriod}
+                />
+                <NumericField
+                  disabled={!values.momentumEnabled}
+                  error={errors.macdFast}
+                  id="macd-fast"
+                  label={t("saas.operations.strategy.fields.macdFastPeriod")}
+                  max={100}
+                  min={2}
+                  onChange={(value) => update("macdFast", value)}
+                  value={values.macdFast}
+                />
+                <NumericField
+                  disabled={!values.momentumEnabled}
+                  error={errors.macdSlow}
+                  id="macd-slow"
+                  label={t("saas.operations.strategy.fields.macdSlowPeriod")}
+                  max={200}
+                  min={3}
+                  onChange={(value) => update("macdSlow", value)}
+                  value={values.macdSlow}
+                />
+                <NumericField
+                  disabled={!values.momentumEnabled}
+                  error={errors.macdSignal}
+                  id="macd-signal"
+                  label={t("saas.operations.strategy.fields.macdSignalPeriod")}
+                  max={100}
+                  min={2}
+                  onChange={(value) => update("macdSignal", value)}
+                  value={values.macdSignal}
                 />
               </CardContent>
             </Card>
-          </div>
 
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <RuleHeading
-              enabled={values.momentumEnabled}
-              icon={Activity}
-              onEnabledChange={(enabled) => update("momentumEnabled", enabled)}
-              title={t("saas.operations.strategy.sections.momentum.title")}
-              description={t(
-                "saas.operations.strategy.sections.momentum.description",
-              )}
-            />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-4">
-              <NumericField
-                disabled={!values.momentumEnabled}
-                id="momentum-period"
-                label="动量计算周期"
-                max={500}
-                min={1}
-                onChange={(value) => update("momentumPeriod", value)}
-                value={values.momentumPeriod}
+            <Card className="gap-0 rounded-lg border-sky-500/30 py-0 shadow-none">
+              <RuleHeading
+                enabled={values.advancedRules.enabled}
+                icon={Layers3}
+                onEnabledChange={(enabled) =>
+                  update("advancedRules", { ...values.advancedRules, enabled })
+                }
+                title="多周期高级规则"
+                description="每项指标独立设置周期、参数、比较方向和进出场阈值。高级模式开启后，以下规则替代基础指标区。"
               />
-              <NumericField
-                disabled={!values.momentumEnabled}
-                error={errors.macdFast}
-                id="macd-fast"
-                label={t("saas.operations.strategy.fields.macdFastPeriod")}
-                max={100}
-                min={2}
-                onChange={(value) => update("macdFast", value)}
-                value={values.macdFast}
-              />
-              <NumericField
-                disabled={!values.momentumEnabled}
-                error={errors.macdSlow}
-                id="macd-slow"
-                label={t("saas.operations.strategy.fields.macdSlowPeriod")}
-                max={200}
-                min={3}
-                onChange={(value) => update("macdSlow", value)}
-                value={values.macdSlow}
-              />
-              <NumericField
-                disabled={!values.momentumEnabled}
-                error={errors.macdSignal}
-                id="macd-signal"
-                label={t("saas.operations.strategy.fields.macdSignalPeriod")}
-                max={100}
-                min={2}
-                onChange={(value) => update("macdSignal", value)}
-                value={values.macdSignal}
-              />
-            </CardContent>
-          </Card>
+              <CardContent className="grid gap-5 px-4 py-4 sm:px-5">
+                <div className="grid gap-4 rounded-md border border-border/70 p-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="advanced-entry-mode">买入确认方式</Label>
+                    <Select
+                      value={values.advancedRules.entry_confirmation_mode}
+                      onValueChange={(value) =>
+                        update("advancedRules", {
+                          ...values.advancedRules,
+                          entry_confirmation_mode: value as
+                            | "all"
+                            | "any"
+                            | "at_least"
+                            | "ratio",
+                        })
+                      }
+                    >
+                      <SelectTrigger id="advanced-entry-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="any">任一项</SelectItem>
+                        <SelectItem value="at_least">至少N项</SelectItem>
+                        <SelectItem value="ratio">至少X%</SelectItem>
+                        <SelectItem value="all">全部</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {values.advancedRules.entry_confirmation_mode ===
+                    "at_least" ? (
+                      <NumericField
+                        id="advanced-entry-count"
+                        label="至少满足项数"
+                        min={1}
+                        max={Math.max(
+                          1,
+                          [
+                            values.advancedRules.moving_average,
+                            values.advancedRules.macd,
+                            values.advancedRules.bollinger,
+                            values.advancedRules.rsi,
+                            values.advancedRules.momentum,
+                            values.advancedRules.brar,
+                          ].filter((rule) => rule.enabled).length,
+                        )}
+                        value={
+                          values.advancedRules.entry_confirmation_count ?? 1
+                        }
+                        onChange={(entry_confirmation_count) =>
+                          update("advancedRules", {
+                            ...values.advancedRules,
+                            entry_confirmation_count,
+                          })
+                        }
+                      />
+                    ) : null}
+                    {values.advancedRules.entry_confirmation_mode ===
+                    "ratio" ? (
+                      <NumericField
+                        id="advanced-entry-ratio"
+                        label="至少满足比例"
+                        hint="按启用条件数计算，所需项数向上取整。"
+                        min={1}
+                        max={100}
+                        step={1}
+                        unit="%"
+                        value={
+                          (values.advancedRules.entry_confirmation_ratio ?? 1) *
+                          100
+                        }
+                        onChange={(percentage) =>
+                          update("advancedRules", {
+                            ...values.advancedRules,
+                            entry_confirmation_ratio: percentage / 100,
+                          })
+                        }
+                      />
+                    ) : null}
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="advanced-exit-mode">卖出确认方式</Label>
+                    <Select
+                      value={values.advancedRules.exit_confirmation_mode}
+                      onValueChange={(value) =>
+                        update("advancedRules", {
+                          ...values.advancedRules,
+                          exit_confirmation_mode: value as "all" | "any",
+                        })
+                      }
+                    >
+                      <SelectTrigger id="advanced-exit-mode">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="any">
+                          任一卖出条件满足即卖出
+                        </SelectItem>
+                        <SelectItem value="all">
+                          全部卖出条件满足才卖出
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
 
-          <Card className="gap-0 rounded-lg border-sky-500/30 py-0 shadow-none">
-            <RuleHeading
-              enabled={values.advancedRules.enabled}
-              icon={Layers3}
-              onEnabledChange={(enabled) =>
-                update("advancedRules", { ...values.advancedRules, enabled })
-              }
-              title="多周期高级规则"
-              description="每项指标独立设置周期、参数、比较方向和进出场阈值。高级模式开启后，以下规则替代基础指标区。"
-            />
-            <CardContent className="grid gap-5 px-4 py-4 sm:px-5">
-              <div className="grid gap-4 rounded-md border border-border/70 p-3 sm:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label htmlFor="advanced-entry-mode">买入确认方式</Label>
-                  <Select
-                    value={values.advancedRules.entry_confirmation_mode}
-                    onValueChange={(value) =>
-                      update("advancedRules", {
-                        ...values.advancedRules,
-                        entry_confirmation_mode: value as
-                          | "all"
-                          | "any"
-                          | "at_least"
-                          | "ratio",
-                      })
-                    }
-                  >
-                    <SelectTrigger id="advanced-entry-mode">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="any">任一项</SelectItem>
-                      <SelectItem value="at_least">至少N项</SelectItem>
-                      <SelectItem value="ratio">至少X%</SelectItem>
-                      <SelectItem value="all">全部</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  {values.advancedRules.entry_confirmation_mode === "at_least" ? (
+                <div className="grid gap-3 rounded-md border border-border/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-sm">日线价格与均线</p>
+                      <p className="text-muted-foreground text-xs">
+                        可判断价格高于或低于任意周期均线。
+                      </p>
+                    </div>
+                    <Switch
+                      checked={values.advancedRules.moving_average.enabled}
+                      onCheckedChange={(enabled) =>
+                        updateAdvancedRule("moving_average", "enabled", enabled)
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="grid gap-1.5">
+                      <Label>周期</Label>
+                      <IntervalSelect
+                        disabled={!values.advancedRules.moving_average.enabled}
+                        id="advanced-ma-interval"
+                        onChange={(interval) =>
+                          updateAdvancedRule(
+                            "moving_average",
+                            "interval",
+                            interval as "1d",
+                          )
+                        }
+                        value={values.advancedRules.moving_average.interval}
+                      />
+                    </div>
                     <NumericField
-                      id="advanced-entry-count"
-                      label="至少满足项数"
-                      min={1}
-                      max={Math.max(
-                        1,
-                        [
-                          values.advancedRules.moving_average,
-                          values.advancedRules.macd,
-                          values.advancedRules.bollinger,
-                          values.advancedRules.rsi,
-                          values.advancedRules.momentum,
-                          values.advancedRules.brar,
-                        ].filter((rule) => rule.enabled).length,
-                      )}
-                      value={values.advancedRules.entry_confirmation_count ?? 1}
-                      onChange={(entry_confirmation_count) => update("advancedRules", {
-                        ...values.advancedRules,
-                        entry_confirmation_count,
-                      })}
+                      disabled={!values.advancedRules.moving_average.enabled}
+                      id="advanced-ma-period"
+                      label="均线周期"
+                      max={500}
+                      min={2}
+                      onChange={(period) =>
+                        updateAdvancedRule("moving_average", "period", period)
+                      }
+                      value={values.advancedRules.moving_average.period}
                     />
-                  ) : null}
-                  {values.advancedRules.entry_confirmation_mode === "ratio" ? (
+                    <div className="grid gap-1.5">
+                      <Label>价格关系</Label>
+                      <Select
+                        disabled={!values.advancedRules.moving_average.enabled}
+                        value={
+                          values.advancedRules.moving_average.entry_comparator
+                        }
+                        onValueChange={(value) =>
+                          updateAdvancedRule(
+                            "moving_average",
+                            "entry_comparator",
+                            value as "above" | "below",
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="above">价格高于均线</SelectItem>
+                          <SelectItem value="below">价格低于均线</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 rounded-md border border-border/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-sm">MACD 金叉 / 死叉</p>
+                      <p className="text-muted-foreground text-xs">
+                        可单独使用 5 分钟等周期，不受主图周期限制。
+                      </p>
+                    </div>
+                    <Switch
+                      checked={values.advancedRules.macd.enabled}
+                      onCheckedChange={(enabled) =>
+                        updateAdvancedRule("macd", "enabled", enabled)
+                      }
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    <div className="grid gap-1.5">
+                      <Label>周期</Label>
+                      <IntervalSelect
+                        disabled={!values.advancedRules.macd.enabled}
+                        id="advanced-macd-interval"
+                        onChange={(interval) =>
+                          updateAdvancedRule(
+                            "macd",
+                            "interval",
+                            interval as "5m",
+                          )
+                        }
+                        value={values.advancedRules.macd.interval}
+                      />
+                    </div>
                     <NumericField
-                      id="advanced-entry-ratio"
-                      label="至少满足比例"
-                      hint="按启用条件数计算，所需项数向上取整。"
+                      disabled={!values.advancedRules.macd.enabled}
+                      id="advanced-macd-fast"
+                      label="快线"
+                      max={500}
                       min={1}
-                      max={100}
-                      step={1}
-                      unit="%"
-                      value={(values.advancedRules.entry_confirmation_ratio ?? 1) * 100}
-                      onChange={(percentage) => update("advancedRules", {
-                        ...values.advancedRules,
-                        entry_confirmation_ratio: percentage / 100,
-                      })}
+                      onChange={(value) =>
+                        updateAdvancedRule("macd", "fast_window", value)
+                      }
+                      value={values.advancedRules.macd.fast_window}
                     />
-                  ) : null}
-                </div>
-                <div className="grid gap-1.5">
-                  <Label htmlFor="advanced-exit-mode">卖出确认方式</Label>
-                  <Select
-                    value={values.advancedRules.exit_confirmation_mode}
-                    onValueChange={(value) =>
-                      update("advancedRules", {
-                        ...values.advancedRules,
-                        exit_confirmation_mode: value as "all" | "any",
-                      })
-                    }
-                  >
-                    <SelectTrigger id="advanced-exit-mode">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="any">
-                        任一卖出条件满足即卖出
-                      </SelectItem>
-                      <SelectItem value="all">
-                        全部卖出条件满足才卖出
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="grid gap-3 rounded-md border border-border/70 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-sm">日线价格与均线</p>
-                    <p className="text-muted-foreground text-xs">
-                      可判断价格高于或低于任意周期均线。
-                    </p>
-                  </div>
-                  <Switch
-                    checked={values.advancedRules.moving_average.enabled}
-                    onCheckedChange={(enabled) =>
-                      updateAdvancedRule("moving_average", "enabled", enabled)
-                    }
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="grid gap-1.5">
-                    <Label>周期</Label>
-                    <IntervalSelect
-                      disabled={!values.advancedRules.moving_average.enabled}
-                      id="advanced-ma-interval"
-                      onChange={(interval) =>
-                        updateAdvancedRule(
-                          "moving_average",
-                          "interval",
-                          interval as "1d",
-                        )
-                      }
-                      value={values.advancedRules.moving_average.interval}
-                    />
-                  </div>
-                  <NumericField
-                    disabled={!values.advancedRules.moving_average.enabled}
-                    id="advanced-ma-period"
-                    label="均线周期"
-                    max={500}
-                    min={2}
-                    onChange={(period) =>
-                      updateAdvancedRule("moving_average", "period", period)
-                    }
-                    value={values.advancedRules.moving_average.period}
-                  />
-                  <div className="grid gap-1.5">
-                    <Label>价格关系</Label>
-                    <Select
-                      disabled={!values.advancedRules.moving_average.enabled}
-                      value={
-                        values.advancedRules.moving_average.entry_comparator
-                      }
-                      onValueChange={(value) =>
-                        updateAdvancedRule(
-                          "moving_average",
-                          "entry_comparator",
-                          value as "above" | "below",
-                        )
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="above">价格高于均线</SelectItem>
-                        <SelectItem value="below">价格低于均线</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid gap-3 rounded-md border border-border/70 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-sm">MACD 金叉 / 死叉</p>
-                    <p className="text-muted-foreground text-xs">
-                      可单独使用 5 分钟等周期，不受主图周期限制。
-                    </p>
-                  </div>
-                  <Switch
-                    checked={values.advancedRules.macd.enabled}
-                    onCheckedChange={(enabled) =>
-                      updateAdvancedRule("macd", "enabled", enabled)
-                    }
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                  <div className="grid gap-1.5">
-                    <Label>周期</Label>
-                    <IntervalSelect
+                    <NumericField
                       disabled={!values.advancedRules.macd.enabled}
-                      id="advanced-macd-interval"
-                      onChange={(interval) =>
-                        updateAdvancedRule("macd", "interval", interval as "5m")
+                      id="advanced-macd-slow"
+                      label="慢线"
+                      max={500}
+                      min={2}
+                      onChange={(value) =>
+                        updateAdvancedRule("macd", "slow_window", value)
                       }
-                      value={values.advancedRules.macd.interval}
+                      value={values.advancedRules.macd.slow_window}
                     />
-                  </div>
-                  <NumericField
-                    disabled={!values.advancedRules.macd.enabled}
-                    id="advanced-macd-fast"
-                    label="快线"
-                    max={500}
-                    min={1}
-                    onChange={(value) =>
-                      updateAdvancedRule("macd", "fast_window", value)
-                    }
-                    value={values.advancedRules.macd.fast_window}
-                  />
-                  <NumericField
-                    disabled={!values.advancedRules.macd.enabled}
-                    id="advanced-macd-slow"
-                    label="慢线"
-                    max={500}
-                    min={2}
-                    onChange={(value) =>
-                      updateAdvancedRule("macd", "slow_window", value)
-                    }
-                    value={values.advancedRules.macd.slow_window}
-                  />
-                  <NumericField
-                    disabled={!values.advancedRules.macd.enabled}
-                    id="advanced-macd-signal"
-                    label="信号线"
-                    max={500}
-                    min={1}
-                    onChange={(value) =>
-                      updateAdvancedRule("macd", "signal_window", value)
-                    }
-                    value={values.advancedRules.macd.signal_window}
-                  />
-                  <div className="grid gap-1.5">
-                    <Label>买入交叉</Label>
-                    <Select
+                    <NumericField
                       disabled={!values.advancedRules.macd.enabled}
-                      value={values.advancedRules.macd.entry_cross}
-                      onValueChange={(value) =>
-                        updateAdvancedRule(
-                          "macd",
-                          "entry_cross",
-                          value as "golden" | "death",
-                        )
+                      id="advanced-macd-signal"
+                      label="信号线"
+                      max={500}
+                      min={1}
+                      onChange={(value) =>
+                        updateAdvancedRule("macd", "signal_window", value)
                       }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="golden">金叉</SelectItem>
-                        <SelectItem value="death">死叉</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      value={values.advancedRules.macd.signal_window}
+                    />
+                    <div className="grid gap-1.5">
+                      <Label>买入交叉</Label>
+                      <Select
+                        disabled={!values.advancedRules.macd.enabled}
+                        value={values.advancedRules.macd.entry_cross}
+                        onValueChange={(value) =>
+                          updateAdvancedRule(
+                            "macd",
+                            "entry_cross",
+                            value as "golden" | "death",
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="golden">金叉</SelectItem>
+                          <SelectItem value="death">死叉</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="grid gap-3 rounded-md border border-border/70 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-sm">布林带价格关系</p>
-                    <p className="text-muted-foreground text-xs">
-                      可比较价格与上轨、中线或下轨的高低。
-                    </p>
-                  </div>
-                  <Switch
-                    checked={values.advancedRules.bollinger.enabled}
-                    onCheckedChange={(enabled) =>
-                      updateAdvancedRule("bollinger", "enabled", enabled)
-                    }
-                  />
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                  <div className="grid gap-1.5">
-                    <Label>周期</Label>
-                    <IntervalSelect
-                      disabled={!values.advancedRules.bollinger.enabled}
-                      id="advanced-bollinger-interval"
-                      onChange={(interval) =>
-                        updateAdvancedRule(
-                          "bollinger",
-                          "interval",
-                          interval as "15m",
-                        )
+                <div className="grid gap-3 rounded-md border border-border/70 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium text-sm">布林带价格关系</p>
+                      <p className="text-muted-foreground text-xs">
+                        可比较价格与上轨、中线或下轨的高低。
+                      </p>
+                    </div>
+                    <Switch
+                      checked={values.advancedRules.bollinger.enabled}
+                      onCheckedChange={(enabled) =>
+                        updateAdvancedRule("bollinger", "enabled", enabled)
                       }
-                      value={values.advancedRules.bollinger.interval}
                     />
                   </div>
-                  <NumericField
-                    disabled={!values.advancedRules.bollinger.enabled}
-                    id="advanced-bollinger-period"
-                    label="布林周期"
-                    max={500}
-                    min={2}
-                    onChange={(value) =>
-                      updateAdvancedRule("bollinger", "period", value)
-                    }
-                    value={values.advancedRules.bollinger.period}
-                  />
-                  <NumericField
-                    disabled={!values.advancedRules.bollinger.enabled}
-                    id="advanced-bollinger-deviation"
-                    label="标准差"
-                    max={10}
-                    min={0.1}
-                    onChange={(value) =>
-                      updateAdvancedRule(
-                        "bollinger",
-                        "standard_deviations",
-                        value,
-                      )
-                    }
-                    step={0.1}
-                    value={values.advancedRules.bollinger.standard_deviations}
-                  />
-                  <div className="grid gap-1.5">
-                    <Label>比较线</Label>
-                    <Select
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    <div className="grid gap-1.5">
+                      <Label>周期</Label>
+                      <IntervalSelect
+                        disabled={!values.advancedRules.bollinger.enabled}
+                        id="advanced-bollinger-interval"
+                        onChange={(interval) =>
+                          updateAdvancedRule(
+                            "bollinger",
+                            "interval",
+                            interval as "15m",
+                          )
+                        }
+                        value={values.advancedRules.bollinger.interval}
+                      />
+                    </div>
+                    <NumericField
                       disabled={!values.advancedRules.bollinger.enabled}
-                      value={values.advancedRules.bollinger.entry_reference}
-                      onValueChange={(value) =>
+                      id="advanced-bollinger-period"
+                      label="布林周期"
+                      max={500}
+                      min={2}
+                      onChange={(value) =>
+                        updateAdvancedRule("bollinger", "period", value)
+                      }
+                      value={values.advancedRules.bollinger.period}
+                    />
+                    <NumericField
+                      disabled={!values.advancedRules.bollinger.enabled}
+                      id="advanced-bollinger-deviation"
+                      label="标准差"
+                      max={10}
+                      min={0.1}
+                      onChange={(value) =>
                         updateAdvancedRule(
                           "bollinger",
-                          "entry_reference",
-                          value as "upper" | "middle" | "lower",
+                          "standard_deviations",
+                          value,
                         )
                       }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="upper">上轨</SelectItem>
-                        <SelectItem value="middle">中线</SelectItem>
-                        <SelectItem value="lower">下轨</SelectItem>
-                      </SelectContent>
-                    </Select>
+                      step={0.1}
+                      value={values.advancedRules.bollinger.standard_deviations}
+                    />
+                    <div className="grid gap-1.5">
+                      <Label>比较线</Label>
+                      <Select
+                        disabled={!values.advancedRules.bollinger.enabled}
+                        value={values.advancedRules.bollinger.entry_reference}
+                        onValueChange={(value) =>
+                          updateAdvancedRule(
+                            "bollinger",
+                            "entry_reference",
+                            value as "upper" | "middle" | "lower",
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="upper">上轨</SelectItem>
+                          <SelectItem value="middle">中线</SelectItem>
+                          <SelectItem value="lower">下轨</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label>价格关系</Label>
+                      <Select
+                        disabled={!values.advancedRules.bollinger.enabled}
+                        value={values.advancedRules.bollinger.entry_comparator}
+                        onValueChange={(value) =>
+                          updateAdvancedRule(
+                            "bollinger",
+                            "entry_comparator",
+                            value as "above" | "below",
+                          )
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="above">价格高于</SelectItem>
+                          <SelectItem value="below">价格低于</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
-                  <div className="grid gap-1.5">
-                    <Label>价格关系</Label>
-                    <Select
-                      disabled={!values.advancedRules.bollinger.enabled}
-                      value={values.advancedRules.bollinger.entry_comparator}
-                      onValueChange={(value) =>
-                        updateAdvancedRule(
-                          "bollinger",
-                          "entry_comparator",
-                          value as "above" | "below",
-                        )
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="above">价格高于</SelectItem>
-                        <SelectItem value="below">价格低于</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
                 </div>
-              </div>
 
-              <AdvancedThresholdEditor
-                label="RSI 阈值规则"
-                description="可分别配置超卖买入和超买卖出。"
-                rule={values.advancedRules.rsi}
-                onChange={(changes) =>
-                  update("advancedRules", {
-                    ...values.advancedRules,
-                    rsi: { ...values.advancedRules.rsi, ...changes },
-                  })
-                }
-              />
-              <AdvancedThresholdEditor
-                label="动能阈值规则"
-                description="动能为当前收盘价与 N 根 K 线前收盘价之差，可设置 0 轴附近的自定义阈值。"
-                rule={values.advancedRules.momentum}
-                onChange={(changes) =>
-                  update("advancedRules", {
-                    ...values.advancedRules,
-                    momentum: { ...values.advancedRules.momentum, ...changes },
-                  })
-                }
-              />
-              <AdvancedThresholdEditor
-                brar
-                label="BRAR 阈值规则"
-                description="支持选择 AR 或 BR 分量，并分别设置买入与卖出阈值。"
-                rule={values.advancedRules.brar}
-                onChange={(changes) =>
-                  update("advancedRules", {
-                    ...values.advancedRules,
-                    brar: { ...values.advancedRules.brar, ...changes },
-                  })
-                }
-              />
-            </CardContent>
-          </Card>
+                <AdvancedThresholdEditor
+                  label="RSI 阈值规则"
+                  description="可分别配置超卖买入和超买卖出。"
+                  rule={values.advancedRules.rsi}
+                  onChange={(changes) =>
+                    update("advancedRules", {
+                      ...values.advancedRules,
+                      rsi: { ...values.advancedRules.rsi, ...changes },
+                    })
+                  }
+                />
+                <AdvancedThresholdEditor
+                  label="动能阈值规则"
+                  description="动能为当前收盘价与 N 根 K 线前收盘价之差，可设置 0 轴附近的自定义阈值。"
+                  rule={values.advancedRules.momentum}
+                  onChange={(changes) =>
+                    update("advancedRules", {
+                      ...values.advancedRules,
+                      momentum: {
+                        ...values.advancedRules.momentum,
+                        ...changes,
+                      },
+                    })
+                  }
+                />
+                <AdvancedThresholdEditor
+                  brar
+                  label="BRAR 阈值规则"
+                  description="支持选择 AR 或 BR 分量，并分别设置买入与卖出阈值。"
+                  rule={values.advancedRules.brar}
+                  onChange={(changes) =>
+                    update("advancedRules", {
+                      ...values.advancedRules,
+                      brar: { ...values.advancedRules.brar, ...changes },
+                    })
+                  }
+                />
+              </CardContent>
+            </Card>
 
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <RuleHeading
-              icon={SlidersHorizontal}
-              title={t("saas.operations.strategy.sections.riskLimits.title")}
-              description={t(
-                "saas.operations.strategy.sections.riskLimits.description",
-              )}
-            />
-            <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-3">
-              <NumericField
-                error={errors.initialCapital}
-                id="initial-capital"
-                label="初始模拟资金"
-                min={1}
-                max={100_000_000}
-                onChange={(value) => update("initialCapital", value)}
-                step={100}
-                unit="USDT"
-                value={values.initialCapital}
-              />
-              <NumericField
-                error={errors.orderQuoteAmount}
-                id="order-quote-amount"
-                label="单笔开仓金额"
-                hint="每个满足入场条件的币种固定使用该金额；余额不足时不下单。"
-                min={1}
-                max={100_000_000}
-                onChange={(value) => update("orderQuoteAmount", value)}
-                step={10}
-                unit="USDT"
-                value={values.orderQuoteAmount}
-              />
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label htmlFor="take-profit-enabled">启用止盈</Label>
-                  <Switch
-                    checked={values.takeProfitEnabled}
-                    id="take-profit-enabled"
-                    onCheckedChange={(enabled) =>
-                      update("takeProfitEnabled", enabled)
-                    }
-                  />
-                </div>
-                <NumericField
-                  disabled={!values.takeProfitEnabled}
-                  error={errors.takeProfit}
-                  id="take-profit"
-                  label={t("saas.operations.strategy.fields.takeProfit")}
-                  max={100}
-                  min={0.1}
-                  onChange={(value) => update("takeProfit", value)}
-                  step={0.1}
-                  unit="%"
-                  value={values.takeProfit}
-                />
-              </div>
-              <div className="grid gap-2">
-                <div className="flex items-center justify-between gap-3">
-                  <Label htmlFor="stop-loss-enabled">启用止损</Label>
-                  <Switch
-                    checked={values.stopLossEnabled}
-                    id="stop-loss-enabled"
-                    onCheckedChange={(enabled) =>
-                      update("stopLossEnabled", enabled)
-                    }
-                  />
-                </div>
-                <NumericField
-                  disabled={!values.stopLossEnabled}
-                  error={errors.stopLoss}
-                  id="stop-loss"
-                  label={t("saas.operations.strategy.fields.stopLoss")}
-                  max={100}
-                  min={0.1}
-                  onChange={(value) => update("stopLoss", value)}
-                  step={0.1}
-                  unit="%"
-                  value={values.stopLoss}
-                />
-              </div>
-              <NumericField
-                error={errors.maximumPositions}
-                id="maximum-positions"
-                label={t(
-                  "saas.operations.strategy.fields.maximumOpenPositions",
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <RuleHeading
+                icon={SlidersHorizontal}
+                title={t("saas.operations.strategy.sections.riskLimits.title")}
+                description={t(
+                  "saas.operations.strategy.sections.riskLimits.description",
                 )}
-                max={100}
-                min={1}
-                onChange={(value) => update("maximumPositions", value)}
-                value={values.maximumPositions}
               />
-              <NumericField
-                error={errors.leverage}
-                hint={t("saas.operations.strategy.fields.paperEvaluationOnly")}
-                id="leverage"
-                label={t("saas.operations.strategy.fields.maximumLeverage")}
-                max={5}
-                min={1}
-                onChange={(value) => update("leverage", value)}
-                step={0.5}
-                unit="x"
-                value={values.leverage}
-              />
-            </CardContent>
-          </Card>
+              <CardContent className="grid gap-4 px-4 py-4 sm:grid-cols-2 sm:px-5 lg:grid-cols-3">
+                <NumericField
+                  error={errors.initialCapital}
+                  id="initial-capital"
+                  label="初始模拟资金"
+                  min={1}
+                  max={100_000_000}
+                  onChange={(value) => update("initialCapital", value)}
+                  step={100}
+                  unit="USDT"
+                  value={values.initialCapital}
+                />
+                <NumericField
+                  error={errors.orderQuoteAmount}
+                  id="order-quote-amount"
+                  label="单笔开仓金额"
+                  hint="每个满足入场条件的币种固定使用该金额；余额不足时不下单。"
+                  min={1}
+                  max={100_000_000}
+                  onChange={(value) => update("orderQuoteAmount", value)}
+                  step={10}
+                  unit="USDT"
+                  value={values.orderQuoteAmount}
+                />
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="take-profit-enabled">启用止盈</Label>
+                    <Switch
+                      checked={values.takeProfitEnabled}
+                      id="take-profit-enabled"
+                      onCheckedChange={(enabled) =>
+                        update("takeProfitEnabled", enabled)
+                      }
+                    />
+                  </div>
+                  <NumericField
+                    disabled={!values.takeProfitEnabled}
+                    error={errors.takeProfit}
+                    id="take-profit"
+                    label={t("saas.operations.strategy.fields.takeProfit")}
+                    max={100}
+                    min={0.1}
+                    onChange={(value) => update("takeProfit", value)}
+                    step={0.1}
+                    unit="%"
+                    value={values.takeProfit}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="stop-loss-enabled">启用止损</Label>
+                    <Switch
+                      checked={values.stopLossEnabled}
+                      id="stop-loss-enabled"
+                      onCheckedChange={(enabled) =>
+                        update("stopLossEnabled", enabled)
+                      }
+                    />
+                  </div>
+                  <NumericField
+                    disabled={!values.stopLossEnabled}
+                    error={errors.stopLoss}
+                    id="stop-loss"
+                    label={t("saas.operations.strategy.fields.stopLoss")}
+                    max={100}
+                    min={0.1}
+                    onChange={(value) => update("stopLoss", value)}
+                    step={0.1}
+                    unit="%"
+                    value={values.stopLoss}
+                  />
+                </div>
+                <NumericField
+                  error={errors.maximumPositions}
+                  id="maximum-positions"
+                  label={t(
+                    "saas.operations.strategy.fields.maximumOpenPositions",
+                  )}
+                  max={100}
+                  min={1}
+                  onChange={(value) => update("maximumPositions", value)}
+                  value={values.maximumPositions}
+                />
+                <NumericField
+                  error={errors.leverage}
+                  hint={t(
+                    "saas.operations.strategy.fields.paperEvaluationOnly",
+                  )}
+                  id="leverage"
+                  label={t("saas.operations.strategy.fields.maximumLeverage")}
+                  max={5}
+                  min={1}
+                  onChange={(value) => update("leverage", value)}
+                  step={0.5}
+                  unit="x"
+                  value={values.leverage}
+                />
+              </CardContent>
+            </Card>
           </fieldset>
         </form>
 
@@ -2138,113 +2368,6 @@ export function RuleStrategyConfiguration({
             </CardContent>
           </Card>
 
-          <Card className="gap-0 rounded-lg py-0 shadow-none">
-            <CardHeader className="border-b px-4 py-4">
-              <CardTitle className="flex items-center gap-2 text-base">
-                <CircleDollarSign />
-                {storedStrategy?.config.execution?.environment === "okx_demo"
-                  ? "OKX Demo 执行控制"
-                  : t("saas.operations.strategy.paperStrategy.title")}
-              </CardTitle>
-              <CardDescription>
-                {storedStrategy?.config.execution?.environment === "okx_demo"
-                  ? "策略规则保持不变；停止后可切换回纸面账本或更换已验证的 Demo 连接。"
-                  : storedStrategy
-                    ? t("saas.operations.strategy.paperStrategy.status", {
-                        name: storedStrategy.name,
-                        status: storedStrategy.status,
-                      })
-                    : isValid
-                      ? t("saas.operations.strategy.paperStrategy.valid")
-                      : t("saas.operations.strategy.paperStrategy.resolve")}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3 px-4 py-4">
-              <Button
-                disabled={configurationLocked || !isValid || isPending}
-                onClick={saveStrategy}
-                type="button"
-              >
-                <Target />{" "}
-                <span aria-live="polite">
-                  {savePending
-                    ? t("saas.operations.strategy.actions.saving")
-                    : t("saas.operations.strategy.actions.save")}
-                </span>
-              </Button>
-              {lifecycle.actions.includes("stop") ? (
-                <Button
-                  disabled={isPending}
-                  onClick={async () => {
-                    try {
-                      await stopStrategy.mutateAsync();
-                      toast.success(
-                        t("saas.operations.strategy.toasts.stopped"),
-                      );
-                    } catch (err) {
-                      toast.error(
-                        err instanceof Error
-                          ? err.message
-                          : t(
-                              "saas.operations.strategy.toasts.operationFailed",
-                            ),
-                      );
-                    }
-                  }}
-                  type="button"
-                  variant="outline"
-                >
-                  停止模拟评估
-                </Button>
-              ) : (
-                <Button
-                  disabled={
-                    !lifecycle.actions.includes("start") ||
-                    !strategyId ||
-                    isPending
-                  }
-                  onClick={async () => {
-                    try {
-                      await startStrategy.mutateAsync();
-                      toast.success(
-                        t("saas.operations.strategy.toasts.started"),
-                      );
-                    } catch (err) {
-                      toast.error(
-                        err instanceof Error
-                          ? err.message
-                          : t(
-                              "saas.operations.strategy.toasts.operationFailed",
-                            ),
-                      );
-                    }
-                  }}
-                  type="button"
-                  variant="outline"
-                >
-                  开始模拟评估
-                </Button>
-              )}
-              <p className="text-muted-foreground text-xs leading-relaxed">
-                {t("saas.operations.strategy.paperStrategy.help")}
-              </p>
-              <Alert className="border-amber-500/30 bg-amber-500/5">
-                <AlertTriangle />
-                <AlertTitle>
-                  {t("saas.operations.strategy.executionMode.title")}
-                </AlertTitle>
-                <AlertDescription>
-                  {t("saas.operations.strategy.executionMode.description")}
-                  <Link
-                    className="ml-1 underline underline-offset-2"
-                    to="/settings/sandbox-exchanges"
-                  >
-                    {t("saas.operations.strategy.executionMode.link")}
-                  </Link>
-                </AlertDescription>
-              </Alert>
-            </CardContent>
-          </Card>
           {storedStrategy ? (
             <Card className="gap-0 rounded-lg py-0 shadow-none">
               <CardHeader className="border-b px-4 py-4">

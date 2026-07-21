@@ -116,11 +116,15 @@ def _ensure_system_env_and_load() -> None:
 def _run_required_execution_attribution_migration() -> None:
     """Run the fail-closed schema migration after table creation at startup."""
     from ..db.connection import get_database_manager
-    from ..db.migrations import migrate_rule_strategy_execution_attribution
+    from ..db.migrations import (
+        ensure_single_running_rule_strategy_index,
+        migrate_rule_strategy_execution_attribution,
+    )
 
     session = get_database_manager().get_session()
     try:
         migrate_rule_strategy_execution_attribution(session)
+        ensure_single_running_rule_strategy_index(session)
     finally:
         session.close()
 
