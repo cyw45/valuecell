@@ -154,6 +154,34 @@ test("complete config mapping replaces every form value without retaining an old
   });
 });
 
+test("legacy persisted configuration without later nested fields uses safe defaults", () => {
+  const {
+    advanced_rules: _advancedRules,
+    execution: _execution,
+    initial_capital_quote: _initialCapital,
+    ...legacyConfig
+  } = structuredClone(persistedConfig);
+
+  const values = ruleStrategyConfigToFormValues(legacyConfig);
+
+  assert.equal(values.executionEnvironment, "paper");
+  assert.equal(values.sandboxConnectionId, "");
+  assert.equal(values.initialCapital, defaultStrategyFormValues.initialCapital);
+  assert.deepEqual(values.advancedRules, defaultStrategyFormValues.advancedRules);
+  assert.equal(
+    values.maxDemoOrderQuoteAmount,
+    defaultStrategyFormValues.maxDemoOrderQuoteAmount,
+  );
+  assert.equal(
+    values.maxDemoDailyQuoteAmount,
+    defaultStrategyFormValues.maxDemoDailyQuoteAmount,
+  );
+  assert.equal(
+    values.maxDemoTotalQuoteAmount,
+    defaultStrategyFormValues.maxDemoTotalQuoteAmount,
+  );
+});
+
 test("persisted execution parameters survive a form round trip", () => {
   assert.deepEqual(
     strategyFormValuesToConfig(ruleStrategyConfigToFormValues(persistedConfig)),

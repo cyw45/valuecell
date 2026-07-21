@@ -42,7 +42,8 @@ export default function TradesPage() {
   const [strategyId] = useActiveRuleStrategyId();
   const strategyQuery = useRuleStrategy(strategyId);
   const source = selectTradesSource(
-    strategyQuery.data?.config.execution.environment,
+    strategyQuery.data !== undefined,
+    strategyQuery.data?.config.execution?.environment,
   );
   const paperTradesQuery = useRuleStrategyTrades(
     strategyId,

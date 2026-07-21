@@ -136,9 +136,21 @@ export const defaultStrategyFormValues: StrategyFormValues = {
   maxDemoTotalQuoteAmount: 1_000,
 };
 
+export type PersistedRuleStrategyConfig = Omit<
+  RuleStrategyConfig,
+  "advanced_rules" | "execution" | "initial_capital_quote"
+> &
+  Partial<
+    Pick<
+      RuleStrategyConfig,
+      "advanced_rules" | "execution" | "initial_capital_quote"
+    >
+  >;
+
 export function ruleStrategyConfigToFormValues(
-  config: RuleStrategyConfig,
+  config: PersistedRuleStrategyConfig,
 ): StrategyFormValues {
+  const execution = config.execution;
   return {
     symbols: config.symbols.map((symbol) => symbol.replace("-", "/")),
     timeframe: config.interval,
@@ -159,9 +171,12 @@ export function ruleStrategyConfigToFormValues(
     macdFast: config.momentum_macd.macd_fast_window,
     macdSlow: config.momentum_macd.macd_slow_window,
     macdSignal: config.momentum_macd.macd_signal_window,
-    initialCapital: config.initial_capital_quote,
+    initialCapital:
+      config.initial_capital_quote ?? defaultStrategyFormValues.initialCapital,
     orderQuoteAmount: config.risk.order_quote_amount,
-    advancedRules: structuredClone(config.advanced_rules),
+    advancedRules: structuredClone(
+      config.advanced_rules ?? defaultStrategyFormValues.advancedRules,
+    ),
     takeProfitEnabled: config.risk.take_profit_pct !== undefined,
     takeProfit:
       config.risk.take_profit_pct !== undefined
@@ -174,11 +189,17 @@ export function ruleStrategyConfigToFormValues(
         : defaultStrategyFormValues.stopLoss,
     maximumPositions: config.risk.max_positions,
     leverage: config.risk.leverage,
-    executionEnvironment: config.execution.environment,
-    sandboxConnectionId: config.execution.sandbox_connection_id ?? "",
-    maxDemoOrderQuoteAmount: config.execution.max_order_quote_amount,
-    maxDemoDailyQuoteAmount: config.execution.max_daily_quote_amount,
-    maxDemoTotalQuoteAmount: config.execution.max_total_quote_amount,
+    executionEnvironment: execution?.environment ?? "paper",
+    sandboxConnectionId: execution?.sandbox_connection_id ?? "",
+    maxDemoOrderQuoteAmount:
+      execution?.max_order_quote_amount ??
+      defaultStrategyFormValues.maxDemoOrderQuoteAmount,
+    maxDemoDailyQuoteAmount:
+      execution?.max_daily_quote_amount ??
+      defaultStrategyFormValues.maxDemoDailyQuoteAmount,
+    maxDemoTotalQuoteAmount:
+      execution?.max_total_quote_amount ??
+      defaultStrategyFormValues.maxDemoTotalQuoteAmount,
   };
 }
 

@@ -2142,12 +2142,12 @@ export function RuleStrategyConfiguration({
             <CardHeader className="border-b px-4 py-4">
               <CardTitle className="flex items-center gap-2 text-base">
                 <CircleDollarSign />
-                {storedStrategy?.config.execution.environment === "okx_demo"
+                {storedStrategy?.config.execution?.environment === "okx_demo"
                   ? "OKX Demo 执行控制"
                   : t("saas.operations.strategy.paperStrategy.title")}
               </CardTitle>
               <CardDescription>
-                {storedStrategy?.config.execution.environment === "okx_demo"
+                {storedStrategy?.config.execution?.environment === "okx_demo"
                   ? "策略规则保持不变；停止后可切换回纸面账本或更换已验证的 Demo 连接。"
                   : storedStrategy
                     ? t("saas.operations.strategy.paperStrategy.status", {

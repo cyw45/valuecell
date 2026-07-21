@@ -8,16 +8,20 @@ import {
 } from "./trades-source";
 
 describe("selectTradesSource", () => {
-  test("waits for the strategy before selecting a ledger", () => {
-    assert.equal(selectTradesSource(undefined), "pending");
+  test("waits only while the strategy detail is absent", () => {
+    assert.equal(selectTradesSource(false, undefined), "pending");
+  });
+
+  test("treats a loaded legacy strategy without execution as paper", () => {
+    assert.equal(selectTradesSource(true, undefined), "paper");
   });
 
   test("uses paper trades only for paper execution", () => {
-    assert.equal(selectTradesSource("paper"), "paper");
+    assert.equal(selectTradesSource(true, "paper"), "paper");
   });
 
   test("uses exchange-authoritative Demo orders only for OKX Demo", () => {
-    assert.equal(selectTradesSource("okx_demo"), "okx_demo");
+    assert.equal(selectTradesSource(true, "okx_demo"), "okx_demo");
   });
 });
 

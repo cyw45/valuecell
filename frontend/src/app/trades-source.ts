@@ -4,9 +4,11 @@ import type { SandboxOrder } from "@/types/sandbox-exchange";
 export type TradesSource = "pending" | "paper" | "okx_demo";
 
 export function selectTradesSource(
+  hasStrategy: boolean,
   environment: RuleStrategyExecutionConfig["environment"] | undefined,
 ): TradesSource {
-  return environment ?? "pending";
+  if (!hasStrategy) return "pending";
+  return environment ?? "paper";
 }
 
 // The authoritative Demo order response currently exposes requested quantity,

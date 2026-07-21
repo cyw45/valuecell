@@ -25,6 +25,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import type { RuleStrategyAdvisory } from "@/types/rule-strategy";
+import { initialCapitalLabel } from "./advisory-values";
 
 const formatTimestamp = (value?: string) =>
   value
@@ -162,11 +163,9 @@ export default function StrategyAdvisoryPage() {
                 />
                 <Fact
                   label="初始纸面资金"
-                  value={
-                    strategyQuery.data
-                      ? `${strategyQuery.data.config.initial_capital_quote.toLocaleString()} USDT`
-                      : "—"
-                  }
+                  value={initialCapitalLabel(
+                    strategyQuery.data?.config.initial_capital_quote,
+                  )}
                 />
               </CardContent>
             </Card>
