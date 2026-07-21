@@ -484,7 +484,7 @@ class CryptoMarketService:
                     # while the provider's live market endpoint is healthy. Do
                     # not poison the shared live-provider circuit breaker for a
                     # range-specific failure.
-                    if not any(time_range):
+                    if not any(time_range) and failure_type != "unsupported_symbol":
                         self._record_provider_failure(provider, exc)
                     logger.warning(
                         "Crypto OHLCV fetch failed provider={} symbol={} interval={} attempts={} "
@@ -514,6 +514,8 @@ class CryptoMarketService:
             return "timeout"
         if "429" in message or "rate limit" in message:
             return "rate_limited"
+        if "400" in message or "bad request" in message:
+            return "unsupported_symbol"
         if "no candles" in message:
             return "empty_response"
         return "provider_error"

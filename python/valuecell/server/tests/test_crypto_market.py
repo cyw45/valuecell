@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import asyncio
 import math
 from unittest.mock import AsyncMock, call
 
@@ -63,6 +64,32 @@ def test_public_candle_requests_send_stable_json_headers(monkeypatch):
     assert headers["user-agent"] == "valuecell-market-data/1.0"
     assert headers["accept"] == "application/json"
     assert len(candles) == 1
+
+
+def test_symbol_specific_provider_error_does_not_trip_global_circuit_breaker(monkeypatch):
+    service = CryptoMarketService()
+    service.providers = ("mexc",)
+    service._provider_health.clear()
+    service._provider_health["mexc"] = crypto_market_module.ProviderHealth()
+
+    async def unsupported_symbol(**_kwargs):
+        raise RuntimeError("HTTP Error 400: Bad Request")
+
+    monkeypatch.setattr(service, "_fetch_from_provider", unsupported_symbol)
+
+    with pytest.raises(RuntimeError, match="unsupported_symbol"):
+        asyncio.run(
+            service._fetch_with_fallback(
+                symbol="MATIC-USDT",
+                interval="15m",
+                lookback=240,
+                providers=["mexc"],
+            )
+        )
+
+    health = service._provider_health["mexc"]
+    assert health.consecutive_failures == 0
+    assert health.cooldown_until == 0
 
 
 def _candles(*, start: float = 100.0, count: int = 80) -> list[CryptoCandleData]:
