@@ -25,6 +25,42 @@ from valuecell.server.services.crypto_market_service import (
 )
 
 
+OKX_DELISTED_DEFAULT_SYMBOLS = {
+    "MATIC-USDT",
+    "FTM-USDT",
+    "CAKE-USDT",
+    "EOS-USDT",
+    "WBTC-USDT",
+    "MKR-USDT",
+    "KAVA-USDT",
+    "OMG-USDT",
+    "VET-USDT",
+    "WAVES-USDT",
+    "OCEAN-USDT",
+    "REQ-USDT",
+    "GNO-USDT",
+    "BAL-USDT",
+    "SPELL-USDT",
+    "AUDIO-USDT",
+    "COTI-USDT",
+    "HOT-USDT",
+    "KEY-USDT",
+    "LOKA-USDT",
+    "MBL-USDT",
+    "NKN-USDT",
+    "OAX-USDT",
+    "RIF-USDT",
+    "SXP-USDT",
+}
+
+
+def test_default_symbol_catalog_excludes_okx_delisted_markets():
+    assert not (
+        OKX_DELISTED_DEFAULT_SYMBOLS
+        & set(crypto_market_module.SUPPORTED_CRYPTO_SYMBOLS)
+    )
+
+
 @pytest.fixture(autouse=True)
 def reset_market_provider_attempts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", raising=False)
