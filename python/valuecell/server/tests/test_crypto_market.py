@@ -16,6 +16,7 @@ from valuecell.server.api.schemas.crypto_market import (
     CryptoMarketIndicatorsData,
     CryptoSymbolIndicatorsData,
 )
+from valuecell.server.services import crypto_market_service as crypto_market_module
 from valuecell.server.services.crypto_market_service import (
     CandleFetchResult,
     CryptoMarketService,
@@ -32,6 +33,36 @@ def reset_market_provider_attempts(monkeypatch: pytest.MonkeyPatch):
 
 
 BASE_TS = 1_700_000_000_000
+
+
+def test_public_candle_requests_send_stable_json_headers(monkeypatch):
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"code":"0","data":[["1","1","1","1","1","1"]]}'
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(crypto_market_module, "urlopen", fake_urlopen)
+
+    candles = CryptoMarketService()._fetch_rest_candle_page(
+        "okx", "BTC-USDT", "1m", 1, None, None
+    )
+
+    headers = {key.lower(): value for key, value in captured["request"].header_items()}
+    assert headers["user-agent"] == "valuecell-market-data/1.0"
+    assert headers["accept"] == "application/json"
+    assert len(candles) == 1
 
 
 def _candles(*, start: float = 100.0, count: int = 80) -> list[CryptoCandleData]:

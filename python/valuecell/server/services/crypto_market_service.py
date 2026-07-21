@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 from pathlib import Path
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import numpy as np
 import pandas as pd
@@ -715,7 +715,14 @@ class CryptoMarketService:
         url = self._provider_candle_url(
             provider, symbol, interval, limit, from_ts_ms, to_ts_ms
         )
-        with urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "valuecell-market-data/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urlopen(request, timeout=FETCH_TIMEOUT_S) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return self._parse_rest_candles(provider, payload)
 
@@ -858,7 +865,14 @@ class CryptoMarketService:
         if to_s is not None:
             query_data["to"] = to_s
         url = f"https://api.gateio.ws/api/v4/spot/candlesticks?{urlencode(query_data)}"
-        with urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "valuecell-market-data/1.0",
+                "Accept": "application/json",
+            },
+        )
+        with urlopen(request, timeout=FETCH_TIMEOUT_S) as response:
             raw = json.loads(response.read().decode("utf-8"))
         return [
             CryptoCandleData(
