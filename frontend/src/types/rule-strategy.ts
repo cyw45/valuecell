@@ -132,10 +132,73 @@ export interface AdvancedRuleSetConfig {
   brar: AdvancedBrarRuleConfig;
 }
 
+export type RuleStrategyProgramValue =
+  | { kind: "constant"; value: number }
+  | {
+      kind: "price";
+      interval: RuleStrategyCandleInterval;
+      source?: "open" | "high" | "low" | "close";
+    }
+  | { kind: "volume"; interval: RuleStrategyCandleInterval }
+  | {
+      kind: "indicator";
+      name:
+        | "ma"
+        | "ema"
+        | "slope"
+        | "rsi"
+        | "atr"
+        | "adx"
+        | "volume_ma"
+        | "bollinger"
+        | "macd";
+      interval: RuleStrategyCandleInterval;
+      period?: number;
+      lookback?: number;
+      multiplier?: number;
+      component?: "middle" | "upper" | "lower" | "line" | "signal" | "histogram";
+      fast_period?: number;
+      slow_period?: number;
+      signal_period?: number;
+    };
+
+export type RuleStrategyProgramCondition =
+  | { op: "all" | "any"; args: RuleStrategyProgramCondition[] }
+  | { op: "at_least"; count: number; args: RuleStrategyProgramCondition[] }
+  | { op: "not"; arg: RuleStrategyProgramCondition }
+  | {
+      op: "compare";
+      left: RuleStrategyProgramValue;
+      comparator: "gt" | "gte" | "lt" | "lte" | "eq" | "neq";
+      right: RuleStrategyProgramValue;
+    }
+  | {
+      op: "cross";
+      left: RuleStrategyProgramValue;
+      direction: "above" | "below";
+      right: RuleStrategyProgramValue;
+    }
+  | {
+      op: "ordered";
+      direction: "ascending" | "descending";
+      values: RuleStrategyProgramValue[];
+    };
+
+export interface RuleStrategyProgramV2 {
+  schema_version: 2;
+  entry: RuleStrategyProgramCondition;
+  exit?: RuleStrategyProgramCondition | null;
+}
+
 export interface RuleStrategyRiskConfig {
   order_quote_amount: number;
   take_profit_pct?: number;
   stop_loss_pct?: number;
+  trailing_take_profit_pct?: number;
+  max_total_position_pct: number;
+  max_symbol_position_pct: number;
+  add_to_winners: boolean;
+  max_additions: number;
   max_positions: number;
   leverage: number;
 }
@@ -162,6 +225,7 @@ export interface RuleStrategyConfig {
   bollinger: BollingerRuleConfig;
   momentum_macd: MomentumMacdRuleConfig;
   advanced_rules: AdvancedRuleSetConfig;
+  program?: RuleStrategyProgramV2 | null;
   execution: RuleStrategyExecutionConfig;
   risk: RuleStrategyRiskConfig;
 }
@@ -290,14 +354,18 @@ export interface RuleStrategyEvaluation {
 export interface RuleStrategyTextImportConfig {
   interval: RuleStrategyCandleInterval;
   advanced_rules: AdvancedRuleSetConfig;
+  program?: RuleStrategyProgramV2 | null;
   risk: RuleStrategyRiskConfig;
 }
 
 export interface RuleStrategyTextImportProposal {
   strategy_name: string | null;
-  config: RuleStrategyTextImportConfig;
+  executable: boolean;
+  config: RuleStrategyTextImportConfig | null;
   summary: string;
   unresolved_items: string[];
+  corrections: string[];
+  rejection_reasons: string[];
 }
 
 export interface RuleStrategyEvaluationHistoryEntry

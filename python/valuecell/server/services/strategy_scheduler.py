@@ -14,11 +14,23 @@ from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from valuecell.server.api.schemas.rule_strategy import (
+    ProgramAllCondition,
+    ProgramAnyCondition,
+    ProgramAtLeastCondition,
+    ProgramCompareCondition,
+    ProgramCondition,
+    ProgramCrossCondition,
+    ProgramIndicatorRef,
+    ProgramNotCondition,
+    ProgramOrderedCondition,
+    ProgramPriceRef,
+    ProgramVolumeRef,
     RuleStrategyCandle,
     RuleStrategyConfig,
     RuleStrategyEngineMarketSnapshot,
     RuleStrategyMarketSnapshot,
     RuleStrategyPosition,
+    program_ref_lookback,
 )
 from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import (
@@ -53,8 +65,49 @@ _INTERVAL_SECONDS: dict[str, int] = {
 }
 
 
+def _program_requirements(config: RuleStrategyConfig) -> dict[str, int]:
+    requirements: dict[str, int] = {config.interval: 1}
+    program = config.program
+    if program is None:
+        return requirements
+
+    def visit_ref(ref, cross: bool = False) -> None:
+        if isinstance(ref, (ProgramPriceRef, ProgramVolumeRef)):
+            required = 2 if cross else 1
+        elif isinstance(ref, ProgramIndicatorRef):
+            required = program_ref_lookback(ref) + (1 if cross else 0)
+        else:
+            return
+        requirements[ref.interval] = max(requirements.get(ref.interval, 1), required)
+
+    def visit(condition: ProgramCondition) -> None:
+        if isinstance(
+            condition, (ProgramAllCondition, ProgramAnyCondition, ProgramAtLeastCondition)
+        ):
+            for child in condition.args:
+                visit(child)
+        elif isinstance(condition, ProgramNotCondition):
+            visit(condition.arg)
+        elif isinstance(condition, ProgramCrossCondition):
+            visit_ref(condition.left, True)
+            visit_ref(condition.right, True)
+        elif isinstance(condition, ProgramCompareCondition):
+            visit_ref(condition.left)
+            visit_ref(condition.right)
+        elif isinstance(condition, ProgramOrderedCondition):
+            for ref in condition.values:
+                visit_ref(ref)
+
+    visit(program.entry)
+    if program.exit is not None:
+        visit(program.exit)
+    return requirements
+
+
 def _required_intervals(config: RuleStrategyConfig) -> set[str]:
     """Return every candle interval required by the configured rule set."""
+    if config.program is not None:
+        return set(_program_requirements(config))
     intervals = {config.interval}
     rules = config.advanced_rules
     if not rules.enabled:
@@ -74,6 +127,8 @@ def _required_intervals(config: RuleStrategyConfig) -> set[str]:
 
 def _required_lookback(config: RuleStrategyConfig) -> int:
     """Fetch sufficient history for the largest configured technical window."""
+    if config.program is not None:
+        return max(_program_requirements(config).values())
     rules = config.advanced_rules
     if not rules.enabled:
         return 100
@@ -232,7 +287,9 @@ class StrategyScheduler:
         config = RuleStrategyConfig.model_validate(config_dict)
         symbols = config.symbols
         intervals = sorted(_required_intervals(config))
-        lookback = _required_lookback(config)
+        lookbacks = _program_requirements(config) if config.program is not None else {
+            interval: _required_lookback(config) for interval in intervals
+        }
 
         if not symbols:
             logger.warning(
@@ -285,7 +342,7 @@ class StrategyScheduler:
                     market_service.get_indicators(
                         symbols=symbols,
                         interval=interval,
-                        lookback=lookback,
+                        lookback=lookbacks[interval],
                     )
                     for interval in intervals
                 ]
@@ -395,6 +452,10 @@ class StrategyScheduler:
                         {},
                     )
                     position_quantity = float(demo_position.get("quantity") or 0.0)
+                    total_position_quote = sum(
+                        float(item.get("usdt_value") or 0.0)
+                        for item in demo_positions.values()
+                    )
                     market_snapshot = RuleStrategyEngineMarketSnapshot(
                         symbol=symbol,
                         price=latest_price or primary_candles[-1].close,
@@ -402,6 +463,7 @@ class StrategyScheduler:
                         equity_quote=float(demo_account.get("total_usdt_value") or 0.0),
                         quote_balance=float(usdt_balance.get("free") or 0.0),
                         open_position_count=len(demo_positions),
+                        total_position_quote=total_position_quote,
                         position=RuleStrategyPosition(
                             quantity=position_quantity,
                             entry_price=None if position_quantity > 0 else None,

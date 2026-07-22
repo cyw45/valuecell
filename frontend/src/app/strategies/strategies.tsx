@@ -652,6 +652,29 @@ export function RuleStrategyConfiguration({
         max: 100,
       });
     if (
+      values.trailingTakeProfitEnabled &&
+      (values.trailingTakeProfit <= 0 || values.trailingTakeProfit > 100)
+    )
+      next.trailingTakeProfit = "移动止盈回撤必须在 0.1% 至 100% 之间。";
+    if (
+      values.maxTotalPosition <= 0 ||
+      values.maxTotalPosition > 100
+    )
+      next.maxTotalPosition = "总仓位上限必须在 0.1% 至 100% 之间。";
+    if (
+      values.maxSymbolPosition <= 0 ||
+      values.maxSymbolPosition > 100 ||
+      values.maxSymbolPosition > values.maxTotalPosition
+    )
+      next.maxSymbolPosition = "单币种上限必须大于 0，且不得超过总仓位上限。";
+    if (
+      !Number.isInteger(values.maxAdditions) ||
+      values.maxAdditions < 0 ||
+      values.maxAdditions > 20 ||
+      (values.addToWinners && values.maxAdditions < 1)
+    )
+      next.maxAdditions = "盈利加仓次数必须是 1 至 20 的整数。";
+    if (
       !Number.isInteger(values.maximumPositions) ||
       values.maximumPositions < 1 ||
       values.maximumPositions > 100
@@ -710,7 +733,30 @@ export function RuleStrategyConfiguration({
     key: Key,
     value: StrategyFormValues[Key],
   ) => {
-    setValues((current) => ({ ...current, [key]: value }));
+    const programInputs: (keyof StrategyFormValues)[] = [
+      "timeframe",
+      "confirmationMode",
+      "movingAverageEnabled",
+      "fastMa",
+      "slowMa",
+      "rsiEnabled",
+      "rsiPeriod",
+      "rsiOversold",
+      "rsiOverbought",
+      "bollingerEnabled",
+      "bollingerPeriod",
+      "bollingerDeviation",
+      "momentumEnabled",
+      "momentumPeriod",
+      "macdFast",
+      "macdSlow",
+      "macdSignal",
+    ];
+    setValues((current) => ({
+      ...current,
+      [key]: value,
+      ...(programInputs.includes(key) ? { program: null } : {}),
+    }));
   };
   const updateAdvancedRule = <
     Section extends AdvancedIndicatorKey,
@@ -722,6 +768,7 @@ export function RuleStrategyConfiguration({
   ) => {
     setValues((current) => ({
       ...current,
+      program: null,
       advancedRules: {
         ...current.advancedRules,
         [section]: {
@@ -901,23 +948,47 @@ export function RuleStrategyConfiguration({
     try {
       const response = await parseStrategyText.mutateAsync(strategyText);
       const proposal = response.data;
+      if (!proposal.executable || !proposal.config) {
+        const reasons = proposal.rejection_reasons.length
+          ? proposal.rejection_reasons.join("；")
+          : proposal.summary;
+        setTextImportSummary(proposal.summary);
+        setUnresolvedItems(proposal.unresolved_items);
+        toast.error(`策略无法安全执行：${reasons}`);
+        return;
+      }
+      const importedConfig = proposal.config;
       setValues((current) => ({
         ...current,
-        timeframe: proposal.config.interval,
-        advancedRules: proposal.config.advanced_rules,
+        timeframe: importedConfig.interval,
+        advancedRules: importedConfig.advanced_rules,
+        program: importedConfig.program
+          ? structuredClone(importedConfig.program)
+          : null,
+        orderQuoteAmount: importedConfig.risk.order_quote_amount,
         takeProfitEnabled:
-          proposal.config.risk.take_profit_pct !== null &&
-          proposal.config.risk.take_profit_pct !== undefined,
+          importedConfig.risk.take_profit_pct !== null &&
+          importedConfig.risk.take_profit_pct !== undefined,
         takeProfit:
-          (proposal.config.risk.take_profit_pct ?? current.takeProfit / 100) *
+          (importedConfig.risk.take_profit_pct ?? current.takeProfit / 100) *
           100,
         stopLossEnabled:
-          proposal.config.risk.stop_loss_pct !== null &&
-          proposal.config.risk.stop_loss_pct !== undefined,
+          importedConfig.risk.stop_loss_pct !== null &&
+          importedConfig.risk.stop_loss_pct !== undefined,
         stopLoss:
-          (proposal.config.risk.stop_loss_pct ?? current.stopLoss / 100) * 100,
-        maximumPositions: proposal.config.risk.max_positions,
-        leverage: proposal.config.risk.leverage,
+          (importedConfig.risk.stop_loss_pct ?? current.stopLoss / 100) * 100,
+        trailingTakeProfitEnabled:
+          importedConfig.risk.trailing_take_profit_pct !== null &&
+          importedConfig.risk.trailing_take_profit_pct !== undefined,
+        trailingTakeProfit:
+          (importedConfig.risk.trailing_take_profit_pct ??
+            current.trailingTakeProfit / 100) * 100,
+        maxTotalPosition: importedConfig.risk.max_total_position_pct * 100,
+        maxSymbolPosition: importedConfig.risk.max_symbol_position_pct * 100,
+        addToWinners: importedConfig.risk.add_to_winners,
+        maxAdditions: importedConfig.risk.max_additions,
+        maximumPositions: importedConfig.risk.max_positions,
+        leverage: importedConfig.risk.leverage,
       }));
       if (proposal.strategy_name) setName(proposal.strategy_name);
       setTextImportSummary(proposal.summary);
@@ -2243,6 +2314,72 @@ export function RuleStrategyConfiguration({
                     value={values.stopLoss}
                   />
                 </div>
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="trailing-take-profit-enabled">最高价回撤止盈</Label>
+                    <Switch
+                      checked={values.trailingTakeProfitEnabled}
+                      id="trailing-take-profit-enabled"
+                      onCheckedChange={(enabled) =>
+                        update("trailingTakeProfitEnabled", enabled)
+                      }
+                    />
+                  </div>
+                  <NumericField
+                    disabled={!values.trailingTakeProfitEnabled}
+                    error={errors.trailingTakeProfit}
+                    id="trailing-take-profit"
+                    label="回撤比例"
+                    max={100}
+                    min={0.1}
+                    onChange={(value) => update("trailingTakeProfit", value)}
+                    step={0.1}
+                    unit="%"
+                    value={values.trailingTakeProfit}
+                  />
+                </div>
+                <NumericField
+                  error={errors.maxTotalPosition}
+                  id="max-total-position"
+                  label="总仓位上限"
+                  max={100}
+                  min={0.1}
+                  onChange={(value) => update("maxTotalPosition", value)}
+                  step={0.1}
+                  unit="%"
+                  value={values.maxTotalPosition}
+                />
+                <NumericField
+                  error={errors.maxSymbolPosition}
+                  id="max-symbol-position"
+                  label="单币种仓位上限"
+                  max={100}
+                  min={0.1}
+                  onChange={(value) => update("maxSymbolPosition", value)}
+                  step={0.1}
+                  unit="%"
+                  value={values.maxSymbolPosition}
+                />
+                <div className="grid gap-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <Label htmlFor="add-to-winners">盈利后加仓</Label>
+                    <Switch
+                      checked={values.addToWinners}
+                      id="add-to-winners"
+                      onCheckedChange={(enabled) => update("addToWinners", enabled)}
+                    />
+                  </div>
+                  <NumericField
+                    disabled={!values.addToWinners}
+                    error={errors.maxAdditions}
+                    id="max-additions"
+                    label="最多加仓次数"
+                    max={20}
+                    min={1}
+                    onChange={(value) => update("maxAdditions", value)}
+                    value={values.maxAdditions}
+                  />
+                </div>
                 <NumericField
                   error={errors.maximumPositions}
                   id="maximum-positions"
@@ -2270,6 +2407,27 @@ export function RuleStrategyConfiguration({
                 />
               </CardContent>
             </Card>
+
+            {values.program ? (
+              <Card className="gap-0 rounded-lg py-0 shadow-none">
+                <CardHeader className="border-b px-4 py-4">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <FileText /> AI 编译规则
+                  </CardTitle>
+                  <CardDescription>
+                    以下 v2 规则是实际执行逻辑。手动修改指标条件会清除该规则并切回可视化配置。
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="px-4 py-4">
+                  <pre
+                    className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/40 p-3 font-mono text-xs"
+                    id="compiled-program"
+                  >
+                    {JSON.stringify(values.program, null, 2)}
+                  </pre>
+                </CardContent>
+              </Card>
+            ) : null}
           </fieldset>
         </form>
 

@@ -389,6 +389,7 @@ def test_result_explains_conditions_sizing_and_projected_funding():
         "take_profit",
         "stop_loss",
         "max_positions",
+        "position_capacity",
         "available_collateral",
         "leverage_limit",
     }
@@ -576,3 +577,250 @@ def test_advanced_rule_on_primary_interval_uses_request_candles_without_candle_s
     )
     assert result.action == "buy"
     assert _condition(result, "rsi_entry").state == "triggered"
+
+
+def test_program_v2_combines_multi_timeframe_indicator_logic():
+    daily = _candles([100.0 + index for index in range(140)])
+    four_hour = _candles([100.0 + index * 0.5 for index in range(80)])
+    for index, candle in enumerate(four_hour):
+        candle["volume"] = 1_000.0 if index < 79 else 2_000.0
+    request = RuleStrategyEvaluationRequest.model_validate(
+        {
+            "config": {
+                "interval": "4h",
+                "program": {
+                    "schema_version": 2,
+                    "entry": {
+                        "op": "all",
+                        "args": [
+                            {
+                                "op": "ordered",
+                                "direction": "descending",
+                                "values": [
+                                    {"kind": "indicator", "name": "ma", "interval": "1d", "period": 7},
+                                    {"kind": "indicator", "name": "ma", "interval": "1d", "period": 25},
+                                    {"kind": "indicator", "name": "ma", "interval": "1d", "period": 99},
+                                ],
+                            },
+                            {
+                                "op": "compare",
+                                "left": {"kind": "indicator", "name": "slope", "interval": "4h", "period": 25, "lookback": 3},
+                                "comparator": "gt",
+                                "right": {"kind": "constant", "value": 0},
+                            },
+                            {
+                                "op": "compare",
+                                "left": {"kind": "indicator", "name": "adx", "interval": "4h", "period": 14},
+                                "comparator": "gte",
+                                "right": {"kind": "constant", "value": 20},
+                            },
+                            {
+                                "op": "compare",
+                                "left": {"kind": "volume", "interval": "4h"},
+                                "comparator": "gt",
+                                "right": {"kind": "indicator", "name": "volume_ma", "interval": "4h", "period": 20, "multiplier": 1.2},
+                            },
+                        ],
+                    },
+                },
+            },
+            "candles": four_hour,
+            "candle_sets": {"1d": daily, "4h": four_hour},
+            "market": {
+                "symbol": "BTC-USDT",
+                "price": four_hour[-1]["close"],
+                "equity_quote": 10_000,
+                "quote_balance": 10_000,
+            },
+        }
+    )
+
+    result = RuleEngine().evaluate(request)
+
+    assert result.action == "buy"
+    assert result.reason_code == "program_entry_confirmed"
+    assert any(condition.code == "program.entry" for condition in result.conditions)
+
+
+def test_program_v2_trailing_take_profit_uses_persisted_highest_price():
+    result = _evaluate(
+        [110.0, 108.0],
+        config={
+            "program": {
+                "schema_version": 2,
+                "entry": {
+                    "op": "compare",
+                    "left": {"kind": "price", "interval": "1h"},
+                    "comparator": "gt",
+                    "right": {"kind": "constant", "value": 1},
+                },
+            },
+            "risk": {"trailing_take_profit_pct": 0.1},
+        },
+        market={
+            "price": 108,
+            "position": {
+                "quantity": 1,
+                "entry_price": 100,
+                "highest_price": 120,
+            },
+            "open_position_count": 1,
+            "total_position_quote": 108,
+        },
+    )
+
+    assert result.action == "sell"
+    assert result.reason_code == "trailing_take_profit_triggered"
+    assert _condition(result, "trailing_take_profit").values["drawdown_pct"] == pytest.approx(-0.1)
+
+
+def test_program_v2_adds_to_profitable_position_with_remaining_capacity():
+    result = _evaluate(
+        [110.0, 120.0],
+        config={
+            "program": {
+                "schema_version": 2,
+                "entry": {
+                    "op": "compare",
+                    "left": {"kind": "price", "interval": "1h"},
+                    "comparator": "gt",
+                    "right": {"kind": "constant", "value": 100},
+                },
+            },
+            "risk": {
+                "order_quote_amount": 100,
+                "max_positions": 1,
+                "max_total_position_pct": 0.6,
+                "max_symbol_position_pct": 0.5,
+                "add_to_winners": True,
+                "max_additions": 2,
+            },
+        },
+        market={
+            "price": 120,
+            "position": {
+                "quantity": 2,
+                "entry_price": 100,
+                "highest_price": 120,
+                "addition_count": 0,
+            },
+            "open_position_count": 1,
+            "total_position_quote": 240,
+        },
+    )
+
+    assert result.action == "buy"
+    assert result.reason_code == "program_addition_confirmed"
+    assert result.sizing.requested_quote == 100
+    assert result.funding.projected_notional_quote == 340
+    assert _condition(result, "max_positions").state == "not_triggered"
+
+
+def test_program_v2_blocks_entry_when_position_allocation_is_exhausted():
+    result = _evaluate(
+        [110.0, 120.0],
+        config={
+            "program": {
+                "schema_version": 2,
+                "entry": {
+                    "op": "compare",
+                    "left": {"kind": "price", "interval": "1h"},
+                    "comparator": "gt",
+                    "right": {"kind": "constant", "value": 100},
+                },
+            },
+            "risk": {
+                "order_quote_amount": 100,
+                "max_total_position_pct": 0.6,
+                "max_symbol_position_pct": 0.1,
+            },
+        },
+        market={"total_position_quote": 600},
+    )
+
+    assert result.action == "no_op"
+    assert result.reason_code == "position_capacity"
+    assert result.sizing.requested_quote == 0
+
+
+def test_okx_demo_rejects_stateful_trailing_or_pyramiding():
+    for risk in (
+        {"trailing_take_profit_pct": 0.08},
+        {"add_to_winners": True, "max_additions": 1},
+    ):
+        with pytest.raises(ValidationError, match="use paper execution"):
+            RuleStrategyEvaluationRequest.model_validate(
+                {
+                    "config": {
+                        "execution": {
+                            "environment": "okx_demo",
+                            "sandbox_connection_id": "okx-demo",
+                        },
+                        "risk": risk,
+                    },
+                    "candles": _candles([100, 101]),
+                    "market": {
+                        "symbol": "BTC-USDT",
+                        "price": 101,
+                        "equity_quote": 1_000,
+                        "quote_balance": 1_000,
+                    },
+                }
+            )
+
+
+def test_program_v2_rejects_unknown_indicator_before_execution():
+    with pytest.raises(ValidationError):
+        RuleStrategyEvaluationRequest.model_validate(
+            {
+                "config": {
+                    "program": {
+                        "schema_version": 2,
+                        "entry": {
+                            "op": "compare",
+                            "left": {"kind": "indicator", "name": "user_python", "interval": "1h", "period": 14},
+                            "comparator": "gt",
+                            "right": {"kind": "constant", "value": 0},
+                        },
+                    },
+                },
+                "candles": _candles([10.0, 11.0]),
+                "market": {
+                    "symbol": "BTC-USDT",
+                    "price": 11.0,
+                    "equity_quote": 1_000,
+                    "quote_balance": 1_000,
+                },
+            }
+        )
+
+
+def test_program_v2_rejects_bollinger_without_a_band_component():
+    with pytest.raises(ValidationError, match="bollinger component"):
+        RuleStrategyEvaluationRequest.model_validate(
+            {
+                "config": {
+                    "program": {
+                        "schema_version": 2,
+                        "entry": {
+                            "op": "compare",
+                            "left": {
+                                "kind": "indicator",
+                                "name": "bollinger",
+                                "interval": "1h",
+                                "period": 20,
+                            },
+                            "comparator": "gt",
+                            "right": {"kind": "constant", "value": 0},
+                        },
+                    },
+                },
+                "candles": _candles([10.0, 11.0]),
+                "market": {
+                    "symbol": "BTC-USDT",
+                    "price": 11.0,
+                    "equity_quote": 1_000,
+                    "quote_balance": 1_000,
+                },
+            }
+        )

@@ -2,6 +2,7 @@ import type {
   AdvancedRuleSetConfig,
   RuleStrategyConfig,
   RuleStrategyInterval,
+  RuleStrategyProgramV2,
   RuleStrategyStatus,
 } from "../../types/rule-strategy";
 
@@ -28,10 +29,17 @@ export type StrategyFormValues = {
   initialCapital: number;
   orderQuoteAmount: number;
   advancedRules: AdvancedRuleSetConfig;
+  program: RuleStrategyProgramV2 | null;
   takeProfitEnabled: boolean;
   takeProfit: number;
   stopLossEnabled: boolean;
   stopLoss: number;
+  trailingTakeProfitEnabled: boolean;
+  trailingTakeProfit: number;
+  maxTotalPosition: number;
+  maxSymbolPosition: number;
+  addToWinners: boolean;
+  maxAdditions: number;
   maximumPositions: number;
   leverage: number;
   executionEnvironment: "paper" | "okx_demo";
@@ -123,10 +131,17 @@ export const defaultStrategyFormValues: StrategyFormValues = {
       exit_threshold: 85,
     },
   },
+  program: null,
   takeProfitEnabled: false,
   takeProfit: 4,
   stopLossEnabled: false,
   stopLoss: 2,
+  trailingTakeProfitEnabled: false,
+  trailingTakeProfit: 8,
+  maxTotalPosition: 100,
+  maxSymbolPosition: 100,
+  addToWinners: false,
+  maxAdditions: 0,
   maximumPositions: 100,
   leverage: 1,
   executionEnvironment: "paper",
@@ -177,6 +192,7 @@ export function ruleStrategyConfigToFormValues(
     advancedRules: structuredClone(
       config.advanced_rules ?? defaultStrategyFormValues.advancedRules,
     ),
+    program: config.program ? structuredClone(config.program) : null,
     takeProfitEnabled: config.risk.take_profit_pct !== undefined,
     takeProfit:
       config.risk.take_profit_pct !== undefined
@@ -187,6 +203,16 @@ export function ruleStrategyConfigToFormValues(
       config.risk.stop_loss_pct !== undefined
         ? config.risk.stop_loss_pct * 100
         : defaultStrategyFormValues.stopLoss,
+    trailingTakeProfitEnabled:
+      config.risk.trailing_take_profit_pct !== undefined,
+    trailingTakeProfit:
+      config.risk.trailing_take_profit_pct !== undefined
+        ? config.risk.trailing_take_profit_pct * 100
+        : defaultStrategyFormValues.trailingTakeProfit,
+    maxTotalPosition: config.risk.max_total_position_pct * 100,
+    maxSymbolPosition: config.risk.max_symbol_position_pct * 100,
+    addToWinners: config.risk.add_to_winners,
+    maxAdditions: config.risk.max_additions,
     maximumPositions: config.risk.max_positions,
     leverage: config.risk.leverage,
     executionEnvironment: execution?.environment ?? "paper",
@@ -237,6 +263,7 @@ export function strategyFormValuesToConfig(
       macd_signal_window: values.macdSignal,
     },
     advanced_rules: structuredClone(values.advancedRules),
+    program: values.program ? structuredClone(values.program) : null,
     execution: {
       environment: values.executionEnvironment,
       ...(values.executionEnvironment === "okx_demo"
@@ -252,6 +279,13 @@ export function strategyFormValuesToConfig(
         ? values.takeProfit / 100
         : undefined,
       stop_loss_pct: values.stopLossEnabled ? values.stopLoss / 100 : undefined,
+      trailing_take_profit_pct: values.trailingTakeProfitEnabled
+        ? values.trailingTakeProfit / 100
+        : undefined,
+      max_total_position_pct: values.maxTotalPosition / 100,
+      max_symbol_position_pct: values.maxSymbolPosition / 100,
+      add_to_winners: values.addToWinners,
+      max_additions: values.maxAdditions,
       max_positions: values.maximumPositions,
       leverage: values.leverage,
     },

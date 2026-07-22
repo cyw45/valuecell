@@ -7,6 +7,19 @@ from dataclasses import dataclass
 from typing import Literal
 
 from valuecell.server.api.schemas.rule_strategy import (
+    ProgramAllCondition,
+    ProgramAnyCondition,
+    ProgramAtLeastCondition,
+    ProgramCompareCondition,
+    ProgramCondition,
+    ProgramConstantRef,
+    ProgramCrossCondition,
+    ProgramIndicatorRef,
+    ProgramNotCondition,
+    ProgramOrderedCondition,
+    ProgramPriceRef,
+    ProgramValueRef,
+    ProgramVolumeRef,
     RuleStrategyConditionCheck,
     RuleStrategyEvaluationRequest,
     RuleStrategyEvaluationResult,
@@ -32,6 +45,8 @@ class RuleEngine:
     def evaluate(
         self, request: RuleStrategyEvaluationRequest
     ) -> RuleStrategyEvaluationResult:
+        if request.config.program is not None:
+            return self._evaluate_program(request)
         if request.config.advanced_rules.enabled:
             return self._evaluate_advanced(request)
 
@@ -111,6 +126,262 @@ class RuleEngine:
             sizing=sizing,
             funding=funding,
             entry_confirmation=entry_confirmation,
+        )
+
+    def _evaluate_program(
+        self, request: RuleStrategyEvaluationRequest
+    ) -> RuleStrategyEvaluationResult:
+        program = request.config.program
+        assert program is not None
+        entry, entry_values = self._program_condition(request, program.entry)
+        entry_check = self._program_check("program.entry", "indicator", entry, entry_values)
+        conditions = [entry_check]
+        exit_result: bool | None = False
+        if program.exit is not None:
+            exit_result, exit_values = self._program_condition(request, program.exit)
+            conditions.append(
+                self._program_check("program.exit", "exit", exit_result, exit_values)
+            )
+
+        risk_conditions, risk_exit = self._exit_conditions(request)
+        conditions.extend(risk_conditions)
+        position_open = request.market.position.quantity > 0
+        if position_open and risk_exit is not None:
+            action, reason_code, reason = self._position_action(
+                "neutral", risk_exit, "all", []
+            )
+        elif position_open and exit_result is True:
+            action, reason_code, reason = (
+                "sell",
+                "program_exit_confirmed",
+                "Sell recommendation: program exit condition is confirmed.",
+            )
+        elif position_open and entry is True and self._can_add_to_winner(request):
+            action, reason_code, reason = (
+                "buy",
+                "program_addition_confirmed",
+                "Buy recommendation: program entry remains confirmed and the open position is profitable.",
+            )
+        elif position_open:
+            action, reason_code, reason = (
+                "no_op",
+                "program_exit_unavailable" if exit_result is None else "program_exit_not_confirmed",
+                "No action: program exit condition is unavailable."
+                if exit_result is None
+                else "No action: program exit condition is not confirmed.",
+            )
+        elif entry is True:
+            action, reason_code, reason = (
+                "buy",
+                "program_entry_confirmed",
+                "Buy recommendation: program entry condition is confirmed.",
+            )
+        elif entry is None:
+            action, reason_code, reason = (
+                "no_op",
+                "insufficient_candle_history",
+                "No action: program inputs are unavailable.",
+            )
+        else:
+            action, reason_code, reason = (
+                "no_op",
+                "program_entry_not_confirmed",
+                "No action: program entry condition is not confirmed.",
+            )
+
+        sizing = self._sizing(request)
+        entry_confirmation = RuleStrategyEntryConfirmation(
+            enabled=1, available=0 if entry is None else 1,
+            passed=1 if entry is True else 0, required=1, mode="all",
+        )
+        entry_risk = self._risk_conditions(request, action, sizing)
+        conditions.extend(entry_risk)
+        if action == "buy":
+            block = next((item for item in entry_risk if item.state == "blocked"), None)
+            if block is not None:
+                action, reason_code, reason = "no_op", block.code, block.detail
+        return RuleStrategyEvaluationResult(
+            action=action,
+            reason_code=reason_code,
+            reason=reason,
+            conditions=conditions,
+            indicators=RuleStrategyIndicatorValues(),
+            sizing=sizing,
+            funding=self._funding(request, action, sizing),
+            entry_confirmation=entry_confirmation,
+        )
+
+    def _program_condition(
+        self, request: RuleStrategyEvaluationRequest, condition: ProgramCondition, offset: int = 0
+    ) -> tuple[bool | None, dict[str, float | int | str | bool | None]]:
+        if isinstance(condition, (ProgramAllCondition, ProgramAnyCondition, ProgramAtLeastCondition)):
+            children = [self._program_condition(request, child, offset)[0] for child in condition.args]
+            available = [value for value in children if value is not None]
+            if isinstance(condition, ProgramAllCondition):
+                result = False if False in available else True if len(available) == len(children) else None
+            elif isinstance(condition, ProgramAnyCondition):
+                result = True if True in available else False if len(available) == len(children) else None
+            else:
+                passed = sum(value is True for value in available)
+                result = True if passed >= condition.count else False if passed + children.count(None) < condition.count else None
+            return result, {"conditions": len(children), "available": len(available), "passed": sum(value is True for value in available)}
+        if isinstance(condition, ProgramNotCondition):
+            value, details = self._program_condition(request, condition.arg, offset)
+            return None if value is None else not value, details
+        if isinstance(condition, ProgramCompareCondition):
+            left = self._program_value(request, condition.left, offset)
+            right = self._program_value(request, condition.right, offset)
+            if left is None or right is None:
+                return None, {"comparator": condition.comparator}
+            comparisons = {
+                "gt": left > right, "gte": left >= right, "lt": left < right,
+                "lte": left <= right, "eq": left == right, "neq": left != right,
+            }
+            return comparisons[condition.comparator], {"left": left, "right": right, "comparator": condition.comparator}
+        if isinstance(condition, ProgramCrossCondition):
+            current_left = self._program_value(request, condition.left, offset)
+            current_right = self._program_value(request, condition.right, offset)
+            previous_left = self._program_value(request, condition.left, offset + 1)
+            previous_right = self._program_value(request, condition.right, offset + 1)
+            if None in (current_left, current_right, previous_left, previous_right):
+                return None, {"direction": condition.direction}
+            crossed = (
+                previous_left <= previous_right and current_left > current_right
+                if condition.direction == "above"
+                else previous_left >= previous_right and current_left < current_right
+            )
+            return crossed, {"left": current_left, "right": current_right, "previous_left": previous_left, "previous_right": previous_right}
+        assert isinstance(condition, ProgramOrderedCondition)
+        values = [self._program_value(request, value, offset) for value in condition.values]
+        if any(value is None for value in values):
+            return None, {"direction": condition.direction}
+        numeric = [float(value) for value in values if value is not None]
+        ordered = all(left < right for left, right in zip(numeric, numeric[1:])) if condition.direction == "ascending" else all(left > right for left, right in zip(numeric, numeric[1:]))
+        return ordered, {f"value_{index}": value for index, value in enumerate(numeric)}
+
+    def _program_value(
+        self, request: RuleStrategyEvaluationRequest, ref: ProgramValueRef, offset: int = 0
+    ) -> float | None:
+        if isinstance(ref, ProgramConstantRef):
+            return ref.value
+        candles = self._candles_for(request, ref.interval)
+        if len(candles) <= offset:
+            return None
+        if isinstance(ref, ProgramPriceRef):
+            return float(getattr(candles[-1 - offset], ref.source))
+        if isinstance(ref, ProgramVolumeRef):
+            return candles[-1 - offset].volume
+        assert isinstance(ref, ProgramIndicatorRef)
+        end = len(candles) - offset
+        closes = [candle.close for candle in candles[:end]]
+        if ref.name in {"ma", "ema", "volume_ma", "bollinger"} and len(closes) < ref.period:
+            return None
+        if ref.name in {"rsi", "atr"} and len(closes) < ref.period + 1:
+            return None
+        if ref.name == "adx" and len(closes) < 2 * ref.period + 1:
+            return None
+        if ref.name == "slope" and len(closes) < ref.period + ref.lookback:
+            return None
+        if ref.name == "ma":
+            return self._sma(closes[-ref.period:]) * ref.multiplier
+        if ref.name == "ema":
+            return self._ema_series(closes, ref.period)[-1] * ref.multiplier
+        if ref.name == "volume_ma":
+            return self._sma([candle.volume for candle in candles[:end][-ref.period:]]) * ref.multiplier
+        if ref.name == "slope":
+            current = self._sma(closes[-ref.period:])
+            previous = self._sma(closes[-ref.period - ref.lookback:-ref.lookback])
+            return (current - previous) / ref.lookback * ref.multiplier
+        if ref.name == "rsi":
+            return self._rsi_value(closes, ref.period) * ref.multiplier
+        if ref.name in {"atr", "adx"}:
+            window = candles[:end]
+            if ref.name == "atr":
+                pairs = list(zip(window[-ref.period - 1 : -1], window[-ref.period :]))
+                true_ranges = [
+                    max(
+                        current.high - current.low,
+                        abs(current.high - prior.close),
+                        abs(current.low - prior.close),
+                    )
+                    for prior, current in pairs
+                ]
+                return self._sma(true_ranges) * ref.multiplier
+
+            pairs = list(zip(window[:-1], window[1:]))
+            true_ranges: list[float] = []
+            plus_dm: list[float] = []
+            minus_dm: list[float] = []
+            for prior, current in pairs:
+                true_ranges.append(
+                    max(
+                        current.high - current.low,
+                        abs(current.high - prior.close),
+                        abs(current.low - prior.close),
+                    )
+                )
+                up_move = current.high - prior.high
+                down_move = prior.low - current.low
+                plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0.0)
+                minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0.0)
+
+            period = ref.period
+            smoothed_tr = sum(true_ranges[:period])
+            smoothed_plus = sum(plus_dm[:period])
+            smoothed_minus = sum(minus_dm[:period])
+            dx_values: list[float] = []
+
+            def append_dx() -> None:
+                if smoothed_tr == 0:
+                    dx_values.append(0.0)
+                    return
+                plus_di = 100 * smoothed_plus / smoothed_tr
+                minus_di = 100 * smoothed_minus / smoothed_tr
+                denominator = plus_di + minus_di
+                dx_values.append(
+                    100 * abs(plus_di - minus_di) / denominator if denominator else 0.0
+                )
+
+            append_dx()
+            for index in range(period, len(true_ranges)):
+                smoothed_tr = smoothed_tr - smoothed_tr / period + true_ranges[index]
+                smoothed_plus = (
+                    smoothed_plus - smoothed_plus / period + plus_dm[index]
+                )
+                smoothed_minus = (
+                    smoothed_minus - smoothed_minus / period + minus_dm[index]
+                )
+                append_dx()
+            if len(dx_values) < period:
+                return None
+            adx = self._sma(dx_values[:period])
+            for dx in dx_values[period:]:
+                adx = (adx * (period - 1) + dx) / period
+            return adx * ref.multiplier
+        if ref.name == "bollinger":
+            sample = closes[-ref.period:]
+            middle = self._sma(sample)
+            deviation = math.sqrt(sum((value - middle) ** 2 for value in sample) / ref.period)
+            value = {"middle": middle, "upper": middle + 2 * deviation, "lower": middle - 2 * deviation}[ref.component]
+            return value * ref.multiplier
+        required = ref.slow_period + ref.signal_period + 1
+        if len(closes) < required:
+            return None
+        fast = self._ema_series(closes, ref.fast_period)
+        slow = self._ema_series(closes, ref.slow_period)
+        line = [left - right for left, right in zip(fast, slow)]
+        signal = self._ema_series(line, ref.signal_period)
+        value = {"line": line[-1], "signal": signal[-1], "histogram": line[-1] - signal[-1]}[ref.component]
+        return value * ref.multiplier
+
+    @staticmethod
+    def _program_check(code: str, category: Literal["indicator", "exit"], result: bool | None, values: dict) -> RuleStrategyConditionCheck:
+        return RuleStrategyConditionCheck(
+            code=code,
+            category=category,
+            state="unavailable" if result is None else "triggered" if result else "not_triggered",
+            detail="program condition unavailable" if result is None else "program condition matched" if result else "program condition did not match",
+            values=values,
         )
 
     def _evaluate_advanced(
@@ -639,6 +910,24 @@ class RuleEngine:
         stop_loss_hit = (
             risk.stop_loss_pct is not None and return_pct <= -risk.stop_loss_pct
         )
+        trailing_drawdown = (
+            request.market.price / position.highest_price - 1.0
+            if position.highest_price is not None
+            else None
+        )
+        trailing_take_profit_hit = (
+            risk.trailing_take_profit_pct is not None
+            and trailing_drawdown is not None
+            and (
+                trailing_drawdown <= -risk.trailing_take_profit_pct
+                or math.isclose(
+                    trailing_drawdown,
+                    -risk.trailing_take_profit_pct,
+                    rel_tol=1e-12,
+                    abs_tol=1e-12,
+                )
+            )
+        )
         conditions = [
             RuleStrategyConditionCheck(
                 code="take_profit",
@@ -661,6 +950,19 @@ class RuleEngine:
                 else "stop-loss threshold not reached",
                 values={"return_pct": return_pct, "threshold_pct": risk.stop_loss_pct},
             ),
+            RuleStrategyConditionCheck(
+                code="trailing_take_profit",
+                category="exit",
+                state="triggered" if trailing_take_profit_hit else "not_triggered",
+                detail="trailing take-profit drawdown reached"
+                if trailing_take_profit_hit
+                else "trailing take-profit drawdown not reached",
+                values={
+                    "drawdown_pct": trailing_drawdown,
+                    "threshold_pct": risk.trailing_take_profit_pct,
+                    "highest_price": position.highest_price,
+                },
+            ),
         ]
         return (
             conditions,
@@ -668,6 +970,8 @@ class RuleEngine:
             if take_profit_hit
             else "stop_loss"
             if stop_loss_hit
+            else "trailing_take_profit"
+            if trailing_take_profit_hit
             else None,
         )
 
@@ -689,6 +993,12 @@ class RuleEngine:
                 "sell",
                 "stop_loss_triggered",
                 "Sell recommendation: stop-loss threshold reached.",
+            )
+        if exit_reason == "trailing_take_profit":
+            return (
+                "sell",
+                "trailing_take_profit_triggered",
+                "Sell recommendation: trailing take-profit drawdown reached.",
             )
         if side == "sell":
             return (
@@ -755,8 +1065,11 @@ class RuleEngine:
     ) -> list[RuleStrategyConditionCheck]:
         market, risk = request.market, request.config.risk
         position_limit_blocked = (
-            action == "buy" and market.open_position_count >= risk.max_positions
+            action == "buy"
+            and market.position.quantity == 0
+            and market.open_position_count >= risk.max_positions
         )
+        capacity_blocked = action == "buy" and sizing.requested_quote <= 0
         capital_blocked = (
             action == "buy" and sizing.requested_quote > sizing.affordable_quote
         )
@@ -774,6 +1087,19 @@ class RuleEngine:
                 values={
                     "open_position_count": market.open_position_count,
                     "max_positions": risk.max_positions,
+                },
+            ),
+            RuleStrategyConditionCheck(
+                code="position_capacity",
+                category="risk",
+                state="blocked" if capacity_blocked else "not_triggered",
+                detail="total or symbol position allocation is exhausted"
+                if capacity_blocked
+                else "position allocation permits an entry",
+                values={
+                    "requested_quote": sizing.requested_quote,
+                    "max_total_position_pct": risk.max_total_position_pct,
+                    "max_symbol_position_pct": risk.max_symbol_position_pct,
                 },
             ),
             RuleStrategyConditionCheck(
@@ -804,13 +1130,41 @@ class RuleEngine:
 
     def _sizing(self, request: RuleStrategyEvaluationRequest) -> RuleStrategySizing:
         market, risk = request.market, request.config.risk
-        requested = risk.order_quote_amount
+        current_symbol_quote = market.position.quantity * market.price
+        total_limit = (
+            market.equity_quote * risk.max_total_position_pct
+            if risk.max_total_position_pct < 1
+            else math.inf
+        )
+        symbol_limit = (
+            market.equity_quote * risk.max_symbol_position_pct
+            if risk.max_symbol_position_pct < 1
+            else math.inf
+        )
+        remaining_total = max(0.0, total_limit - market.total_position_quote)
+        remaining_symbol = max(0.0, symbol_limit - current_symbol_quote)
+        requested = min(risk.order_quote_amount, remaining_total, remaining_symbol)
         return RuleStrategySizing(
             mode="fixed_quote",
             requested_quote=requested,
-            max_allowed_quote=market.equity_quote * risk.leverage,
+            max_allowed_quote=min(
+                market.equity_quote * risk.leverage,
+                remaining_total,
+                remaining_symbol,
+            ),
             affordable_quote=market.quote_balance * risk.leverage,
             quantity=requested / market.price,
+        )
+
+    @staticmethod
+    def _can_add_to_winner(request: RuleStrategyEvaluationRequest) -> bool:
+        risk = request.config.risk
+        position = request.market.position
+        return (
+            risk.add_to_winners
+            and position.entry_price is not None
+            and request.market.price > position.entry_price
+            and position.addition_count < risk.max_additions
         )
 
     def _funding(
@@ -822,7 +1176,7 @@ class RuleEngine:
         position = request.market.position
         current_notional = position.quantity * request.market.price
         projected_notional = (
-            sizing.requested_quote
+            current_notional + sizing.requested_quote
             if action == "buy"
             else 0.0
             if action == "sell"

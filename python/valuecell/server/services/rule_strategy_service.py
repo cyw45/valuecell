@@ -247,9 +247,14 @@ class RuleStrategyService:
         account = (
             None
             if is_demo
-            else self._account_from_history(strategy, tenant_id, config)
+            else self._mark_account_for_cycle(
+                self._account_from_history(strategy, tenant_id, config),
+                [market for _, market in market_inputs],
+            )
         )
         evaluated: list[tuple[RuleStrategyMarketSnapshot, dict[str, Any]]] = []
+        if not is_demo:
+            assert account is not None
         for candle_input, market in market_inputs:
             candle_sets = (
                 candle_input
@@ -669,6 +674,39 @@ class RuleStrategyService:
         }
 
     @staticmethod
+    def _mark_account_for_cycle(
+        account: RuleStrategyPaperAccount,
+        markets: list[RuleStrategyMarketSnapshot],
+    ) -> RuleStrategyPaperAccount:
+        prices = {market.symbol: market.price for market in markets}
+        positions = {
+            symbol: item.model_copy(
+                update={
+                    "mark_price": prices.get(symbol, item.mark_price),
+                    "highest_price": max(
+                        item.highest_price or item.entry_price,
+                        prices.get(symbol, item.mark_price),
+                    ),
+                }
+            )
+            for symbol, item in account.positions.items()
+        }
+        unrealized = sum(
+            item.quantity * (item.mark_price - item.entry_price)
+            for item in positions.values()
+        )
+        equity = account.quote_balance + sum(
+            item.quantity * item.mark_price for item in positions.values()
+        )
+        return account.model_copy(
+            update={
+                "positions": positions,
+                "unrealized_pnl_quote": unrealized,
+                "equity_quote": equity,
+            }
+        )
+
+    @staticmethod
     def _engine_market(
         account: RuleStrategyPaperAccount,
         market: RuleStrategyMarketSnapshot,
@@ -676,7 +714,15 @@ class RuleStrategyService:
     ) -> RuleStrategyEngineMarketSnapshot:
         position = account.positions.get(market.symbol)
         marked_positions = {
-            symbol: item.model_copy(update={"mark_price": market.price})
+            symbol: item.model_copy(
+                update={
+                    "mark_price": market.price,
+                    "highest_price": max(
+                        item.highest_price or item.entry_price,
+                        market.price,
+                    ),
+                }
+            )
             if symbol == market.symbol
             else item
             for symbol, item in account.positions.items()
@@ -693,9 +739,18 @@ class RuleStrategyService:
             # from creating an unaudited negative cash balance.
             quote_balance=account.quote_balance / leverage,
             open_position_count=len(marked_positions),
+            total_position_quote=sum(
+                item.quantity * item.mark_price for item in marked_positions.values()
+            ),
             position=RuleStrategyPosition(
                 quantity=position.quantity if position else 0.0,
                 entry_price=position.entry_price if position else None,
+                highest_price=(
+                    max(position.highest_price or position.entry_price, market.price)
+                    if position
+                    else None
+                ),
+                addition_count=position.addition_count if position else 0,
             ),
         )
 
@@ -717,7 +772,33 @@ class RuleStrategyService:
             quantity = quote_amount / market.price
             if quote_amount > 0 and existing is None:
                 positions[market.symbol] = RuleStrategyPaperPosition(
-                    quantity=quantity, entry_price=market.price, mark_price=market.price
+                    quantity=quantity,
+                    entry_price=market.price,
+                    mark_price=market.price,
+                    highest_price=market.price,
+                )
+                fill = {
+                    "symbol": market.symbol,
+                    "price": market.price,
+                    "quantity": quantity,
+                    "quote_amount": quote_amount,
+                    "realized_pnl_quote": 0.0,
+                }
+                quote_balance = account.quote_balance - quote_amount
+            elif quote_amount > 0 and existing is not None:
+                combined_quantity = existing.quantity + quantity
+                combined_cost = (
+                    existing.quantity * existing.entry_price + quote_amount
+                )
+                positions[market.symbol] = RuleStrategyPaperPosition(
+                    quantity=combined_quantity,
+                    entry_price=combined_cost / combined_quantity,
+                    mark_price=market.price,
+                    highest_price=max(
+                        existing.highest_price or existing.entry_price,
+                        market.price,
+                    ),
+                    addition_count=existing.addition_count + 1,
                 )
                 fill = {
                     "symbol": market.symbol,
@@ -746,7 +827,15 @@ class RuleStrategyService:
             quote_balance = account.quote_balance
 
         positions = {
-            symbol: item.model_copy(update={"mark_price": market.price})
+            symbol: item.model_copy(
+                update={
+                    "mark_price": market.price,
+                    "highest_price": max(
+                        item.highest_price or item.entry_price,
+                        market.price,
+                    ),
+                }
+            )
             if symbol == market.symbol
             else item
             for symbol, item in positions.items()
@@ -871,7 +960,7 @@ class RuleStrategyService:
             "description": strategy.description,
             "status": strategy.status,
             "mode": config.execution.environment,
-            "config": strategy.config,
+            "config": config.model_dump(mode="json"),
             "execution_generation": strategy.execution_generation,
             "account": self._account_from_history(
                 strategy, strategy.tenant_id, config

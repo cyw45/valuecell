@@ -9,6 +9,8 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyConfig,
     RuleStrategyEngineMarketSnapshot,
     RuleStrategyMarketSnapshot,
+    RuleStrategyPaperAccount,
+    RuleStrategyPaperPosition,
     RuleStrategyPosition,
 )
 from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
@@ -194,6 +196,8 @@ def test_paper_evaluations_use_server_account_and_record_buy_then_sell_pnl():
                 "quantity": 1.25,
                 "entry_price": 80.0,
                 "mark_price": 80.0,
+                "highest_price": 80.0,
+                "addition_count": 0,
             }
         },
         "realized_pnl_quote": 0.0,
@@ -315,6 +319,132 @@ def test_batch_cycle_uses_fixed_amount_and_blocks_unaffordable_entries():
     account = results[-1]["account"]
     assert account["quote_balance"] == 50.0
     assert set(account["positions"]) == {"BTC-USDT"}
+
+
+def test_cycle_marking_uses_all_current_prices_and_persists_high_watermarks():
+    account = RuleStrategyPaperAccount(
+        initial_capital_quote=1_000,
+        quote_balance=700,
+        positions={
+            "BTC-USDT": RuleStrategyPaperPosition(
+                quantity=1,
+                entry_price=100,
+                mark_price=105,
+                highest_price=110,
+            ),
+            "ETH-USDT": RuleStrategyPaperPosition(
+                quantity=2,
+                entry_price=100,
+                mark_price=90,
+                highest_price=100,
+            ),
+        },
+        realized_pnl_quote=0,
+        unrealized_pnl_quote=-5,
+        equity_quote=995,
+    )
+
+    marked = RuleStrategyService._mark_account_for_cycle(
+        account,
+        [
+            RuleStrategyMarketSnapshot(symbol="BTC-USDT", price=120, funding_rate=0),
+            RuleStrategyMarketSnapshot(symbol="ETH-USDT", price=130, funding_rate=0),
+        ],
+    )
+
+    assert marked.positions["BTC-USDT"].mark_price == 120
+    assert marked.positions["BTC-USDT"].highest_price == 120
+    assert marked.positions["ETH-USDT"].mark_price == 130
+    assert marked.positions["ETH-USDT"].highest_price == 130
+    assert marked.equity_quote == 1_080
+
+    persisted, fill = RuleStrategyService._apply_result(
+        marked,
+        RuleStrategyMarketSnapshot(symbol="BTC-USDT", price=120, funding_rate=0),
+        {"action": "no_op", "sizing": {"requested_quote": 0}},
+    )
+    assert fill is None
+    assert persisted.positions["BTC-USDT"].highest_price == 120
+
+
+def test_legacy_strategy_detail_returns_normalized_risk_defaults():
+    client, _ = _client()
+    strategy_id = _create_strategy(client)
+
+    detail = client.get(f"/rule-strategies/{strategy_id}")
+
+    assert detail.status_code == 200
+    risk = detail.json()["data"]["config"]["risk"]
+    assert risk["trailing_take_profit_pct"] is None
+    assert risk["max_total_position_pct"] == 1
+    assert risk["max_symbol_position_pct"] == 1
+    assert risk["add_to_winners"] is False
+    assert risk["max_additions"] == 0
+
+
+def test_paper_addition_updates_weighted_basis_high_watermark_and_count():
+    account = RuleStrategyPaperAccount(
+        initial_capital_quote=1_000,
+        quote_balance=900,
+        positions={
+            "BTC-USDT": RuleStrategyPaperPosition(
+                quantity=1,
+                entry_price=100,
+                mark_price=120,
+                highest_price=130,
+            )
+        },
+        equity_quote=1_020,
+    )
+
+    updated, fill = RuleStrategyService._apply_result(
+        account,
+        RuleStrategyMarketSnapshot(symbol="BTC-USDT", price=120),
+        {"action": "buy", "sizing": {"requested_quote": 60}},
+    )
+
+    position = updated.positions["BTC-USDT"]
+    assert position.quantity == 1.5
+    assert position.entry_price == 106.66666666666667
+    assert position.mark_price == 120
+    assert position.highest_price == 130
+    assert position.addition_count == 1
+    assert updated.quote_balance == 840
+    assert fill is not None
+    assert fill["quantity"] == 0.5
+    assert fill["quote_amount"] == 60
+
+
+def test_engine_market_updates_high_watermark_and_total_position_value():
+    account = RuleStrategyPaperAccount(
+        initial_capital_quote=1_000,
+        quote_balance=700,
+        positions={
+            "BTC-USDT": RuleStrategyPaperPosition(
+                quantity=2,
+                entry_price=100,
+                mark_price=110,
+                highest_price=115,
+                addition_count=1,
+            ),
+            "ETH-USDT": RuleStrategyPaperPosition(
+                quantity=1,
+                entry_price=50,
+                mark_price=55,
+            ),
+        },
+        equity_quote=975,
+    )
+
+    market = RuleStrategyService._engine_market(
+        account,
+        RuleStrategyMarketSnapshot(symbol="BTC-USDT", price=120),
+        leverage=1,
+    )
+
+    assert market.position.highest_price == 120
+    assert market.position.addition_count == 1
+    assert market.total_position_quote == 295
 
 
 def test_okx_demo_batch_cycle_journals_signals_without_mutating_paper_account():
