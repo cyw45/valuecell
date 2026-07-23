@@ -1,0 +1,146 @@
+services:
+  valuecell-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${VALUECELL_POSTGRES_DB:?VALUECELL_POSTGRES_DB is required}
+      POSTGRES_USER: ${VALUECELL_POSTGRES_USER:?VALUECELL_POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${VALUECELL_POSTGRES_PASSWORD:?VALUECELL_POSTGRES_PASSWORD is required}
+    volumes:
+      - valuecell-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.production.Dockerfile
+    image: valuecell-backend:latest
+    env_file:
+      - ./docker/runtime/.env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      VALUECELL_DATABASE_URL: postgresql+psycopg2://${VALUECELL_POSTGRES_USER:?VALUECELL_POSTGRES_USER is required}:${VALUECELL_POSTGRES_PASSWORD:?VALUECELL_POSTGRES_PASSWORD is required}@valuecell-db:5432/${VALUECELL_POSTGRES_DB:?VALUECELL_POSTGRES_DB is required}
+      VALUECELL_QUANT_ONLY_MODE: "true"
+      WORLD_MONITOR_ENABLED: "true"
+      WORLD_MONITOR_API_URL: http://worldmonitor:8080
+      WORLD_MONITOR_SYNC_INTERVAL_S: ${WORLD_MONITOR_SYNC_INTERVAL_S:-300}
+    depends_on:
+      valuecell-db:
+        condition: service_healthy
+      worldmonitor:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${VALUECELL_BACKEND_PORT:-18000}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_WORLDMONITOR_URL: ${WORLDMONITOR_PUBLIC_URL:-}
+    image: valuecell-frontend:latest
+    depends_on:
+      - backend
+    ports:
+      - "127.0.0.1:${VALUECELL_FRONTEND_PORT:-18080}:80"
+    restart: unless-stopped
+
+  worldmonitor:
+    build:
+      context: ${WORLDMONITOR_DIR:-../worldmonitor}
+      dockerfile: Dockerfile
+    image: worldmonitor:latest
+    environment:
+      UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80
+      UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
+      LOCAL_API_PORT: "46123"
+      LOCAL_API_MODE: docker
+      LOCAL_API_CLOUD_FALLBACK: "false"
+      WS_RELAY_URL: http://worldmonitor-ais-relay:3004
+      RELAY_SHARED_SECRET: ${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      RELAY_SHARED_SECRET: ${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      EIA_API_KEY: ${EIA_API_KEY:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      ACLED_EMAIL: ${ACLED_EMAIL:-}
+      ACLED_PASSWORD: ${ACLED_PASSWORD:-}
+      NASA_FIRMS_API_KEY: ${NASA_FIRMS_API_KEY:-}
+    depends_on:
+      worldmonitor-redis-rest:
+        condition: service_started
+      worldmonitor-ais-relay:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${WORLDMONITOR_PORT:-13000}:8080"
+    restart: unless-stopped
+
+  worldmonitor-redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - worldmonitor-redis-data:/data
+    restart: unless-stopped
+
+  worldmonitor-redis-rest:
+    build:
+      context: ${WORLDMONITOR_DIR:-../worldmonitor}/docker
+      dockerfile: Dockerfile.redis-rest
+    image: worldmonitor-redis-rest:latest
+    environment:
+      SRH_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
+      SRH_CONNECTION_STRING: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@worldmonitor-redis:6379
+    depends_on:
+      - worldmonitor-redis
+    restart: unless-stopped
+
+  worldmonitor-ais-relay:
+    build:
+      context: ${WORLDMONITOR_DIR:-../worldmonitor}
+      dockerfile: Dockerfile.relay
+    image: worldmonitor-ais-relay:latest
+    environment:
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80
+      UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
+      UPSTASH_ALLOW_INSECURE_HTTP: "true"
+      PORT: "3004"
+    depends_on:
+      - worldmonitor-redis-rest
+    restart: unless-stopped
+
+  worldmonitor-seeders:
+    build:
+      context: ${WORLDMONITOR_DIR:-../worldmonitor}
+      dockerfile: Dockerfile.seeders
+    image: worldmonitor-seeders:latest
+    environment:
+      REDIS_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
+      UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      EIA_API_KEY: ${EIA_API_KEY:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      ACLED_EMAIL: ${ACLED_EMAIL:-}
+      ACLED_PASSWORD: ${ACLED_PASSWORD:-}
+      NASA_FIRMS_API_KEY: ${NASA_FIRMS_API_KEY:-}
+      WM_SEED_INTERVAL_S: ${WM_SEED_INTERVAL_S:-900}
+    depends_on:
+      - worldmonitor-redis-rest
+    restart: unless-stopped
+
+volumes:
+  valuecell-postgres-data:
+  worldmonitor-redis-data:

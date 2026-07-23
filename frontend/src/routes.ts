@@ -27,4 +27,5 @@ export default [
   // Quant-focused routes. Legacy AI Agent/LLM setup pages are intentionally
   // not exposed in the deployed SaaS workspace.
   route("/research/polymarket", "app/research/polymarket.tsx"),
+  route("/research/world-intelligence", "app/research/world-monitor.tsx"),
 ] satisfies RouteConfig;
