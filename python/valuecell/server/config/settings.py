@@ -195,6 +195,18 @@ class Settings:
         self.QUANT_ONLY_MODE = (
             os.getenv("VALUECELL_QUANT_ONLY_MODE", "false").lower() == "true"
         )
+        self.WORLD_MONITOR_ENABLED = (
+            os.getenv("WORLD_MONITOR_ENABLED", "false").lower() == "true"
+        )
+        self.WORLD_MONITOR_API_URL = os.getenv(
+            "WORLD_MONITOR_API_URL", "http://worldmonitor:8080"
+        )
+        self.WORLD_MONITOR_SYNC_INTERVAL_S = _positive_int_env(
+            "WORLD_MONITOR_SYNC_INTERVAL_S", 300
+        )
+        self.WORLD_MONITOR_TIMEOUT_S = _positive_float_env(
+            "WORLD_MONITOR_TIMEOUT_S", 20.0
+        )
 
         # CORS Configuration
         cors_origins = os.getenv("CORS_ORIGINS", "*")

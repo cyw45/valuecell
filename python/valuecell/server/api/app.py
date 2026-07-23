@@ -36,7 +36,9 @@ from ..services.demo_execution_reconciliation import (
 from ..db.connection import get_database_manager
 from ..db.models.tenant import Tenant
 from .routers.system import create_system_router
+from .routers.world_intelligence import create_world_intelligence_router
 from .schemas.base import AppInfoData, SuccessResponse
+from ..services.world_intelligence_service import WorldMonitorIntelligenceService
 
 
 async def reconcile_active_tenant_intents() -> None:
@@ -57,6 +59,28 @@ async def reconcile_active_tenant_intents() -> None:
         logger.warning("Demo execution reconciliation deferred: {}", exc)
     finally:
         session.close()
+
+
+async def refresh_world_intelligence_forever(interval_s: int) -> None:
+    """Continuously import WorldMonitor evidence without stopping the API on outages."""
+    service = WorldMonitorIntelligenceService()
+    while True:
+        try:
+            report = await service.sync()
+            if report.errors:
+                logger.warning(
+                    "WorldMonitor refresh completed with {} unavailable feeds",
+                    len(report.errors),
+                )
+            else:
+                logger.info(
+                    "WorldMonitor refresh completed: {} new, {} unchanged",
+                    report.inserted_count,
+                    report.unchanged_count,
+                )
+        except Exception as exc:
+            logger.warning("WorldMonitor refresh deferred: {}", exc)
+        await asyncio.sleep(interval_s)
 
 
 def _active_tenant_ids(session) -> list[str]:
@@ -200,6 +224,13 @@ def create_app() -> FastAPI:
 
         # Market data is a backend-owned dependency. Begin prewarming at startup
         # without blocking the API while an upstream exchange is unavailable.
+        world_intelligence_task = None
+        if settings.WORLD_MONITOR_ENABLED:
+            world_intelligence_task = asyncio.create_task(
+                refresh_world_intelligence_forever(
+                    settings.WORLD_MONITOR_SYNC_INTERVAL_S
+                )
+            )
         market_service = get_crypto_market_service()
 
         async def _refresh_default_market_snapshot() -> None:
@@ -257,6 +288,12 @@ def create_app() -> FastAPI:
         logger.info("ValueCell Server shutting down...")
         if _scheduler is not None:
             await _scheduler.stop()
+        if world_intelligence_task is not None:
+            world_intelligence_task.cancel()
+            try:
+                await world_intelligence_task
+            except asyncio.CancelledError:
+                pass
         market_refresh_task.cancel()
         try:
             await market_refresh_task
@@ -332,6 +369,7 @@ def _add_routes(app: FastAPI, settings) -> None:
 
     # Include system router
     app.include_router(create_system_router(), prefix=API_PREFIX)
+    app.include_router(create_world_intelligence_router(), prefix=API_PREFIX)
 
     app.include_router(create_saas_auth_router(), prefix=API_PREFIX)
     app.include_router(create_saas_admin_router(), prefix=API_PREFIX)

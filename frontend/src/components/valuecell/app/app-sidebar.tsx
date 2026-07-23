@@ -11,6 +11,7 @@ import {
   Landmark,
   LayoutDashboard,
   LogOut,
+  RadioTower,
   Settings,
   SlidersHorizontal,
   Tags,
@@ -44,6 +45,7 @@ const WORKBENCH_NAVIGATION: NavigationItem[] = [
   { label: "策略配置", to: "/strategies", icon: SlidersHorizontal },
   { label: "订单与成交", to: "/trades", icon: BarChart3 },
   { label: "行情分析", to: "/charts", icon: CandlestickChart },
+  { label: "全球情报", to: "/research/world-intelligence", icon: RadioTower },
   { label: "资金概览", to: "/funding", icon: Landmark },
 ];
 
@@ -107,7 +109,7 @@ const AppSidebar: FC = () => {
   return (
     <aside
       className={cn(
-        "relative flex shrink-0 flex-col overflow-hidden border-r bg-card transition-[width] duration-200 ease-out",
+        "relative hidden shrink-0 flex-col overflow-hidden border-r bg-card transition-[width] duration-200 ease-out lg:flex",
         collapsed ? "w-16" : "w-64",
       )}
       aria-label={t("saas.navigation.primary")}

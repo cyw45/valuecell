@@ -32,6 +32,7 @@ from .saas_control import (
 )
 from .user_profile import ProfileCategory, UserProfile
 from .watchlist import Watchlist, WatchlistItem
+from .world_intelligence import WorldIntelligenceSnapshot
 
 # Export all models
 __all__ = [
@@ -65,4 +66,5 @@ __all__ = [
     "ProfitSettlement",
     "ServicePlan",
     "TenantSubscription",
+    "WorldIntelligenceSnapshot",
 ]
