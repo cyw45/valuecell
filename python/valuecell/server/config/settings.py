@@ -201,6 +201,7 @@ class Settings:
         self.WORLD_MONITOR_API_URL = os.getenv(
             "WORLD_MONITOR_API_URL", "http://worldmonitor:8080"
         )
+        self.WORLD_MONITOR_API_TOKEN = os.getenv("WORLD_MONITOR_API_TOKEN", "")
         self.WORLD_MONITOR_SYNC_INTERVAL_S = _positive_int_env(
             "WORLD_MONITOR_SYNC_INTERVAL_S", 300
         )

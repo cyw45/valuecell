@@ -23,8 +23,9 @@ only if the WorldMonitor checkout is elsewhere.
    credentials.
 2. Copy the variable names in `docker/runtime/worldmonitor.env.example` into
    `docker/runtime/.env`, then set the values on the server.
-3. Generate `RELAY_SHARED_SECRET`, `REDIS_PASSWORD`, and `REDIS_TOKEN` with
-   `openssl rand -hex 32`. They must be different values.
+3. Generate `RELAY_SHARED_SECRET`, `REDIS_PASSWORD`, `REDIS_TOKEN`, and
+   `WORLD_MONITOR_API_TOKEN` with `openssl rand -hex 32`. They must all be
+   different values.
 4. Add the provider credentials already obtained for FRED, EIA, NASA FIRMS,
    ACLED, AISStream, and Finnhub. Do not add flight-provider credentials.
 5. Set `WORLDMONITOR_PUBLIC_URL` only when a reverse proxy exposes the optional

@@ -47,6 +47,7 @@ class WorldMonitorIntelligenceService:
         settings = get_settings()
         self.enabled = settings.WORLD_MONITOR_ENABLED
         self.base_url = settings.WORLD_MONITOR_API_URL.rstrip("/")
+        self.api_token = settings.WORLD_MONITOR_API_TOKEN
         self.timeout_s = settings.WORLD_MONITOR_TIMEOUT_S
 
     async def sync(self) -> WorldMonitorSyncReport:
@@ -76,6 +77,8 @@ class WorldMonitorIntelligenceService:
         """Collect independent feeds concurrently while preserving feed-level errors."""
         timeout = httpx.Timeout(self.timeout_s)
         headers = {"User-Agent": "ValueCell-WorldMonitor-Connector/1.0"}
+        if self.api_token:
+            headers["X-WorldMonitor-Key"] = self.api_token
         async with httpx.AsyncClient(
             base_url=self.base_url,
             headers=headers,

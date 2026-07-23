@@ -32,6 +32,7 @@ services:
       VALUECELL_QUANT_ONLY_MODE: "true"
       WORLD_MONITOR_ENABLED: "true"
       WORLD_MONITOR_API_URL: http://worldmonitor:8080
+      WORLD_MONITOR_API_TOKEN: ${WORLD_MONITOR_API_TOKEN:?WORLD_MONITOR_API_TOKEN is required}
       WORLD_MONITOR_SYNC_INTERVAL_S: ${WORLD_MONITOR_SYNC_INTERVAL_S:-300}
     depends_on:
       valuecell-db:
@@ -65,12 +66,13 @@ services:
       UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80
       UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
       LOCAL_API_PORT: "46123"
+      LOCAL_API_TOKEN: ${WORLD_MONITOR_API_TOKEN:?WORLD_MONITOR_API_TOKEN is required}
+      WORLDMONITOR_VALID_KEYS: ${WORLD_MONITOR_API_TOKEN:?WORLD_MONITOR_API_TOKEN is required}
       LOCAL_API_MODE: docker
       LOCAL_API_CLOUD_FALLBACK: "false"
       WS_RELAY_URL: http://worldmonitor-ais-relay:3004
       RELAY_SHARED_SECRET: ${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}
       AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
-      RELAY_SHARED_SECRET: ${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
       EIA_API_KEY: ${EIA_API_KEY:-}
       FRED_API_KEY: ${FRED_API_KEY:-}
@@ -113,6 +115,7 @@ services:
     environment:
       AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      RELAY_SHARED_SECRET: ${RELAY_SHARED_SECRET:?RELAY_SHARED_SECRET is required}
       UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80
       UPSTASH_REDIS_REST_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
       UPSTASH_ALLOW_INSECURE_HTTP: "true"
@@ -128,11 +131,12 @@ services:
       target: builder
     image: worldmonitor-seeders:latest
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      while true; do
-        ./scripts/run-seeders.sh || true
-        sleep "$${WM_SEED_INTERVAL_S}"
-      done
+    command:
+      - |
+        while true; do
+          ./scripts/run-seeders.sh || true
+          sleep "$${WM_SEED_INTERVAL_S}"
+        done
     environment:
       REDIS_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
       UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80

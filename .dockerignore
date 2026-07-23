@@ -48,6 +48,11 @@
 **/*.key
 **/*secret*
 **/*credential*
+# Tracked Python credential modules are application source, not secret files.
+# Keep runtime .env/key material excluded while allowing only these imports.
+!python/valuecell/server/api/routers/tenant_credential.py
+!python/valuecell/server/db/models/tenant_credential.py
+!python/valuecell/server/services/tenant_credential_service.py
 **/*.db
 **/*.sqlite
 **/*.sqlite3
