@@ -20,12 +20,30 @@ class WorldIntelligenceStatusData(BaseModel):
     feeds: list[WorldIntelligenceFeedStatus]
 
 
+class WorldIntelligenceSummaryMetric(BaseModel):
+    """A compact fact shown in the Chinese intelligence brief."""
+
+    label: str
+    value: str
+
+
+class WorldIntelligenceSummaryData(BaseModel):
+    """Deterministic Chinese summary derived from a source snapshot."""
+
+    title: str
+    level: str
+    highlights: list[str] = Field(default_factory=list)
+    metrics: list[WorldIntelligenceSummaryMetric] = Field(default_factory=list)
+    data_notice: str | None = None
+
+
 class WorldIntelligenceSnapshotData(BaseModel):
     """A stored source response retained for research traceability."""
 
     id: int
     feed: str
     payload: Any
+    summary_zh: WorldIntelligenceSummaryData
     captured_at: datetime
 
 

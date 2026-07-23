@@ -11,10 +11,24 @@ export type WorldIntelligenceStatus = {
   feeds: WorldIntelligenceFeedStatus[];
 };
 
+export type WorldIntelligenceSummaryMetric = {
+  label: string;
+  value: string;
+};
+
+export type WorldIntelligenceSummary = {
+  title: string;
+  level: string;
+  highlights: string[];
+  metrics: WorldIntelligenceSummaryMetric[];
+  data_notice: string | null;
+};
+
 export type WorldIntelligenceSnapshot = {
   id: number;
   feed: string;
   payload: unknown;
+  summary_zh: WorldIntelligenceSummary;
   captured_at: string;
 };
 
@@ -41,7 +55,7 @@ export function useWorldIntelligenceSnapshots() {
     queryFn: async () => {
       const response = await apiClient.get<
         ApiResponse<WorldIntelligenceSnapshotList>
-      >("/world-intelligence/snapshots?limit=12");
+      >("/world-intelligence/snapshots?limit=4&latest_per_feed=true");
       return response.data;
     },
     refetchInterval: 60_000,

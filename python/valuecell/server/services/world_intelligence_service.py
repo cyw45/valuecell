@@ -40,6 +40,25 @@ class WorldMonitorSyncReport:
     errors: dict[str, str]
 
 
+@dataclass(frozen=True)
+class WorldIntelligenceMetric:
+    """One compact metric rendered in the Chinese intelligence brief."""
+
+    label: str
+    value: str
+
+
+@dataclass(frozen=True)
+class WorldIntelligenceSummary:
+    """Deterministic Chinese-language interpretation of one source payload."""
+
+    title: str
+    level: str
+    highlights: list[str]
+    metrics: list[WorldIntelligenceMetric]
+    data_notice: str | None = None
+
+
 class WorldMonitorIntelligenceService:
     """Fetch, deduplicate, and store WorldMonitor evidence snapshots."""
 
@@ -150,8 +169,39 @@ class WorldMonitorIntelligenceService:
         session: Session,
         feed: str | None,
         limit: int,
+        *,
+        latest_per_feed: bool = False,
     ) -> list[WorldIntelligenceSnapshot]:
         """Return persisted evidence newest first for a research consumer."""
+        if latest_per_feed and feed is not None:
+            snapshot = (
+                session.query(WorldIntelligenceSnapshot)
+                .filter(WorldIntelligenceSnapshot.feed == feed)
+                .order_by(
+                    WorldIntelligenceSnapshot.captured_at.desc(),
+                    WorldIntelligenceSnapshot.id.desc(),
+                )
+                .first()
+            )
+            return [snapshot] if snapshot is not None else []
+        if latest_per_feed and feed is None:
+            snapshots = []
+            for feed_name in WORLD_MONITOR_FEEDS:
+                snapshot = (
+                    session.query(WorldIntelligenceSnapshot)
+                    .filter(WorldIntelligenceSnapshot.feed == feed_name)
+                    .order_by(
+                        WorldIntelligenceSnapshot.captured_at.desc(),
+                        WorldIntelligenceSnapshot.id.desc(),
+                    )
+                    .first()
+                )
+                if snapshot is not None:
+                    snapshots.append(snapshot)
+            return sorted(
+                snapshots, key=lambda item: item.captured_at, reverse=True
+            )[:limit]
+
         query = session.query(WorldIntelligenceSnapshot)
         if feed is not None:
             query = query.filter(WorldIntelligenceSnapshot.feed == feed)
@@ -173,6 +223,211 @@ class WorldMonitorIntelligenceService:
             )
             latest[feed] = snapshot[0] if snapshot is not None else None
         return latest
+
+
+_REGION_NAMES = {
+    "AF": "阿富汗",
+    "BR": "巴西",
+    "CN": "中国",
+    "CU": "古巴",
+    "EG": "埃及",
+    "IL": "以色列",
+    "IN": "印度",
+    "IQ": "伊拉克",
+    "IR": "伊朗",
+    "KP": "朝鲜",
+    "LB": "黎巴嫩",
+    "MM": "缅甸",
+    "MX": "墨西哥",
+    "PK": "巴基斯坦",
+    "RU": "俄罗斯",
+    "SY": "叙利亚",
+    "TR": "土耳其",
+    "TW": "中国台湾",
+    "UA": "乌克兰",
+    "VE": "委内瑞拉",
+    "YE": "也门",
+}
+
+_SEVERITY_NAMES = {
+    "CRITICAL": "严重",
+    "HIGH": "高",
+    "MEDIUM": "中等",
+    "LOW": "低",
+}
+
+_THEATER_NAMES = {
+    "Global Markets": "全球市场",
+    "global": "全球",
+}
+
+
+_SIGNAL_TRANSLATIONS = {
+    "SEC announces an enforcement leadership change": (
+        "美国证券交易委员会（SEC）宣布执法部门领导层发生人事变动。"
+    ),
+    "SEC: SEC Announces Departure of Principal Deputy Director of Enforcement Sam Waldon": (
+        "美国证券交易委员会（SEC）宣布执法部门首席副主任 Sam Waldon 离任。"
+    ),
+}
+
+
+def summarize_world_intelligence(
+    feed: str, payload: Any
+) -> WorldIntelligenceSummary:
+    """Build a concise Chinese brief without inventing facts beyond the payload."""
+    source = payload if isinstance(payload, dict) else {}
+    if feed == "risk_scores":
+        scores = sorted(
+            _dict_items(source.get("ciiScores")),
+            key=lambda item: _safe_float(item.get("combinedScore")),
+            reverse=True,
+        )
+        strategic = next(
+            (
+                item
+                for item in _dict_items(source.get("strategicRisks"))
+                if item.get("region") == "global"
+            ),
+            {},
+        )
+        risk_score = strategic.get("score", "--")
+        top_risks = "、".join(
+            f"{_REGION_NAMES.get(str(item.get('region')), item.get('region', '未知地区'))} "
+            f"{item.get('combinedScore', '--')}"
+            for item in scores[:5]
+        )
+        notice_parts = []
+        if source.get("degraded"):
+            notice_parts.append("当前部分上游数据不可用，结果包含备用基线数据")
+        if source.get("stale"):
+            notice_parts.append("数据已超过新鲜度窗口")
+        notice = "；".join(notice_parts) + "。" if notice_parts else None
+        return WorldIntelligenceSummary(
+            title="全球风险概览",
+            level=_severity_name(strategic.get("level")),
+            highlights=[f"当前风险评分最高的地区：{top_risks}。"] if top_risks else [],
+            metrics=[
+                WorldIntelligenceMetric("全球风险分", str(risk_score)),
+                WorldIntelligenceMetric("覆盖地区", str(len(scores))),
+            ],
+            data_notice=notice,
+        )
+
+    if feed == "thermal_escalations":
+        clusters = _dict_items(source.get("clusters"))
+        countries: list[str] = []
+        for item in clusters:
+            name = _REGION_NAMES.get(
+                str(item.get("countryCode")), str(item.get("countryName", "未知地区"))
+            )
+            if name not in countries:
+                countries.append(name)
+        high_relevance = sum(
+            str(item.get("strategicRelevance", "")).endswith("HIGH")
+            for item in clusters
+        )
+        return WorldIntelligenceSummary(
+            title="热异常升级监测",
+            level="高" if high_relevance else "观察",
+            highlights=[f"热异常主要分布于：{'、'.join(countries[:5])}。"]
+            if countries
+            else [],
+            metrics=[
+                WorldIntelligenceMetric("异常簇", str(len(clusters))),
+                WorldIntelligenceMetric("高战略相关", str(high_relevance)),
+                WorldIntelligenceMetric(
+                    "观察窗口", f"{source.get('observationWindowHours', '--')} 小时"
+                ),
+            ],
+        )
+
+    if feed == "cross_source_signals":
+        signals = _dict_items(source.get("signals"))
+        highlights = [
+            _format_signal_highlight(item)
+            for item in signals[:5]
+        ]
+        level = max(
+            (_severity_name(item.get("severity")) for item in signals),
+            key=_severity_rank,
+            default="观察",
+        )
+        return WorldIntelligenceSummary(
+            title="跨源事件信号",
+            level=level,
+            highlights=highlights,
+            metrics=[WorldIntelligenceMetric("有效信号", str(len(signals)))],
+        )
+
+    if feed == "market_implications":
+        cards = _dict_items(source.get("cards"))
+        if not cards:
+            cards = _dict_items(source.get("implications"))
+        highlights = [_format_market_highlight(item) for item in cards[:5]]
+        return WorldIntelligenceSummary(
+            title="市场影响研判",
+            level="观察",
+            highlights=highlights,
+            metrics=[WorldIntelligenceMetric("影响线索", str(len(cards)))],
+            data_notice=None if cards else "当前周期未形成可展示的市场影响线索。",
+        )
+
+    return WorldIntelligenceSummary(
+        title="全球情报快照",
+        level="观察",
+        highlights=[],
+        metrics=[],
+        data_notice="暂不支持该情报类型的中文摘要。",
+    )
+
+
+def _dict_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _format_market_highlight(item: dict[str, Any]) -> str:
+    original = str(
+        item.get("summary")
+        or item.get("title")
+        or item.get("implication")
+        or "未提供市场影响摘要"
+    )
+    if any("\u4e00" <= character <= "\u9fff" for character in original):
+        return original
+    return f"市场影响线索需结合原始仪表盘复核。（原文：{original}）"
+
+
+def _format_signal_highlight(item: dict[str, Any]) -> str:
+    theater = _THEATER_NAMES.get(
+        str(item.get("theater")), str(item.get("theater", "全球"))
+    )
+    original = str(item.get("summary", "未提供事件摘要"))
+    translated = _SIGNAL_TRANSLATIONS.get(original)
+    if translated is None:
+        return f"{theater}：事件来源提供英文摘要，请在原始仪表盘复核。（原文：{original}）"
+    return f"{theater}：{translated}（原文：{original}）"
+
+
+def _severity_name(value: Any) -> str:
+    normalized = str(value or "").upper()
+    return next(
+        (label for key, label in _SEVERITY_NAMES.items() if key in normalized),
+        "观察",
+    )
+
+
+def _severity_rank(value: str) -> int:
+    return {"观察": 0, "低": 1, "中等": 2, "高": 3, "严重": 4}.get(value, 0)
 
 
 def _content_hash(payload: Any) -> str:

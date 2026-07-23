@@ -1,5 +1,7 @@
 """Read-only API for WorldMonitor evidence imported into ValueCell."""
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -9,12 +11,14 @@ from valuecell.server.api.schemas.world_intelligence import (
     WorldIntelligenceSnapshotData,
     WorldIntelligenceSnapshotListData,
     WorldIntelligenceStatusData,
+    WorldIntelligenceSummaryData,
 )
 from valuecell.server.config.settings import get_settings
 from valuecell.server.db.connection import get_db
 from valuecell.server.services.world_intelligence_service import (
     WORLD_MONITOR_FEEDS,
     WorldMonitorIntelligenceService,
+    summarize_world_intelligence,
 )
 
 
@@ -53,17 +57,27 @@ def create_world_intelligence_router() -> APIRouter:
     async def list_world_intelligence_snapshots(
         feed: str | None = Query(None),
         limit: int = Query(20, ge=1, le=100),
+        latest_per_feed: bool = Query(False),
         db: Session = Depends(get_db),
     ) -> SuccessResponse[WorldIntelligenceSnapshotListData]:
         if feed is not None and feed not in WORLD_MONITOR_FEEDS:
             raise HTTPException(status_code=400, detail="Unknown WorldMonitor feed")
-        snapshots = service.list_latest_snapshots(db, feed, limit)
+        snapshots = service.list_latest_snapshots(
+            db, feed, limit, latest_per_feed=latest_per_feed
+        )
         data = WorldIntelligenceSnapshotListData(
             snapshots=[
                 WorldIntelligenceSnapshotData(
                     id=snapshot.id,
                     feed=snapshot.feed,
                     payload=snapshot.payload,
+                    summary_zh=WorldIntelligenceSummaryData.model_validate(
+                        asdict(
+                            summarize_world_intelligence(
+                                snapshot.feed, snapshot.payload
+                            )
+                        )
+                    ),
                     captured_at=snapshot.captured_at,
                 )
                 for snapshot in snapshots
