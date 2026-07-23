@@ -124,11 +124,19 @@ services:
   worldmonitor-seeders:
     build:
       context: ${WORLDMONITOR_DIR:-../worldmonitor}
-      dockerfile: Dockerfile.seeders
+      dockerfile: Dockerfile
+      target: builder
     image: worldmonitor-seeders:latest
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      while true; do
+        ./scripts/run-seeders.sh || true
+        sleep "$${WM_SEED_INTERVAL_S}"
+      done
     environment:
       REDIS_TOKEN: ${REDIS_TOKEN:?REDIS_TOKEN is required}
       UPSTASH_REDIS_REST_URL: http://worldmonitor-redis-rest:80
+      SEED_TIMEOUT: "0"
       AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
       EIA_API_KEY: ${EIA_API_KEY:-}
