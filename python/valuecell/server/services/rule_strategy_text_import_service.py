@@ -43,19 +43,31 @@ class RuleStrategyTextImportService:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{provider_config.base_url.rstrip('/')}/chat/completions",
-                    headers={"Authorization": f"Bearer {provider_config.api_key}"},
-                    json={
-                        "model": provider_config.default_model,
-                        "temperature": 0,
-                        "messages": [
-                            {"role": "system", "content": self._system_prompt()},
-                            {"role": "user", "content": strategy_text},
-                        ],
-                    },
-                )
+            timeout = httpx.Timeout(60.0, connect=5.0)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                for attempt in range(2):
+                    try:
+                        response = await client.post(
+                            f"{provider_config.base_url.rstrip('/')}/chat/completions",
+                            headers={"Authorization": f"Bearer {provider_config.api_key}"},
+                            json={
+                                "model": provider_config.default_model,
+                                "temperature": 0,
+                                "messages": [
+                                    {"role": "system", "content": self._system_prompt()},
+                                    {"role": "user", "content": strategy_text},
+                                ],
+                            },
+                        )
+                        break
+                    except httpx.TimeoutException:
+                        if attempt == 1:
+                            raise
+                        logger.warning(
+                            "Strategy text import provider timed out; retrying once"
+                        )
+                else:  # pragma: no cover - the final timeout is re-raised above
+                    raise RuntimeError("strategy import retry loop exhausted")
                 response.raise_for_status()
                 content = str(response.json()["choices"][0]["message"]["content"])
             proposal = self._validate_proposal(self._parse_json_content(content))

@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -5,6 +6,85 @@ from valuecell.server.api.schemas.rule_strategy import RuleStrategyTextImportPro
 from valuecell.server.services.rule_strategy_text_import_service import (
     RuleStrategyTextImportService,
 )
+
+
+@pytest.mark.asyncio
+async def test_text_import_retries_one_transient_read_timeout(monkeypatch):
+    payload = {
+        "strategy_name": "均线策略",
+        "executable": True,
+        "config": {
+            "interval": "4h",
+            "program": {
+                "schema_version": 2,
+                "entry": {
+                    "op": "compare",
+                    "left": {"kind": "price", "interval": "4h", "source": "close"},
+                    "comparator": "gt",
+                    "right": {
+                        "kind": "indicator",
+                        "name": "ma",
+                        "interval": "4h",
+                        "period": 25,
+                    },
+                },
+            },
+            "risk": {"order_quote_amount": 100},
+        },
+        "summary": "四小时收盘价高于二十五期均线时买入。",
+        "unresolved_items": [],
+        "corrections": [],
+        "rejection_reasons": [],
+    }
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("provider stalled", request=request)
+        return httpx.Response(
+            200,
+            request=request,
+            json={"choices": [{"message": {"content": __import__("json").dumps(payload)}}]},
+        )
+
+    class ProviderConfig:
+        api_key = "test-key"
+        base_url = "https://provider.invalid/v1"
+        default_model = "test-model"
+
+    class ConfigManager:
+        primary_provider = "openai-compatible"
+
+        @staticmethod
+        def get_provider_config(provider: str):
+            assert provider == "openai-compatible"
+            return ProviderConfig()
+
+    monkeypatch.setattr(
+        "valuecell.config.manager.get_config_manager", lambda: ConfigManager()
+    )
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["timeout"].read == 60.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, **kwargs):
+            request = httpx.Request("POST", url)
+            return await handler(request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    proposal = await RuleStrategyTextImportService().parse("四小时收盘价高于MA25时买入")
+
+    assert proposal.executable is True
+    assert attempts == 2
 
 
 def test_text_import_json_is_validated_as_a_reviewable_strategy_draft():
