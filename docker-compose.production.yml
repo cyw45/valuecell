@@ -1,5 +1,6 @@
 services:
   valuecell-db:
+    profiles: ["internal-db"]
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${VALUECELL_POSTGRES_DB:?VALUECELL_POSTGRES_DB is required}
@@ -28,19 +29,19 @@ services:
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      VALUECELL_DATABASE_URL: postgresql+psycopg2://${VALUECELL_POSTGRES_USER:?VALUECELL_POSTGRES_USER is required}:${VALUECELL_POSTGRES_PASSWORD:?VALUECELL_POSTGRES_PASSWORD is required}@valuecell-db:5432/${VALUECELL_POSTGRES_DB:?VALUECELL_POSTGRES_DB is required}
+      VALUECELL_DATABASE_URL: ${VALUECELL_DATABASE_URL:?VALUECELL_DATABASE_URL is required}
       VALUECELL_QUANT_ONLY_MODE: "true"
       WORLD_MONITOR_ENABLED: "true"
       WORLD_MONITOR_API_URL: http://worldmonitor:8080
       WORLD_MONITOR_API_TOKEN: ${WORLD_MONITOR_API_TOKEN:?WORLD_MONITOR_API_TOKEN is required}
       WORLD_MONITOR_SYNC_INTERVAL_S: ${WORLD_MONITOR_SYNC_INTERVAL_S:-300}
     depends_on:
-      valuecell-db:
-        condition: service_healthy
       worldmonitor:
         condition: service_healthy
     ports:
       - "127.0.0.1:${VALUECELL_BACKEND_PORT:-18000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   frontend:
