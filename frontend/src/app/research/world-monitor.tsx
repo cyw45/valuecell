@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { buildWorldMonitorDashboardUrl } from "@/lib/world-monitor-url";
 
 const FEED_LABELS: Record<string, string> = {
   cross_source_signals: "跨源事件",
@@ -24,9 +25,9 @@ const FEED_LABELS: Record<string, string> = {
   thermal_escalations: "热异常升级",
 };
 
-const WORLDMONITOR_DASHBOARD_URL = `${
-  import.meta.env.VITE_WORLDMONITOR_URL || "http://127.0.0.1:3001"
-}/?lang=zh`;
+const WORLDMONITOR_DASHBOARD_URL = buildWorldMonitorDashboardUrl(
+  import.meta.env.VITE_WORLDMONITOR_URL,
+);
 
 function formatTimestamp(value: string | null) {
   if (!value) return "等待首次采集";
