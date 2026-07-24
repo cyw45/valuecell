@@ -125,7 +125,7 @@ export function useDeleteRuleStrategy(strategyId?: string) {
   const tenantId = useSaaSSession().tenantId;
   return useMutation({
     mutationFn: () =>
-      apiClient.delete<ApiResponse<{ strategy_id: string }>>(
+      apiClient.delete<ApiResponse<{ strategy_id: string; archived: boolean }>>(
         `/rule-strategies/${strategyId}`,
         { requiresAuth: true },
       ),

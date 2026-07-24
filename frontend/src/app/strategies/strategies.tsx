@@ -77,6 +77,7 @@ import type {
 import {
   configurationLifecycle,
   defaultStrategyFormValues,
+  resolveSavedStrategyId,
   ruleStrategyConfigToFormValues,
   type StrategyFormValues,
   strategyFormValuesToConfig,
@@ -860,10 +861,10 @@ export function RuleStrategyConfiguration({
               ...request,
               initial_capital_quote: values.initialCapital,
             });
-      const saved = response.data;
+      const savedStrategyId = resolveSavedStrategyId(response.data, strategyId);
       setCreatingDraft(false);
-      setStrategyId(saved.strategy_id);
-      if (saved.strategy_id === strategyId) {
+      setStrategyId(savedStrategyId);
+      if (savedStrategyId === strategyId) {
         await strategyQuery.refetch();
       }
       toast.success(t("saas.operations.strategy.toasts.saved"));
@@ -899,10 +900,14 @@ export function RuleStrategyConfiguration({
   const deleteSelectedStrategy = async () => {
     if (!strategyId || !managementActions.canDelete) return;
     try {
-      await deleteStrategy.mutateAsync();
+      const response = await deleteStrategy.mutateAsync();
       setCreatingDraft(false);
       setStrategyId("");
-      toast.success("策略已删除。");
+      toast.success(
+        response.data.archived
+          ? "策略已有交易审计记录，已安全归档并从列表隐藏。"
+          : "策略已删除。",
+      );
     } catch (err) {
       toast.error(
         err instanceof Error

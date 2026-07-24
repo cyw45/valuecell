@@ -34,7 +34,7 @@ class TenantRuleStrategyRepository:
         return [
             strategy
             for (stored_tenant_id, _), strategy in self.strategies.items()
-            if stored_tenant_id == tenant_id
+            if stored_tenant_id == tenant_id and strategy.status != "archived"
         ]
 
     def get(self, strategy_id: str, tenant_id: str):
@@ -80,7 +80,8 @@ class TenantRuleStrategyRepository:
         if strategy.status == "running":
             return "running"
         if strategy_id in self.execution_intent_strategy_ids:
-            return "audited"
+            strategy.status = "archived"
+            return "archived"
         del self.strategies[(tenant_id, strategy_id)]
         self.evaluations = [
             item
@@ -246,8 +247,13 @@ def test_rule_strategy_delete_lifecycle_and_tenant_isolation():
 
     assert client.post(f"/rule-strategies/{running}/stop").status_code == 200
     repository.execution_intent_strategy_ids.add(running)
-    assert client.delete(f"/rule-strategies/{running}").status_code == 409
+    archived = client.delete(f"/rule-strategies/{running}")
+    assert archived.status_code == 200
+    assert archived.json()["data"] == {"strategy_id": running, "archived": True}
     assert client.get(f"/rule-strategies/{running}").status_code == 200
+    assert running not in [
+        item["strategy_id"] for item in client.get("/rule-strategies").json()["data"]
+    ]
 
     deletable = _create_strategy(client, "deletable")
     repository.append_evaluation(

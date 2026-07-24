@@ -44,7 +44,10 @@ class RuleStrategyRepository:
         try:
             strategies = (
                 session.query(RuleStrategy)
-                .filter(RuleStrategy.tenant_id == tenant_id)
+                .filter(
+                    RuleStrategy.tenant_id == tenant_id,
+                    RuleStrategy.status != "archived",
+                )
                 .order_by(RuleStrategy.created_at.desc())
                 .all()
             )
@@ -159,8 +162,9 @@ class RuleStrategyRepository:
                 is not None
             )
             if has_intent:
-                session.rollback()
-                return "audited"
+                setattr(strategy, "status", "archived")
+                session.commit()
+                return "archived"
             session.delete(strategy)
             session.commit()
             return "deleted"

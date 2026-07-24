@@ -135,8 +135,8 @@ class RuleStrategyService:
     def stop(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         return self._set_status(strategy_id, tenant_id, "stopped")
 
-    def delete(self, strategy_id: str, tenant_id: str) -> None:
-        """Delete only stopped strategies that have no durable execution intent."""
+    def delete(self, strategy_id: str, tenant_id: str) -> bool:
+        """Delete unaudited strategies; archive audited strategies and return True."""
         delete_if_allowed = getattr(self.repository, "delete_if_allowed", None)
         if delete_if_allowed is None:
             strategy = self._require_strategy(strategy_id, tenant_id)
@@ -145,7 +145,7 @@ class RuleStrategyService:
                     "Stop the strategy before deleting it"
                 )
             getattr(self.repository, "delete")(strategy_id, tenant_id)
-            return
+            return False
         outcome = delete_if_allowed(strategy_id, tenant_id)
         if outcome == "not_found":
             raise RuleStrategyNotFoundError(
@@ -155,10 +155,7 @@ class RuleStrategyService:
             raise RuleStrategyDeleteConflictError(
                 "Stop the strategy before deleting it"
             )
-        if outcome == "audited":
-            raise RuleStrategyDeleteConflictError(
-                "Rule strategy has execution audit evidence and cannot be deleted"
-            )
+        return outcome == "archived"
 
     def evaluate(
         self,

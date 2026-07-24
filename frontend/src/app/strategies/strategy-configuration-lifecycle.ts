@@ -162,6 +162,16 @@ export type PersistedRuleStrategyConfig = Omit<
     >
   >;
 
+export function resolveSavedStrategyId(
+  saved: { strategy_id?: string } | null | undefined,
+  currentStrategyId: string,
+): string {
+  const responseStrategyId = saved?.strategy_id?.trim();
+  if (responseStrategyId) return responseStrategyId;
+  if (currentStrategyId.trim()) return currentStrategyId;
+  throw new Error("策略保存成功，但服务器未返回策略 ID。请刷新列表后重试。");
+}
+
 export function ruleStrategyConfigToFormValues(
   config: PersistedRuleStrategyConfig,
 ): StrategyFormValues {

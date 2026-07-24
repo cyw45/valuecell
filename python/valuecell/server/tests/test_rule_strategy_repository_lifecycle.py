@@ -114,3 +114,22 @@ def test_repository_rejects_running_delete():
 
     assert repository.delete_if_allowed("running", "tenant-a") == "running"
     assert repository.get("running", "tenant-a") is not None
+
+
+def test_repository_archives_stopped_strategy_with_execution_audit():
+    session = _session()
+    repository = RuleStrategyRepository(db_session=session)
+    repository.create(_strategy("audited"))
+    session.execute(
+        text(
+            "INSERT INTO rule_strategy_execution_intents (id, strategy_id, tenant_id) "
+            "VALUES ('intent-1', 'audited', 'tenant-a')"
+        )
+    )
+    session.commit()
+
+    assert repository.delete_if_allowed("audited", "tenant-a") == "archived"
+    archived = repository.get("audited", "tenant-a")
+    assert archived is not None
+    assert str(archived.status) == "archived"
+    assert repository.list("tenant-a") == []

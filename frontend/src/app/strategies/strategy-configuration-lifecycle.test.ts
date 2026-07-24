@@ -5,6 +5,7 @@ import type { RuleStrategyConfig } from "../../types/rule-strategy.ts";
 import {
   configurationLifecycle,
   defaultStrategyFormValues,
+  resolveSavedStrategyId,
   ruleStrategyConfigToFormValues,
   strategyFormValuesToConfig,
 } from "./strategy-configuration-lifecycle.ts";
@@ -199,6 +200,17 @@ test("persisted execution parameters survive a form round trip", () => {
   assert.deepEqual(
     strategyFormValuesToConfig(ruleStrategyConfigToFormValues(persistedConfig)),
     persistedConfig,
+  );
+});
+
+test("updated strategy keeps the selected id when a successful response has null data", () => {
+  assert.equal(resolveSavedStrategyId(null, "rule_existing"), "rule_existing");
+});
+
+test("new strategy reports a clear error when a successful response has no id", () => {
+  assert.throws(
+    () => resolveSavedStrategyId(null, ""),
+    /策略保存成功，但服务器未返回策略 ID/,
   );
 });
 

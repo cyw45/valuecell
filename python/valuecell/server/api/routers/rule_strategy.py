@@ -250,13 +250,14 @@ def create_rule_strategy_router(
     ) -> SuccessResponse[dict[str, Any]]:
         require_strategy_manage(principal)
         try:
-            rule_service.delete(strategy_id, principal.tenant_id)
+            archived = rule_service.delete(strategy_id, principal.tenant_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuleStrategyDeleteConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(
-            data={"strategy_id": strategy_id}, msg="Rule strategy deleted"
+            data={"strategy_id": strategy_id, "archived": archived},
+            msg="策略已安全归档" if archived else "策略已删除",
         )
 
     @router.post(

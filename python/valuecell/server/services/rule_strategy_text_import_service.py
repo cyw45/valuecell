@@ -43,34 +43,30 @@ class RuleStrategyTextImportService:
             )
 
         try:
-            timeout = httpx.Timeout(60.0, connect=5.0)
+            # Keep the complete synchronous request below the outer proxy timeout.
+            # Retrying would continue after the browser has already received a 504.
+            timeout = httpx.Timeout(45.0, connect=5.0)
             async with httpx.AsyncClient(timeout=timeout) as client:
-                for attempt in range(2):
-                    try:
-                        response = await client.post(
-                            f"{provider_config.base_url.rstrip('/')}/chat/completions",
-                            headers={"Authorization": f"Bearer {provider_config.api_key}"},
-                            json={
-                                "model": provider_config.default_model,
-                                "temperature": 0,
-                                "messages": [
-                                    {"role": "system", "content": self._system_prompt()},
-                                    {"role": "user", "content": strategy_text},
-                                ],
-                            },
-                        )
-                        break
-                    except httpx.TimeoutException:
-                        if attempt == 1:
-                            raise
-                        logger.warning(
-                            "Strategy text import provider timed out; retrying once"
-                        )
-                else:  # pragma: no cover - the final timeout is re-raised above
-                    raise RuntimeError("strategy import retry loop exhausted")
+                response = await client.post(
+                    f"{provider_config.base_url.rstrip('/')}/chat/completions",
+                    headers={"Authorization": f"Bearer {provider_config.api_key}"},
+                    json={
+                        "model": provider_config.default_model,
+                        "temperature": 0,
+                        "messages": [
+                            {"role": "system", "content": self._system_prompt()},
+                            {"role": "user", "content": strategy_text},
+                        ],
+                    },
+                )
                 response.raise_for_status()
                 content = str(response.json()["choices"][0]["message"]["content"])
             proposal = self._validate_proposal(self._parse_json_content(content))
+        except httpx.TimeoutException as exc:
+            logger.warning("Strategy text import provider timed out")
+            raise RuleStrategyTextImportUnavailableError(
+                "AI 策略分析服务请求超时，请重试；本次请求不会继续后台解析"
+            ) from exc
         except httpx.HTTPError as exc:
             logger.warning("Strategy text import provider request failed: {}", type(exc).__name__)
             raise RuleStrategyTextImportUnavailableError(

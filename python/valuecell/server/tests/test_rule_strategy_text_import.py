@@ -9,7 +9,7 @@ from valuecell.server.services.rule_strategy_text_import_service import (
 
 
 @pytest.mark.asyncio
-async def test_text_import_retries_one_transient_read_timeout(monkeypatch):
+async def test_text_import_uses_one_bounded_provider_attempt(monkeypatch):
     payload = {
         "strategy_name": "均线策略",
         "executable": True,
@@ -41,8 +41,6 @@ async def test_text_import_retries_one_transient_read_timeout(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
         attempts += 1
-        if attempts == 1:
-            raise httpx.ReadTimeout("provider stalled", request=request)
         return httpx.Response(
             200,
             request=request,
@@ -67,7 +65,7 @@ async def test_text_import_retries_one_transient_read_timeout(monkeypatch):
     )
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs):
-            assert kwargs["timeout"].read == 60.0
+            assert kwargs["timeout"].read == 45.0
 
         async def __aenter__(self):
             return self
@@ -84,7 +82,52 @@ async def test_text_import_retries_one_transient_read_timeout(monkeypatch):
     proposal = await RuleStrategyTextImportService().parse("四小时收盘价高于MA25时买入")
 
     assert proposal.executable is True
-    assert attempts == 2
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_text_import_does_not_retry_after_provider_timeout(monkeypatch):
+    attempts = 0
+
+    class ProviderConfig:
+        api_key = "test-key"
+        base_url = "https://provider.invalid/v1"
+        default_model = "test-model"
+
+    class ConfigManager:
+        primary_provider = "openai-compatible"
+
+        @staticmethod
+        def get_provider_config(provider: str):
+            assert provider == "openai-compatible"
+            return ProviderConfig()
+
+    monkeypatch.setattr(
+        "valuecell.config.manager.get_config_manager", lambda: ConfigManager()
+    )
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            assert kwargs["timeout"].read == 45.0
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def post(self, url, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            request = httpx.Request("POST", url)
+            raise httpx.ReadTimeout("provider stalled", request=request)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    with pytest.raises(Exception, match="AI 策略分析服务请求超时"):
+        await RuleStrategyTextImportService().parse("四小时收盘价高于MA25时买入")
+
+    assert attempts == 1
 
 
 def test_text_import_json_is_validated_as_a_reviewable_strategy_draft():
