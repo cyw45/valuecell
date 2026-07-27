@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BarChart3, ExternalLink, RadioTower } from "lucide-react";
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
+import { useRuleStrategy } from "@/api/rule-strategy";
 import {
   MarketIndicatorPanelChart,
   type MarketIndicatorPanel,
@@ -29,12 +30,9 @@ import CandlestickChart, {
   type CandlestickData,
   type CandlestickMovingAverage,
 } from "@/components/valuecell/charts/candlestick-chart";
+import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 
-const SYMBOLS = [
-  { value: "BTC-USDT", labelKey: "saas.charts.symbols.bitcoin" },
-  { value: "ETH-USDT", labelKey: "saas.charts.symbols.ether" },
-  { value: "SOL-USDT", labelKey: "saas.charts.symbols.solana" },
-] as const;
+const DEFAULT_SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
 
 const INTERVALS = [
   { value: "15m", label: "15m" },
@@ -66,8 +64,18 @@ type HistoryRange = (typeof HISTORY_RANGES)[number]["value"];
 
 export default function ChartsPage() {
   const { t } = useTranslation();
-  const [symbol, setSymbol] = useState<string>(SYMBOLS[0].value);
+  const [strategyId] = useActiveRuleStrategyId();
+  const { data: ruleStrategy } = useRuleStrategy(strategyId);
+  const chartSymbols = useMemo(
+    () =>
+      ruleStrategy?.config.symbols.length
+        ? ruleStrategy.config.symbols
+        : DEFAULT_SYMBOLS,
+    [ruleStrategy?.config.symbols],
+  );
+  const [symbol, setSymbol] = useState(DEFAULT_SYMBOLS[0]);
   const [interval, setInterval] = useState("1h");
+
   const [indicatorPanel, setIndicatorPanel] =
     useState<MarketIndicatorPanel>("rsi");
   const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
@@ -75,6 +83,9 @@ export default function ChartsPage() {
   const [fromDate, setFromDate] = useState("");
   const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
   const [toDate, setToDate] = useState("");
+  useEffect(() => {
+    if (!chartSymbols.includes(symbol)) setSymbol(chartSymbols[0]);
+  }, [chartSymbols, symbol]);
   const fromTsMs = useMemo(() => {
     if (fromDate) return new Date(`${fromDate}T00:00:00Z`).getTime();
     const days =
@@ -144,10 +155,10 @@ export default function ChartsPage() {
             <Badge variant="secondary">{t("saas.charts.researchChart")}</Badge>
             <Badge variant="outline">{t("saas.charts.paperOnly")}</Badge>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-semibold text-2xl tracking-tight">
             {t("saas.charts.title")}
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-muted-foreground text-sm">
             {t("saas.charts.subtitle")}
           </p>
         </header>
@@ -164,17 +175,23 @@ export default function ChartsPage() {
                       price: market.latest_price.toLocaleString(),
                     })
                   : t("saas.charts.marketSource")}
+                {strategyId
+                  ? ` · 策略观察 ${chartSymbols.length} 个币种，可在此切换`
+                  : ""}
               </CardDescription>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Select value={symbol} onValueChange={setSymbol}>
-                <SelectTrigger className="w-full sm:w-52">
+                <SelectTrigger
+                  aria-label="策略观察币种"
+                  className="w-full sm:w-52"
+                >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  {SYMBOLS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {t(option.labelKey)}
+                <SelectContent className="max-h-80">
+                  {chartSymbols.map((chartSymbol) => (
+                    <SelectItem key={chartSymbol} value={chartSymbol}>
+                      {chartSymbol.replace("-", "/")}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -192,7 +209,8 @@ export default function ChartsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-wrap gap-1" aria-label="Historical range">
+            <fieldset className="flex flex-wrap gap-1">
+              <legend className="sr-only">Historical range</legend>
               {HISTORY_RANGES.map((range) => (
                 <Button
                   key={range.value}
@@ -209,7 +227,7 @@ export default function ChartsPage() {
                   {range.label}
                 </Button>
               ))}
-            </div>
+            </fieldset>
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Input
                 aria-label="Start date"
@@ -254,16 +272,16 @@ export default function ChartsPage() {
               ) : null}
             </div>
             {invalidDateRange ? (
-              <p className="px-6 py-28 text-center text-sm text-destructive">
+              <p className="px-6 py-28 text-center text-destructive text-sm">
                 开始日期不能晚于结束日期。
               </p>
             ) : isError || failedReason ? (
-              <p className="px-6 py-28 text-center text-sm text-destructive">
+              <p className="px-6 py-28 text-center text-destructive text-sm">
                 {t("saas.charts.marketUnavailable")}
                 {failedReason ? `：${failedReason}` : ""}
               </p>
             ) : !market && !isFetching ? (
-              <p className="py-28 text-center text-sm text-muted-foreground">
+              <p className="py-28 text-center text-muted-foreground text-sm">
                 {t("saas.charts.marketUnavailable")}
               </p>
             ) : (
@@ -348,7 +366,7 @@ export default function ChartsPage() {
               {t("saas.charts.researchContext")}
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-3 px-5 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <CardContent className="flex flex-col gap-3 px-5 text-muted-foreground text-sm sm:flex-row sm:items-center sm:justify-between">
             <p>{t("saas.charts.researchContextDescription")}</p>
             <Button asChild variant="outline" size="sm" className="shrink-0">
               <a

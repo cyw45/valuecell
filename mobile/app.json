@@ -1,0 +1,34 @@
+{
+  "expo": {
+    "name": "Value Cell",
+    "slug": "valuecell-mobile",
+    "version": "1.0.0",
+    "scheme": "valuecell",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zhiweionline.valuecell"
+    },
+    "android": {
+      "package": "com.zhiweionline.valuecell",
+      "adaptiveIcon": {
+        "backgroundColor": "#07111F",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-secure-store"
+    ],
+    "extra": {
+      "apiBaseUrl": "https://vc.zhiweionline.com/api/v1",
+      "eas": {
+        "projectId": "3383ea9c-5d45-4eec-8b83-c561775efbf1"
+      }
+    }
+  }
+}
