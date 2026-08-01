@@ -285,8 +285,10 @@ export default function DashboardPage() {
   const activeSymbols = isOkxDemo
     ? demoPositions.map((position) => position.symbol.replace("/", "-"))
     : Object.keys(ruleStrategy?.account.positions ?? {});
-  const marketSymbols =
-    activeSymbols.length > 0 ? activeSymbols : trackedSymbols;
+  const marketSymbols = useMemo(
+    () => Array.from(new Set([...trackedSymbols, ...activeSymbols])),
+    [activeSymbols, trackedSymbols],
+  );
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USDT");
   const [marketInterval, setMarketInterval] =
     useState<(typeof MARKET_INTERVALS)[number]>("1h");
