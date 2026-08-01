@@ -32,11 +32,12 @@ class PaperAccountRepository:
         self.strategies[(strategy.tenant_id, strategy.strategy_id)] = strategy
         return strategy
 
-    def list(self, tenant_id: str):
+    def list(self, tenant_id: str, include_archived: bool = False):
         return [
             strategy
             for (stored_tenant_id, _), strategy in self.strategies.items()
             if stored_tenant_id == tenant_id
+            and (include_archived or strategy.archived_at is None)
         ]
 
     def get(self, strategy_id: str, tenant_id: str):
@@ -46,6 +47,23 @@ class PaperAccountRepository:
         strategy.updated_at = CREATED_AT
         self.strategies[(strategy.tenant_id, strategy.strategy_id)] = strategy
         return strategy
+
+    def archive(self, strategy_id: str, tenant_id: str):
+        strategy = self.get(strategy_id, tenant_id)
+        if strategy is None:
+            raise KeyError(strategy_id)
+        strategy.execution_generation = (strategy.execution_generation or 1) + 1
+        strategy.archived_at = CREATED_AT
+        strategy.updated_at = CREATED_AT
+        self.strategies[(tenant_id, strategy_id)] = strategy
+        return strategy
+
+    def list_running(self):
+        return [
+            strategy
+            for strategy in self.strategies.values()
+            if strategy.status == "running" and strategy.archived_at is None
+        ]
 
     def append_evaluation(self, journal):
         self._evaluation_sequence += 1

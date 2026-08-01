@@ -18,8 +18,10 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyTextImportProposal,
 )
 from valuecell.server.services.rule_strategy_service import (
+    RuleStrategyArchivedError,
     RuleStrategyNotFoundError,
     RuleStrategyNotRunningError,
+    RuleStrategyRunningError,
     RuleStrategyService,
 )
 from valuecell.server.services.rule_strategy_advisory_service import (
@@ -166,11 +168,12 @@ def create_rule_strategy_router(
 
     @router.get("", response_model=SuccessResponse[list[dict[str, Any]]])
     async def list_rule_strategies(
+        include_archived: bool = Query(default=False),
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[list[dict[str, Any]]]:
         require_strategy_read(principal)
         return SuccessResponse.create(
-            data=rule_service.list(principal.tenant_id),
+            data=rule_service.list(principal.tenant_id, include_archived),
             msg="Paper rule strategies retrieved",
         )
 
@@ -238,7 +241,23 @@ def create_rule_strategy_router(
             )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RuleStrategyArchivedError, RuleStrategyRunningError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy updated")
+
+    @router.delete("/{strategy_id}", response_model=SuccessResponse[dict[str, Any]])
+    async def archive_rule_strategy(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_manage(principal)
+        try:
+            data = rule_service.archive(strategy_id, principal.tenant_id)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RuleStrategyArchivedError, RuleStrategyRunningError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Rule strategy archived")
 
     @router.post(
         "/{strategy_id}/advisory-analysis",
@@ -271,6 +290,8 @@ def create_rule_strategy_router(
             data = rule_service.start(strategy_id, principal.tenant_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RuleStrategyArchivedError, RuleStrategyRunningError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy started")
 
     @router.post("/{strategy_id}/stop", response_model=SuccessResponse[dict[str, Any]])
@@ -301,6 +322,8 @@ def create_rule_strategy_router(
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuleStrategyNotRunningError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (RuleStrategyArchivedError, RuleStrategyRunningError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy evaluated")
 

@@ -9,6 +9,7 @@ from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
 
 CREATED_AT = datetime(2026, 7, 10, tzinfo=timezone.utc)
+ARCHIVED_AT = datetime(2026, 7, 11, tzinfo=timezone.utc)
 
 
 class TenantRuleStrategyRepository:
@@ -28,11 +29,12 @@ class TenantRuleStrategyRepository:
         self.strategies[(strategy.tenant_id, strategy.strategy_id)] = strategy
         return strategy
 
-    def list(self, tenant_id: str):
+    def list(self, tenant_id: str, include_archived: bool = False):
         return [
             strategy
             for (stored_tenant_id, _), strategy in self.strategies.items()
             if stored_tenant_id == tenant_id
+            and (include_archived or strategy.archived_at is None)
         ]
 
     def get(self, strategy_id: str, tenant_id: str):
@@ -42,6 +44,23 @@ class TenantRuleStrategyRepository:
         strategy.updated_at = CREATED_AT
         self.strategies[(strategy.tenant_id, strategy.strategy_id)] = strategy
         return strategy
+
+    def archive(self, strategy_id: str, tenant_id: str):
+        strategy = self.get(strategy_id, tenant_id)
+        if strategy is None:
+            raise KeyError(strategy_id)
+        strategy.execution_generation = (strategy.execution_generation or 1) + 1
+        strategy.archived_at = ARCHIVED_AT
+        strategy.updated_at = ARCHIVED_AT
+        self.strategies[(tenant_id, strategy_id)] = strategy
+        return strategy
+
+    def list_running(self):
+        return [
+            strategy
+            for strategy in self.strategies.values()
+            if strategy.status == "running" and strategy.archived_at is None
+        ]
 
     def append_evaluation(self, journal):
         self._evaluation_sequence += 1
@@ -165,6 +184,7 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
     denied_responses = [
         client.get(f"/rule-strategies/{strategy_id}"),
         client.patch(f"/rule-strategies/{strategy_id}", json={"name": "not allowed"}),
+        client.delete(f"/rule-strategies/{strategy_id}"),
         client.post(
             f"/rule-strategies/{strategy_id}/evaluate", json=_evaluation_input()
         ),
@@ -173,7 +193,7 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
             for log_type in ("signals", "trades", "funding")
         ],
     ]
-    assert [response.status_code for response in denied_responses] == [404] * 6
+    assert [response.status_code for response in denied_responses] == [404] * 7
 
     principal[0] = CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")
     tenant_a_list = client.get("/rule-strategies")

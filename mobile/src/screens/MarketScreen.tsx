@@ -1,40 +1,883 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { CandlestickChart, Search } from "lucide-react-native";
-import { api } from "../api";
-import CandlestickChartView from "../components/CandlestickChart";
+import {
+  ActivityIndicator,
+  Linking,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+import { useNavigation, type NavigationProp, type ParamListBase } from "@react-navigation/native";
+import {
+  CandlestickChart as CandlestickIcon,
+  ChevronDown,
+  ExternalLink,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+} from "lucide-react-native";
+import { api, MobileApiError } from "../api";
+import CandlestickChart, { type ChartWindow } from "../components/CandlestickChart";
+import IndicatorChart, { type IndicatorPanel } from "../components/IndicatorChart";
+import { useSession } from "../session";
+import { marketDataRefreshInterval, usePreferences } from "../preferences";
 import { palette, radius, spacing } from "../theme";
+import type { CryptoCandle, Strategy } from "../types";
 
-const intervals = ["15m", "1h", "4h", "1d"] as const;
-const ranges = [{ label: "10D", lookback: 240 }, { label: "30D", lookback: 720 }, { label: "90D", lookback: 2160 }, { label: "1Y", lookback: 5000 }] as const;
+type MarketScreenProps = {
+  route?: {
+    params?: {
+      strategyId?: string;
+    };
+  };
+};
 
-export default function MarketScreen() {
-  const strategies = useQuery({ queryKey: ["mobile", "strategies"], queryFn: api.strategies });
-  const activeStrategy = strategies.data?.find((item) => item.status === "running") ?? strategies.data?.[0];
-  const symbols = activeStrategy?.config.symbols ?? ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
-  const [symbol, setSymbol] = useState(symbols[0]);
-  const [interval, setInterval] = useState<(typeof intervals)[number]>("1h");
-  const [range, setRange] = useState<(typeof ranges)[number]>(ranges[0]);
-  const [filter, setFilter] = useState("");
+type MarketInterval = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+type HistoryRange = "10D" | "30D" | "90D" | "1Y" | "custom";
+type SymbolScope = "strategy" | "catalog";
 
-  useEffect(() => { if (!symbols.includes(symbol)) setSymbol(symbols[0]); }, [symbol, symbols]);
-  const filteredSymbols = useMemo(() => symbols.filter((item) => item.toLowerCase().includes(filter.trim().toLowerCase())), [filter, symbols]);
-  const market = useQuery({ queryKey: ["mobile", "market", symbol, interval, range.lookback], queryFn: () => api.market(symbol, interval, range.lookback), enabled: Boolean(symbol), refetchInterval: 30_000 });
-  const item = market.data?.symbols.find((candidate) => candidate.symbol === symbol);
+const INTERVALS: readonly MarketInterval[] = [
+  "1m",
+  "3m",
+  "5m",
+  "15m",
+  "30m",
+  "1h",
+  "4h",
+  "1d",
+];
+const RANGE_DAYS: Record<Exclude<HistoryRange, "custom">, number> = {
+  "10D": 10,
+  "30D": 30,
+  "90D": 90,
+  "1Y": 365,
+};
+const INTERVAL_MS: Record<MarketInterval, number> = {
+  "1m": 60_000,
+  "3m": 180_000,
+  "5m": 300_000,
+  "15m": 900_000,
+  "30m": 1_800_000,
+  "1h": 3_600_000,
+  "4h": 14_400_000,
+  "1d": 86_400_000,
+};
+const INDICATOR_OPTIONS: ReadonlyArray<{ value: IndicatorPanel; label: string }> = [
+  { value: "rsi", label: "RSI" },
+  { value: "bollinger", label: "布林带" },
+  { value: "momentum", label: "Momentum" },
+  { value: "macd", label: "MACD" },
+];
+
+function parseUtcDay(value: string, endOfDay: boolean) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const timestamp = Date.UTC(year, month - 1, day, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0);
+  const date = new Date(timestamp);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return timestamp;
+}
+
+function formatTimestamp(timestamp: number | string | null | undefined) {
+  if (timestamp == null) return "未提供";
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "未提供";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatAge(ageMs: number | null | undefined) {
+  if (ageMs == null || !Number.isFinite(ageMs)) return "年龄未提供";
+  if (ageMs < 60_000) return `${Math.max(0, Math.round(ageMs / 1_000))} 秒前`;
+  if (ageMs < 3_600_000) return `${Math.round(ageMs / 60_000)} 分钟前`;
+  return `${Math.round(ageMs / 3_600_000)} 小时前`;
+}
+
+function formatPrice(value: number) {
+  return value.toLocaleString(undefined, { maximumFractionDigits: 8 });
+}
+
+function selectedStrategy(
+  strategies: Strategy[] | undefined,
+  requestedStrategyId: string | undefined,
+) {
+  if (!strategies?.length) return undefined;
+  return (
+    strategies.find((strategy) => strategy.strategy_id === requestedStrategyId) ??
+    strategies.find((strategy) => strategy.status === "running") ??
+    strategies[0]
+  );
+}
+
+export default function MarketScreen({ route }: MarketScreenProps) {
+  const navigation = useNavigation<NavigationProp<ParamListBase>>();
+  const { session } = useSession();
+  const { preferences, ready: preferencesReady } = usePreferences();
+  const marketRefreshInterval = preferencesReady
+    ? marketDataRefreshInterval(preferences.marketDataRefreshMode)
+    : false;
+  const tenantId = session?.tenantId ?? "public";
+  const requestedStrategyId = route?.params?.strategyId;
+  const [scope, setScope] = useState<SymbolScope>("strategy");
+  const [symbol, setSymbol] = useState("");
+  const [symbolFilter, setSymbolFilter] = useState("");
+  const [interval, setInterval] = useState<MarketInterval>("1h");
+  const [range, setRange] = useState<HistoryRange>("10D");
+  const [rangeAnchor, setRangeAnchor] = useState(() => Date.now());
+  const [dateSheetVisible, setDateSheetVisible] = useState(false);
+  const [draftFromDate, setDraftFromDate] = useState("");
+  const [draftToDate, setDraftToDate] = useState("");
+  const [customFromDate, setCustomFromDate] = useState("");
+  const [customToDate, setCustomToDate] = useState("");
+  const [indicator, setIndicator] = useState<IndicatorPanel>("rsi");
+  const [indicatorSheetVisible, setIndicatorSheetVisible] = useState(false);
+  const [visibleWindow, setVisibleWindow] = useState<ChartWindow>();
+  const [selectedCandle, setSelectedCandle] = useState<CryptoCandle | null>(null);
+  const [externalReferenceError, setExternalReferenceError] = useState<string | null>(null);
+
+  const strategies = useQuery({
+    queryKey: ["mobile", tenantId, "strategies", "market"],
+    queryFn: () => api.strategies(false),
+    enabled: Boolean(session?.tenantId),
+  });
+  const catalog = useQuery({
+    queryKey: ["mobile", "crypto-market", "symbols"],
+    queryFn: () => api.cryptoSymbols(),
+  });
+  const activeStrategy = useMemo(
+    () => selectedStrategy(strategies.data, requestedStrategyId),
+    [requestedStrategyId, strategies.data],
+  );
+  const strategySymbols = useMemo(
+    () => activeStrategy?.config.symbols.filter(Boolean) ?? [],
+    [activeStrategy?.config.symbols],
+  );
+  const catalogSymbols = catalog.data?.symbols ?? [];
+  const allSymbols = useMemo(() => {
+    const strategySymbolSet = new Set(strategySymbols);
+    return [...strategySymbols, ...catalogSymbols.filter((item) => !strategySymbolSet.has(item))];
+  }, [catalogSymbols, strategySymbols]);
+  const scopedSymbols = scope === "strategy" ? strategySymbols : allSymbols;
+  const filteredSymbols = useMemo(() => {
+    const normalizedFilter = symbolFilter.trim().toLocaleLowerCase();
+    if (!normalizedFilter) return scopedSymbols;
+    return scopedSymbols.filter((item) => item.toLocaleLowerCase().includes(normalizedFilter));
+  }, [scopedSymbols, symbolFilter]);
+
+  useEffect(() => {
+    if (scope === "strategy" && strategySymbols.length === 0 && allSymbols.length > 0) {
+      setScope("catalog");
+    }
+  }, [allSymbols.length, scope, strategySymbols.length]);
+
+  useEffect(() => {
+    if (!scopedSymbols.includes(symbol)) setSymbol(scopedSymbols[0] ?? "");
+  }, [scopedSymbols, symbol]);
+
+  const dateRange = useMemo(() => {
+    if (range !== "custom") {
+      const toTsMs = rangeAnchor;
+      return {
+        fromTsMs: toTsMs - RANGE_DAYS[range] * 24 * 60 * 60 * 1_000,
+        toTsMs,
+        valid: true,
+        label: range,
+      };
+    }
+    const fromTsMs = parseUtcDay(customFromDate, false);
+    const toTsMs = parseUtcDay(customToDate, true);
+    return {
+      fromTsMs,
+      toTsMs,
+      valid: fromTsMs != null && toTsMs != null && fromTsMs <= toTsMs,
+      label: customFromDate && customToDate ? `${customFromDate} 至 ${customToDate}` : "自定义日期",
+    };
+  }, [customFromDate, customToDate, range, rangeAnchor]);
+  const lookback = useMemo(() => {
+    if (dateRange.fromTsMs == null || dateRange.toTsMs == null) return 1;
+    return Math.min(
+      5_000,
+      Math.max(
+        1,
+        Math.ceil((dateRange.toTsMs - dateRange.fromTsMs) / INTERVAL_MS[interval]) + 2,
+      ),
+    );
+  }, [dateRange.fromTsMs, dateRange.toTsMs, interval]);
+  const market = useQuery({
+    queryKey: [
+      "mobile",
+      tenantId,
+      "crypto-market",
+      symbol,
+      interval,
+      lookback,
+      dateRange.fromTsMs,
+      dateRange.toTsMs,
+    ],
+    queryFn: () =>
+      api.market(symbol, interval, lookback, {
+        from_ts_ms: dateRange.fromTsMs ?? undefined,
+        to_ts_ms: dateRange.toTsMs ?? undefined,
+      }),
+    enabled: Boolean(symbol) && dateRange.valid,
+    refetchInterval: marketRefreshInterval,
+  });
+  const marketSymbol = market.data?.symbols.find((item) => item.symbol === symbol);
+  const failedSymbolReason = symbol ? market.data?.failed_symbols[symbol] : undefined;
+  const marketError = market.error instanceof Error ? market.error.message : "行情数据加载失败。";
+  const isWarming = market.error instanceof MobileApiError && market.error.status === 503;
+  const marketUnavailable =
+    !dateRange.valid ||
+    market.isError ||
+    Boolean(failedSymbolReason) ||
+    (Boolean(symbol) && !market.isLoading && !marketSymbol);
+  const selectedIndicatorLabel =
+    INDICATOR_OPTIONS.find((option) => option.value === indicator)?.label ?? indicator;
+  const draftFromTs = parseUtcDay(draftFromDate, false);
+  const draftToTs = parseUtcDay(draftToDate, true);
+  const draftRangeValid =
+    draftFromTs != null && draftToTs != null && draftFromTs <= draftToTs;
+  const tradingViewUrl = useMemo(() => {
+    const match = /^([A-Z0-9]+)-([A-Z0-9]+)$/.exec(symbol.trim().toUpperCase());
+    if (!match) return null;
+    return `https://www.tradingview.com/symbols/${encodeURIComponent(`${match[1]}${match[2]}`)}/`;
+  }, [symbol]);
+  const candleChange =
+    selectedCandle && selectedCandle.open !== 0
+      ? ((selectedCandle.close - selectedCandle.open) / selectedCandle.open) * 100
+      : null;
+
+  const refresh = () => {
+    if (range !== "custom") setRangeAnchor(Date.now());
+    void Promise.all([strategies.refetch(), catalog.refetch(), market.refetch()]);
+  };
+
+  const openCustomRange = () => {
+    setDraftFromDate(customFromDate);
+    setDraftToDate(customToDate);
+    setDateSheetVisible(true);
+  };
+
+  const applyCustomRange = () => {
+    if (!draftRangeValid) return;
+    setCustomFromDate(draftFromDate);
+    setCustomToDate(draftToDate);
+    setRange("custom");
+    setRangeAnchor(Date.now());
+    setDateSheetVisible(false);
+  };
+
+  const openTradingView = async () => {
+    if (!tradingViewUrl) return;
+    setExternalReferenceError(null);
+    try {
+      await Linking.openURL(tradingViewUrl);
+    } catch {
+      setExternalReferenceError("无法打开 TradingView 外部参考。请稍后重试。");
+    }
+  };
 
   return (
-    <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl onRefresh={() => void market.refetch()} refreshing={market.isRefetching} tintColor={palette.primary} />} style={styles.page}>
-      <Text style={styles.eyebrow}>MARKET INTELLIGENCE</Text><Text style={styles.title}>策略观察行情</Text><Text style={styles.subtitle}>{activeStrategy ? `${activeStrategy.name} · ${symbols.length} 个观察币种` : "未选择策略时展示默认行情"}</Text>
-      <View style={styles.search}><Search color={palette.textMuted} size={17} /><TextInput accessibilityLabel="搜索策略观察币种" autoCapitalize="characters" onChangeText={setFilter} placeholder="搜索观察币种，例如 BTC" placeholderTextColor={palette.textMuted} style={styles.searchInput} value={filter} /></View>
-      <ScrollView contentContainerStyle={styles.symbolRow} horizontal showsHorizontalScrollIndicator={false}>{filteredSymbols.map((item) => <Pressable accessibilityRole="button" key={item} onPress={() => setSymbol(item)} style={[styles.symbolChip, item === symbol && styles.symbolChipActive]}><Text style={[styles.symbolText, item === symbol && styles.symbolTextActive]}>{item.replace("-", "/")}</Text></Pressable>)}</ScrollView>
-      {filteredSymbols.length === 0 ? <Text style={styles.emptyText}>没有匹配的策略观察币种。</Text> : null}
-      <View style={styles.controlRow}><View style={styles.segment}>{intervals.map((item) => <Pressable accessibilityRole="button" key={item} onPress={() => setInterval(item)} style={[styles.segmentItem, interval === item && styles.segmentItemActive]}><Text style={[styles.segmentText, interval === item && styles.segmentTextActive]}>{item}</Text></Pressable>)}</View></View>
-      <ScrollView contentContainerStyle={styles.rangeRow} horizontal showsHorizontalScrollIndicator={false}>{ranges.map((item) => <Pressable accessibilityRole="button" key={item.label} onPress={() => setRange(item)} style={[styles.rangeChip, range.label === item.label && styles.rangeChipActive]}><Text style={[styles.rangeText, range.label === item.label && styles.rangeTextActive]}>{item.label}</Text></Pressable>)}</ScrollView>
-      <View style={styles.chartCard}><View style={styles.chartHeader}><View><Text style={styles.chartTitle}>{symbol.replace("-", "/")} K 线</Text><Text style={styles.chartMeta}>{item?.provider ?? "行情数据源"} · {item?.freshness_status === "stale" ? "数据延迟" : "实时快照"}</Text></View><CandlestickChart color={palette.primary} size={20} /></View>{market.isLoading ? <View style={styles.chartLoading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在加载行情…</Text></View> : market.isError ? <Text style={styles.error}>{market.error instanceof Error ? market.error.message : "行情加载失败。请检查网络或稍后重试。"}</Text> : <CandlestickChartView candles={item?.candles ?? []} indicators={item?.indicators ?? []} />}{item?.latest_price != null ? <View style={styles.priceRow}><Text style={styles.priceLabel}>最新价格</Text><Text style={styles.price}>{item.latest_price.toLocaleString()} USDT</Text></View> : null}</View>
-      <View style={styles.info}><Text style={styles.infoTitle}>移动端查看规则</Text><Text style={styles.infoText}>只请求当前选中的一个币种，50+ 观察币种也不会一次性占用移动网络。K 线、MA5 与 MA20 使用同一后端行情快照。</Text></View>
+    <ScrollView
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl
+          onRefresh={refresh}
+          refreshing={strategies.isRefetching || catalog.isRefetching || market.isRefetching}
+          tintColor={palette.primary}
+        />
+      }
+      style={styles.page}
+    >
+      <View style={styles.header}>
+        <View style={styles.headerCopy}>
+          <Text style={styles.eyebrow}>MARKET · RESEARCH</Text>
+          <Text style={styles.title}>行情研究</Text>
+          <Text style={styles.subtitle}>
+            {activeStrategy
+              ? `${activeStrategy.name} · 优先展示策略观察币种`
+              : "从服务端符号目录选择行情，不写入策略配置"}
+          </Text>
+        </View>
+        <View style={styles.headerActions}>
+          <Pressable
+            accessibilityLabel="打开全球情报研究"
+            accessibilityRole="button"
+            onPress={() => navigation.navigate("WorldMonitor")}
+            style={styles.iconAction}
+          >
+            <Text style={styles.iconActionText}>全球情报</Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="打开预测市场研究"
+            accessibilityRole="button"
+            onPress={() => navigation.navigate("Polymarket")}
+            style={styles.iconAction}
+          >
+            <Text style={styles.iconActionText}>预测研究</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={styles.cardTitleRow}>
+            <CandlestickIcon color={palette.primary} size={19} />
+            <Text style={styles.cardTitle}>选择观察标的</Text>
+          </View>
+          <Text style={styles.cardMeta}>
+            {scope === "strategy" ? "策略币种优先" : "服务端目录研究"}
+          </Text>
+        </View>
+        <View style={styles.scopeRow}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: scope === "strategy" }}
+            disabled={strategySymbols.length === 0}
+            onPress={() => setScope("strategy")}
+            style={[
+              styles.scopeButton,
+              scope === "strategy" && styles.scopeButtonActive,
+              strategySymbols.length === 0 && styles.controlDisabled,
+            ]}
+          >
+            <Text style={[styles.scopeButtonText, scope === "strategy" && styles.scopeButtonTextActive]}>
+              策略币种 {strategySymbols.length ? `(${strategySymbols.length})` : ""}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: scope === "catalog" }}
+            onPress={() => setScope("catalog")}
+            style={[styles.scopeButton, scope === "catalog" && styles.scopeButtonActive]}
+          >
+            <Text style={[styles.scopeButtonText, scope === "catalog" && styles.scopeButtonTextActive]}>
+              全部目录 {catalogSymbols.length ? `(${catalogSymbols.length})` : ""}
+            </Text>
+          </Pressable>
+        </View>
+        <View style={styles.searchBox}>
+          <Search color={palette.textMuted} size={18} />
+          <TextInput
+            accessibilityLabel="搜索行情符号"
+            autoCapitalize="characters"
+            onChangeText={setSymbolFilter}
+            placeholder="搜索，例如 BTC 或 BTC-USDT"
+            placeholderTextColor={palette.textMuted}
+            style={styles.searchInput}
+            value={symbolFilter}
+          />
+        </View>
+        {catalog.isError ? (
+          <View style={styles.inlineError}>
+            <Text style={styles.inlineErrorText}>{catalog.error instanceof Error ? catalog.error.message : "符号目录加载失败。"}</Text>
+            <Pressable accessibilityRole="button" onPress={() => void catalog.refetch()} style={styles.smallAction}>
+              <RefreshCw color={palette.primary} size={16} />
+              <Text style={styles.smallActionText}>重试目录</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {catalog.isLoading && !catalog.data ? (
+          <View style={styles.catalogLoading}>
+            <ActivityIndicator color={palette.primary} />
+            <Text style={styles.mutedText}>正在读取可用符号目录…</Text>
+          </View>
+        ) : null}
+        <ScrollView contentContainerStyle={styles.symbolRow} horizontal showsHorizontalScrollIndicator={false}>
+          {filteredSymbols.map((item) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: item === symbol }}
+              key={item}
+              onPress={() => setSymbol(item)}
+              style={[styles.symbolChip, item === symbol && styles.symbolChipActive]}
+            >
+              <Text style={[styles.symbolChipText, item === symbol && styles.symbolChipTextActive]}>
+                {item.replace("-", "/")}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        {!catalog.isLoading && filteredSymbols.length === 0 ? (
+          <Text style={styles.emptyText}>
+            {scope === "strategy"
+              ? "当前策略没有可用观察币种。切换到全部目录可以继续研究。"
+              : "没有匹配的服务端目录符号。"}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.card}>
+        <View style={styles.chartTitleRow}>
+          <View>
+            <Text style={styles.chartTitle}>{symbol ? `${symbol.replace("-", "/")} K 线` : "选择一个标的"}</Text>
+            <Text style={styles.cardMeta}>成交量、均线与技术指标均来自同一服务端快照</Text>
+          </View>
+          <Pressable
+            accessibilityLabel="在 TradingView 打开当前标的"
+            accessibilityRole="button"
+            disabled={!tradingViewUrl}
+            onPress={() => void openTradingView()}
+            style={[styles.tradingViewButton, !tradingViewUrl && styles.controlDisabled]}
+          >
+            <ExternalLink color={tradingViewUrl ? palette.primary : palette.textMuted} size={17} />
+            <Text style={[styles.tradingViewText, !tradingViewUrl && styles.tradingViewTextDisabled]}>TradingView</Text>
+          </Pressable>
+        </View>
+        {externalReferenceError ? <Text style={styles.errorText}>{externalReferenceError}</Text> : null}
+
+        <Text style={styles.controlLabel}>周期</Text>
+        <ScrollView contentContainerStyle={styles.controlRow} horizontal showsHorizontalScrollIndicator={false}>
+          {INTERVALS.map((item) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: interval === item }}
+              key={item}
+              onPress={() => setInterval(item)}
+              style={[styles.controlChip, interval === item && styles.controlChipActive]}
+            >
+              <Text style={[styles.controlChipText, interval === item && styles.controlChipTextActive]}>{item}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        <View style={styles.rangeHeader}>
+          <Text style={styles.controlLabel}>历史范围</Text>
+          <Text style={styles.rangeSummary}>{dateRange.label}</Text>
+        </View>
+        <ScrollView contentContainerStyle={styles.controlRow} horizontal showsHorizontalScrollIndicator={false}>
+          {(Object.keys(RANGE_DAYS) as Array<Exclude<HistoryRange, "custom">>).map((item) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: range === item }}
+              key={item}
+              onPress={() => {
+                setRange(item);
+                setRangeAnchor(Date.now());
+              }}
+              style={[styles.controlChip, range === item && styles.controlChipActive]}
+            >
+              <Text style={[styles.controlChipText, range === item && styles.controlChipTextActive]}>{item}</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: range === "custom" }}
+            onPress={openCustomRange}
+            style={[styles.controlChip, range === "custom" && styles.controlChipActive]}
+          >
+            <Text style={[styles.controlChipText, range === "custom" && styles.controlChipTextActive]}>日期范围</Text>
+          </Pressable>
+        </ScrollView>
+
+        {marketSymbol ? (
+          <View style={styles.sourceStrip}>
+            <View style={styles.sourcePill}>
+              <Text style={styles.sourcePillText}>{marketSymbol.provider}</Text>
+            </View>
+            <Text style={styles.sourceText}>新鲜度：{marketSymbol.freshness_status}</Text>
+            <Text style={styles.sourceText}>{formatAge(marketSymbol.freshness_age_ms)}</Text>
+            <Text style={styles.sourceText}>覆盖：{marketSymbol.coverage_status}</Text>
+            {marketSymbol.snapshot_ts_ms != null ? (
+              <Text style={styles.sourceText}>快照 {formatTimestamp(marketSymbol.snapshot_ts_ms)}</Text>
+            ) : null}
+            {marketSymbol.warning ? <Text style={styles.warningText}>{marketSymbol.warning}</Text> : null}
+          </View>
+        ) : null}
+
+        {market.isLoading && !market.data ? (
+          <View style={styles.statePanel}>
+            <ActivityIndicator color={palette.primary} />
+            <Text style={styles.mutedText}>正在请求服务端行情快照…</Text>
+          </View>
+        ) : null}
+        {marketUnavailable && !market.isLoading ? (
+          <View style={styles.errorPanel}>
+            <Text style={styles.errorTitle}>{isWarming ? "行情正在预热" : "当前行情暂不可用"}</Text>
+            <Text style={styles.errorText}>
+              {!dateRange.valid
+                ? "开始日期不能晚于结束日期，并且两者都必须是有效的 YYYY-MM-DD 日期。"
+                : failedSymbolReason ?? marketError}
+            </Text>
+            <Pressable accessibilityRole="button" onPress={() => void market.refetch()} style={styles.retryButton}>
+              <RefreshCw color={palette.canvas} size={17} />
+              <Text style={styles.retryText}>重新请求</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {marketSymbol && !marketUnavailable ? (
+          <>
+            <CandlestickChart
+              candles={marketSymbol.candles}
+              indicators={marketSymbol.indicators}
+              onSelectCandle={setSelectedCandle}
+              onWindowChange={setVisibleWindow}
+            />
+            {selectedCandle ? (
+              <View style={styles.inspectionStrip}>
+                <View style={styles.inspectionHeader}>
+                  <Text style={styles.inspectionTitle}>已选 K 线</Text>
+                  <Text style={styles.inspectionTimestamp}>{formatTimestamp(selectedCandle.ts)}</Text>
+                </View>
+                <View style={styles.ohlcGrid}>
+                  {[
+                    ["开", formatPrice(selectedCandle.open)],
+                    ["高", formatPrice(selectedCandle.high)],
+                    ["低", formatPrice(selectedCandle.low)],
+                    ["收", formatPrice(selectedCandle.close)],
+                    ["量", formatPrice(selectedCandle.volume)],
+                    ["涨跌", candleChange == null ? "—" : `${candleChange >= 0 ? "+" : ""}${candleChange.toFixed(2)}%`],
+                  ].map(([label, value]) => (
+                    <View key={label} style={styles.ohlcItem}>
+                      <Text style={styles.ohlcLabel}>{label}</Text>
+                      <Text
+                        style={[
+                          styles.ohlcValue,
+                          label === "涨跌" && candleChange != null
+                            ? { color: candleChange >= 0 ? palette.positive : palette.negative }
+                            : null,
+                        ]}
+                      >
+                        {value}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+            <View style={styles.indicatorHeader}>
+              <View>
+                <Text style={styles.indicatorTitle}>技术指标</Text>
+                <Text style={styles.cardMeta}>只显示一个面板，跟随上方 K 线可见窗口</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="选择技术指标面板"
+                accessibilityRole="button"
+                onPress={() => setIndicatorSheetVisible(true)}
+                style={styles.selectorButton}
+              >
+                <SlidersHorizontal color={palette.primary} size={17} />
+                <Text style={styles.selectorButtonText}>{selectedIndicatorLabel}</Text>
+                <ChevronDown color={palette.textMuted} size={17} />
+              </Pressable>
+            </View>
+            <IndicatorChart
+              candles={marketSymbol.candles}
+              indicators={marketSymbol.indicators}
+              panel={indicator}
+              window={visibleWindow}
+            />
+          </>
+        ) : null}
+      </View>
+
+      <View style={styles.researchNote}>
+        <Text style={styles.researchNoteTitle}>研究边界</Text>
+        <Text style={styles.researchNoteText}>
+          图表数据用于研究与策略观察；切换目录标的不会更改策略配置。外部 TradingView 仅作为参考。
+        </Text>
+      </View>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setDateSheetVisible(false)}
+        transparent
+        visible={dateSheetVisible}
+      >
+        <View style={styles.sheetBackdrop}>
+          <Pressable
+            accessibilityLabel="关闭日期范围选择"
+            accessibilityRole="button"
+            onPress={() => setDateSheetVisible(false)}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>自定义日期范围</Text>
+            <Text style={styles.sheetCopy}>使用 UTC 日期。会转换为服务端所需的 from_ts_ms 与 to_ts_ms。</Text>
+            <Text style={styles.inputLabel}>开始日期</Text>
+            <TextInput
+              accessibilityLabel="开始日期 YYYY-MM-DD"
+              autoCapitalize="none"
+              keyboardType="numbers-and-punctuation"
+              maxLength={10}
+              onChangeText={setDraftFromDate}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={palette.textMuted}
+              style={styles.dateInput}
+              value={draftFromDate}
+            />
+            <Text style={styles.inputLabel}>结束日期</Text>
+            <TextInput
+              accessibilityLabel="结束日期 YYYY-MM-DD"
+              autoCapitalize="none"
+              keyboardType="numbers-and-punctuation"
+              maxLength={10}
+              onChangeText={setDraftToDate}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={palette.textMuted}
+              style={styles.dateInput}
+              value={draftToDate}
+            />
+            {(draftFromDate || draftToDate) && !draftRangeValid ? (
+              <Text style={styles.errorText}>请输入有效日期，且开始日期不能晚于结束日期。</Text>
+            ) : null}
+            <View style={styles.sheetActions}>
+              <Pressable accessibilityRole="button" onPress={() => setDateSheetVisible(false)} style={styles.secondarySheetAction}>
+                <Text style={styles.secondarySheetActionText}>取消</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                disabled={!draftRangeValid}
+                onPress={applyCustomRange}
+                style={[styles.primarySheetAction, !draftRangeValid && styles.controlDisabled]}
+              >
+                <Text style={styles.primarySheetActionText}>应用范围</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setIndicatorSheetVisible(false)}
+        transparent
+        visible={indicatorSheetVisible}
+      >
+        <View style={styles.sheetBackdrop}>
+          <Pressable
+            accessibilityLabel="关闭技术指标选择"
+            accessibilityRole="button"
+            onPress={() => setIndicatorSheetVisible(false)}
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>选择一个技术指标</Text>
+            <Text style={styles.sheetCopy}>所有数值均由当前服务端行情快照提供。</Text>
+            <View style={styles.indicatorOptions}>
+              {INDICATOR_OPTIONS.map((option) => (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: option.value === indicator }}
+                  key={option.value}
+                  onPress={() => {
+                    setIndicator(option.value);
+                    setIndicatorSheetVisible(false);
+                  }}
+                  style={[styles.indicatorOption, option.value === indicator && styles.indicatorOptionActive]}
+                >
+                  <Text style={[styles.indicatorOptionText, option.value === indicator && styles.indicatorOptionTextActive]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
 
-const styles = StyleSheet.create({ page: { backgroundColor: palette.canvas, flex: 1 }, content: { gap: spacing.md, padding: spacing.md, paddingBottom: spacing.xl }, eyebrow: { color: palette.primary, fontSize: 10, fontWeight: "800", letterSpacing: 1.2, marginTop: spacing.sm }, title: { color: palette.text, fontSize: 27, fontWeight: "800", letterSpacing: -0.8 }, subtitle: { color: palette.textMuted, fontSize: 13, marginTop: -spacing.sm }, search: { alignItems: "center", backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, paddingHorizontal: spacing.sm }, searchInput: { color: palette.text, flex: 1, fontSize: 14, height: 46 }, symbolRow: { gap: spacing.xs }, symbolChip: { backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: 12, paddingVertical: 8 }, symbolChipActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary }, symbolText: { color: palette.textMuted, fontSize: 12, fontWeight: "700" }, symbolTextActive: { color: palette.primary }, controlRow: { flexDirection: "row" }, segment: { backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", overflow: "hidden" }, segmentItem: { paddingHorizontal: 13, paddingVertical: 9 }, segmentItemActive: { backgroundColor: palette.primarySoft }, segmentText: { color: palette.textMuted, fontSize: 12, fontWeight: "700" }, segmentTextActive: { color: palette.primary }, rangeRow: { gap: spacing.xs }, rangeChip: { backgroundColor: palette.surfaceMuted, borderRadius: radius.pill, paddingHorizontal: 14, paddingVertical: 7 }, rangeChipActive: { backgroundColor: palette.primary }, rangeText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" }, rangeTextActive: { color: palette.canvas }, chartCard: { backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.lg, borderWidth: 1, gap: spacing.md, padding: spacing.md }, chartHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" }, chartTitle: { color: palette.text, fontSize: 16, fontWeight: "800" }, chartMeta: { color: palette.textMuted, fontSize: 11, marginTop: 3 }, chartLoading: { alignItems: "center", gap: spacing.sm, height: 272, justifyContent: "center" }, loadingText: { color: palette.textMuted, fontSize: 13 }, priceRow: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" }, priceLabel: { color: palette.textMuted, fontSize: 12 }, price: { color: palette.positive, fontSize: 16, fontWeight: "800" }, info: { backgroundColor: palette.surfaceMuted, borderRadius: radius.md, gap: 5, padding: spacing.md }, infoTitle: { color: palette.text, fontSize: 13, fontWeight: "800" }, infoText: { color: palette.textMuted, fontSize: 12, lineHeight: 18 }, error: { color: palette.negative, fontSize: 13, lineHeight: 20 }, emptyText: { color: palette.warning, fontSize: 12 }, });
+const styles = StyleSheet.create({
+  page: { backgroundColor: palette.canvas, flex: 1 },
+  content: { gap: spacing.md, padding: spacing.md, paddingBottom: spacing.xl },
+  header: { gap: spacing.sm, paddingTop: spacing.sm },
+  headerCopy: { gap: 3 },
+  eyebrow: { color: palette.primary, fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
+  title: { color: palette.text, fontSize: 28, fontWeight: "800", letterSpacing: -0.8 },
+  subtitle: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },
+  headerActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  iconAction: {
+    alignItems: "center",
+    backgroundColor: palette.primarySoft,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    minWidth: 96,
+    paddingHorizontal: spacing.sm,
+  },
+  iconActionText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  card: {
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    padding: spacing.md,
+  },
+  cardHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  cardTitleRow: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
+  cardTitle: { color: palette.text, fontSize: 16, fontWeight: "800" },
+  cardMeta: { color: palette.textMuted, fontSize: 11, lineHeight: 16 },
+  scopeRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  scopeButton: {
+    alignItems: "center",
+    backgroundColor: palette.surfaceMuted,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+  },
+  scopeButtonActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
+  scopeButtonText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
+  scopeButtonTextActive: { color: palette.primary },
+  controlDisabled: { opacity: 0.45 },
+  searchBox: {
+    alignItems: "center",
+    backgroundColor: palette.canvas,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+  },
+  searchInput: { color: palette.text, flex: 1, fontSize: 14, height: 46 },
+  inlineError: {
+    alignItems: "center",
+    backgroundColor: palette.negativeSoft,
+    borderColor: palette.negative,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    justifyContent: "space-between",
+    padding: spacing.sm,
+  },
+  inlineErrorText: { color: palette.text, flex: 1, fontSize: 12, lineHeight: 18, minWidth: 180 },
+  smallAction: { alignItems: "center", flexDirection: "row", gap: 6, minHeight: 44, paddingHorizontal: spacing.xs },
+  smallActionText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  catalogLoading: { alignItems: "center", flexDirection: "row", gap: spacing.xs, minHeight: 44 },
+  mutedText: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },
+  symbolRow: { gap: spacing.xs },
+  symbolChip: {
+    alignItems: "center",
+    backgroundColor: palette.surfaceMuted,
+    borderColor: palette.border,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+  },
+  symbolChipActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
+  symbolChipText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
+  symbolChipTextActive: { color: palette.primary },
+  emptyText: { color: palette.textMuted, fontSize: 13, lineHeight: 20 },
+  chartTitleRow: { alignItems: "flex-start", flexDirection: "row", gap: spacing.sm, justifyContent: "space-between" },
+  chartTitle: { color: palette.text, fontSize: 18, fontWeight: "800", marginBottom: 3 },
+  tradingViewButton: {
+    alignItems: "center",
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    flexDirection: "row",
+    gap: 5,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: spacing.sm,
+  },
+  tradingViewText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  tradingViewTextDisabled: { color: palette.textMuted },
+  controlLabel: { color: palette.text, fontSize: 12, fontWeight: "800", marginTop: spacing.xs },
+  controlRow: { gap: spacing.xs },
+  controlChip: {
+    alignItems: "center",
+    backgroundColor: palette.surfaceMuted,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    minWidth: 52,
+    paddingHorizontal: spacing.sm,
+  },
+  controlChipActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
+  controlChipText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
+  controlChipTextActive: { color: palette.primary },
+  rangeHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  rangeSummary: { color: palette.textMuted, fontSize: 11, maxWidth: "52%", textAlign: "right" },
+  sourceStrip: {
+    backgroundColor: palette.surfaceMuted,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    gap: 5,
+    padding: spacing.sm,
+  },
+  sourcePill: { alignSelf: "flex-start", backgroundColor: palette.primarySoft, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 4 },
+  sourcePillText: { color: palette.primary, fontSize: 11, fontWeight: "800" },
+  sourceText: { color: palette.textMuted, fontSize: 11, lineHeight: 16 },
+  warningText: { color: palette.warning, fontSize: 12, lineHeight: 18 },
+  statePanel: { alignItems: "center", gap: spacing.sm, justifyContent: "center", minHeight: 220, padding: spacing.md },
+  errorPanel: {
+    alignItems: "flex-start",
+    backgroundColor: palette.negativeSoft,
+    borderColor: palette.negative,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    gap: spacing.sm,
+    minHeight: 200,
+    justifyContent: "center",
+    padding: spacing.md,
+  },
+  errorTitle: { color: palette.negative, fontSize: 16, fontWeight: "800" },
+  errorText: { color: palette.text, fontSize: 13, lineHeight: 20 },
+  retryButton: { alignItems: "center", backgroundColor: palette.primary, borderRadius: radius.sm, flexDirection: "row", gap: spacing.xs, justifyContent: "center", minHeight: 44, paddingHorizontal: spacing.md },
+  retryText: { color: palette.canvas, fontSize: 13, fontWeight: "800" },
+  inspectionStrip: { backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, gap: spacing.sm, padding: spacing.sm },
+  inspectionHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  inspectionTitle: { color: palette.text, fontSize: 12, fontWeight: "800" },
+  inspectionTimestamp: { color: palette.textMuted, fontSize: 11 },
+  ohlcGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  ohlcItem: { backgroundColor: palette.canvas, borderRadius: radius.sm, flexGrow: 1, gap: 3, minWidth: "28%", padding: spacing.xs },
+  ohlcLabel: { color: palette.textMuted, fontSize: 10 },
+  ohlcValue: { color: palette.text, fontSize: 12, fontWeight: "800" },
+  indicatorHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm, justifyContent: "space-between", marginTop: spacing.xs },
+  indicatorTitle: { color: palette.text, fontSize: 15, fontWeight: "800", marginBottom: 2 },
+  selectorButton: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: 5, justifyContent: "center", minHeight: 44, paddingHorizontal: spacing.sm },
+  selectorButtonText: { color: palette.text, fontSize: 12, fontWeight: "800" },
+  researchNote: { backgroundColor: palette.primarySoft, borderColor: palette.border, borderRadius: radius.md, borderWidth: 1, gap: 4, padding: spacing.md },
+  researchNoteTitle: { color: palette.primary, fontSize: 13, fontWeight: "800" },
+  researchNoteText: { color: palette.textMuted, fontSize: 12, lineHeight: 19 },
+  sheetBackdrop: { backgroundColor: "rgba(0,0,0,0.62)", flex: 1, justifyContent: "flex-end" },
+  sheet: { backgroundColor: palette.surface, borderColor: palette.border, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, borderWidth: 1, gap: spacing.sm, padding: spacing.md, paddingBottom: spacing.lg },
+  sheetTitle: { color: palette.text, fontSize: 18, fontWeight: "800" },
+  sheetCopy: { color: palette.textMuted, fontSize: 12, lineHeight: 19 },
+  inputLabel: { color: palette.text, fontSize: 12, fontWeight: "800", marginTop: spacing.xs },
+  dateInput: { backgroundColor: palette.canvas, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, color: palette.text, fontSize: 15, height: 48, paddingHorizontal: spacing.sm },
+  sheetActions: { flexDirection: "row", gap: spacing.xs, justifyContent: "flex-end", marginTop: spacing.sm },
+  secondarySheetAction: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, justifyContent: "center", minHeight: 44, minWidth: 92, paddingHorizontal: spacing.sm },
+  secondarySheetActionText: { color: palette.text, fontSize: 13, fontWeight: "800" },
+  primarySheetAction: { alignItems: "center", backgroundColor: palette.primary, borderRadius: radius.sm, justifyContent: "center", minHeight: 44, minWidth: 104, paddingHorizontal: spacing.sm },
+  primarySheetActionText: { color: palette.canvas, fontSize: 13, fontWeight: "800" },
+  indicatorOptions: { gap: spacing.xs, marginTop: spacing.xs },
+  indicatorOption: { alignItems: "center", backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, justifyContent: "center", minHeight: 48, paddingHorizontal: spacing.sm },
+  indicatorOptionActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
+  indicatorOptionText: { color: palette.text, fontSize: 14, fontWeight: "800" },
+  indicatorOptionTextActive: { color: palette.primary },
+});

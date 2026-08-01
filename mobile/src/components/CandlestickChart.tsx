@@ -6,57 +6,70 @@ import {
   Text,
   View,
 } from "react-native";
-import Svg, { G, Line, Path, Rect } from "react-native-svg";
-import type { Candle, IndicatorPoint } from "../types";
+import Svg, { Circle, G, Line, Path, Rect } from "react-native-svg";
+import type { CryptoCandle, CryptoIndicatorPoint } from "../types";
 import { palette, radius, spacing } from "../theme";
 
+export type ChartWindow = Readonly<{
+  start: number;
+  end: number;
+}>;
+
 type Props = {
-  candles: Candle[];
-  indicators: IndicatorPoint[];
+  candles: CryptoCandle[];
+  indicators: CryptoIndicatorPoint[];
   height?: number;
-  onSelectCandle?: (candle: Candle | null) => void;
+  onSelectCandle?: (candle: CryptoCandle | null) => void;
+  onWindowChange?: (window: ChartWindow) => void;
 };
 
-const PADDING = { top: 22, right: 10, bottom: 28, left: 54 };
+const PADDING = { top: 30, right: 12, bottom: 24, left: 54 };
 const MIN_VISIBLE_CANDLES = 12;
+const INITIAL_VISIBLE_CANDLES = 80;
+const VOLUME_HEIGHT = 58;
+const PANEL_GAP = 10;
 
-function formatTimestamp(timestamp: number) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+function finite(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
 function linePath(
   values: Array<number | null>,
-  minimum: number,
-  maximum: number,
-  width: number,
-  height: number,
+  xAt: (index: number) => number,
+  yAt: (value: number) => number,
 ) {
-  const availableWidth = width - PADDING.left - PADDING.right;
-  const availableHeight = height - PADDING.top - PADDING.bottom;
-  const range = Math.max(maximum - minimum, Number.EPSILON);
   let path = "";
+  let inSegment = false;
+
   values.forEach((value, index) => {
-    if (value == null) return;
-    const x = PADDING.left + (index / Math.max(values.length - 1, 1)) * availableWidth;
-    const y = PADDING.top + (1 - (value - minimum) / range) * availableHeight;
-    path += `${path ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)} `;
+    if (value == null) {
+      inSegment = false;
+      return;
+    }
+    path += `${inSegment ? "L" : "M"}${xAt(index).toFixed(2)},${yAt(value).toFixed(2)} `;
+    inSegment = true;
   });
+
   return path;
 }
 
+/**
+ * Native OHLCV renderer. It deliberately only visualizes indicators returned
+ * with the market snapshot; it does not calculate a technical series locally.
+ */
 export default function CandlestickChart({
   candles,
   indicators,
-  height = 292,
+  height = 370,
   onSelectCandle,
+  onWindowChange,
 }: Props) {
   const [width, setWidth] = useState(360);
-  const [visibleCount, setVisibleCount] = useState(80);
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_CANDLES);
   const [endIndex, setEndIndex] = useState(candles.length);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const visibleCountRef = useRef(visibleCount);
@@ -65,29 +78,76 @@ export default function CandlestickChart({
   const pinchStartCount = useRef(visibleCount);
   const panStartX = useRef<number | null>(null);
   const panStartEnd = useRef(endIndex);
+  const movedDuringGesture = useRef(false);
+  const pinchedDuringGesture = useRef(false);
+  const onSelectCandleRef = useRef(onSelectCandle);
+  const onWindowChangeRef = useRef(onWindowChange);
+
+  onSelectCandleRef.current = onSelectCandle;
+  onWindowChangeRef.current = onWindowChange;
+
+  const candleCount = candles.length;
+  const lastTimestamp = candles[candleCount - 1]?.ts;
 
   useEffect(() => {
-    const nextVisibleCount = Math.min(Math.max(MIN_VISIBLE_CANDLES, visibleCountRef.current), candles.length || 1);
+    if (candleCount === 0) {
+      setEndIndex(0);
+      endIndexRef.current = 0;
+      setSelectedIndex(null);
+      return;
+    }
+
+    const nextVisibleCount = clamp(
+      visibleCountRef.current,
+      Math.min(MIN_VISIBLE_CANDLES, candleCount),
+      candleCount,
+    );
     setVisibleCount(nextVisibleCount);
     visibleCountRef.current = nextVisibleCount;
-    setEndIndex(candles.length);
-    endIndexRef.current = candles.length;
-    setSelectedIndex(null);
-    onSelectCandle?.(null);
-  }, [candles.length, onSelectCandle]);
+    setEndIndex(candleCount);
+    endIndexRef.current = candleCount;
+    setSelectedIndex(candleCount - 1);
+  }, [candleCount, lastTimestamp]);
 
-  const window = useMemo(() => {
-    const count = Math.min(Math.max(MIN_VISIBLE_CANDLES, visibleCount), candles.length || 1);
-    const end = Math.min(Math.max(count, endIndex), candles.length);
-    return { start: Math.max(0, end - count), end, candles: candles.slice(Math.max(0, end - count), end) };
-  }, [candles, endIndex, visibleCount]);
+  const window = useMemo<ChartWindow>(() => {
+    if (candleCount === 0) return { start: 0, end: 0 };
+    const count = clamp(
+      visibleCount,
+      Math.min(MIN_VISIBLE_CANDLES, candleCount),
+      candleCount,
+    );
+    const end = clamp(endIndex, count, candleCount);
+    return { start: Math.max(0, end - count), end };
+  }, [candleCount, endIndex, visibleCount]);
+
+  const visibleCandles = useMemo(
+    () => candles.slice(window.start, window.end),
+    [candles, window.end, window.start],
+  );
+
+  useEffect(() => {
+    onWindowChangeRef.current?.(window);
+  }, [window]);
+
+  useEffect(() => {
+    if (selectedIndex == null || selectedIndex < window.start || selectedIndex >= window.end) {
+      setSelectedIndex(visibleCandles.length ? window.end - 1 : null);
+    }
+  }, [selectedIndex, visibleCandles.length, window.end, window.start]);
+
+  useEffect(() => {
+    onSelectCandleRef.current?.(
+      selectedIndex == null ? null : candles[selectedIndex] ?? null,
+    );
+  }, [candles, selectedIndex]);
 
   const indicatorByTimestamp = useMemo(
     () => new Map(indicators.map((indicator) => [indicator.ts, indicator])),
     [indicators],
   );
-  const visibleIndicators = window.candles.map(
-    (candle) => indicatorByTimestamp.get(candle.ts) ?? { ts: candle.ts, ma: {} },
+  const visibleIndicators = useMemo(
+    () => visibleCandles.map((candle) => indicatorByTimestamp.get(candle.ts)),
+    [indicatorByTimestamp, visibleCandles],
   );
 
   const setChartWidth = (event: LayoutChangeEvent) => {
@@ -95,12 +155,15 @@ export default function CandlestickChart({
   };
 
   const chooseCandle = (locationX: number) => {
-    if (!window.candles.length) return;
+    if (!visibleCandles.length) return;
     const plotWidth = Math.max(1, width - PADDING.left - PADDING.right);
-    const ratio = Math.min(1, Math.max(0, (locationX - PADDING.left) / plotWidth));
-    const index = Math.min(window.candles.length - 1, Math.max(0, Math.round(ratio * (window.candles.length - 1))));
-    setSelectedIndex(index);
-    onSelectCandle?.(window.candles[index]);
+    const ratio = clamp((locationX - PADDING.left) / plotWidth, 0, 1);
+    const localIndex = clamp(
+      Math.round(ratio * (visibleCandles.length - 1)),
+      0,
+      visibleCandles.length - 1,
+    );
+    setSelectedIndex(window.start + localIndex);
   };
 
   const responder = useMemo(
@@ -112,98 +175,286 @@ export default function CandlestickChart({
           const touches = event.nativeEvent.touches;
           panStartX.current = touches[0]?.locationX ?? null;
           panStartEnd.current = endIndexRef.current;
+          movedDuringGesture.current = false;
+          pinchedDuringGesture.current = touches.length >= 2;
           if (touches.length >= 2) {
-            pinchStartDistance.current = Math.abs(touches[0].locationX - touches[1].locationX);
+            pinchStartDistance.current = Math.abs(
+              touches[0].locationX - touches[1].locationX,
+            );
             pinchStartCount.current = visibleCountRef.current;
           }
         },
         onPanResponderMove: (event) => {
           const touches = event.nativeEvent.touches;
-          if (touches.length >= 2 && pinchStartDistance.current) {
+          if (touches.length >= 2 && pinchStartDistance.current != null) {
+            pinchedDuringGesture.current = true;
             const distance = Math.abs(touches[0].locationX - touches[1].locationX);
             const scale = Math.max(distance / Math.max(pinchStartDistance.current, 1), 0.1);
-            const next = Math.round(pinchStartCount.current / scale);
-            const clamped = Math.min(candles.length, Math.max(MIN_VISIBLE_CANDLES, next));
-            setVisibleCount(clamped);
-            visibleCountRef.current = clamped;
-            setEndIndex((current) => Math.min(candles.length, Math.max(clamped, current)));
+            const nextVisibleCount = clamp(
+              Math.round(pinchStartCount.current / scale),
+              Math.min(MIN_VISIBLE_CANDLES, candles.length || 1),
+              Math.max(candles.length, 1),
+            );
+            setVisibleCount(nextVisibleCount);
+            visibleCountRef.current = nextVisibleCount;
+            setEndIndex((current) => {
+              const nextEnd = clamp(nextVisibleCount, nextVisibleCount, Math.max(candles.length, nextVisibleCount));
+              const resolved = Math.max(nextEnd, Math.min(current, candles.length));
+              endIndexRef.current = resolved;
+              return resolved;
+            });
             return;
           }
+
           const startX = panStartX.current;
-          if (startX == null || !window.candles.length) return;
-          const moved = event.nativeEvent.touches[0]?.locationX - startX;
-          const shift = Math.round((-moved / Math.max(width, 1)) * visibleCountRef.current);
-          const next = Math.min(candles.length, Math.max(visibleCountRef.current, panStartEnd.current + shift));
-          setEndIndex(next);
-          endIndexRef.current = next;
+          if (startX == null || !visibleCandles.length) return;
+          const moved = (touches[0]?.locationX ?? startX) - startX;
+          if (Math.abs(moved) >= 4) movedDuringGesture.current = true;
+          const shift = Math.round(
+            (-moved / Math.max(width, 1)) * visibleCountRef.current,
+          );
+          const nextEnd = clamp(
+            panStartEnd.current + shift,
+            Math.min(visibleCountRef.current, candles.length),
+            candles.length,
+          );
+          setEndIndex(nextEnd);
+          endIndexRef.current = nextEnd;
         },
         onPanResponderRelease: (event) => {
-          if (pinchStartDistance.current == null) chooseCandle(event.nativeEvent.locationX);
+          if (!pinchedDuringGesture.current && !movedDuringGesture.current) {
+            chooseCandle(event.nativeEvent.locationX);
+          }
           pinchStartDistance.current = null;
           panStartX.current = null;
+          movedDuringGesture.current = false;
+          pinchedDuringGesture.current = false;
+        },
+        onPanResponderTerminate: () => {
+          pinchStartDistance.current = null;
+          panStartX.current = null;
+          movedDuringGesture.current = false;
+          pinchedDuringGesture.current = false;
         },
       }),
-    [candles.length, endIndexRef, onSelectCandle, visibleCountRef, width, window.candles.length],
+    [candles.length, visibleCandles.length, width, window.start],
   );
 
-  if (!window.candles.length) {
-    return <View style={[styles.empty, { height }]}><Text style={styles.emptyText}>当前范围没有可显示的 K 线</Text></View>;
+  if (!visibleCandles.length) {
+    return (
+      <View style={[styles.empty, { height }]}>
+        <Text style={styles.emptyText}>当前范围没有可显示的 K 线</Text>
+      </View>
+    );
   }
 
-  const low = Math.min(...window.candles.map((candle) => candle.low));
-  const high = Math.max(...window.candles.map((candle) => candle.high));
-  const pricePadding = Math.max((high - low) * 0.08, high * 0.001);
+  const priceTop = PADDING.top;
+  const volumeBottom = height - PADDING.bottom;
+  const volumeTop = volumeBottom - VOLUME_HEIGHT;
+  const priceBottom = volumeTop - PANEL_GAP;
+  const priceHeight = Math.max(1, priceBottom - priceTop);
+  const plotWidth = Math.max(1, width - PADDING.left - PADDING.right);
+  const priceValues = visibleCandles.flatMap((candle, index) => {
+    const indicator = visibleIndicators[index];
+    return [
+      candle.low,
+      candle.high,
+      finite(indicator?.ma.ma5),
+      finite(indicator?.ma.ma20),
+      finite(indicator?.ma.ma60),
+    ].filter((value): value is number => value != null);
+  });
+  const low = Math.min(...priceValues);
+  const high = Math.max(...priceValues);
+  const pricePadding = Math.max((high - low) * 0.08, Math.abs(high) * 0.001, Number.EPSILON);
   const minimum = low - pricePadding;
   const maximum = high + pricePadding;
-  const plotWidth = width - PADDING.left - PADDING.right;
-  const plotHeight = height - PADDING.top - PADDING.bottom;
-  const range = Math.max(maximum - minimum, Number.EPSILON);
-  const candleWidth = Math.max(2, Math.min(10, (plotWidth / window.candles.length) * 0.62));
-  const ma5 = visibleIndicators.map((indicator) => indicator.ma.ma5 ?? null);
-  const ma20 = visibleIndicators.map((indicator) => indicator.ma.ma20 ?? null);
-  const selectedCandle = selectedIndex == null ? null : window.candles[selectedIndex];
+  const priceRange = Math.max(maximum - minimum, Number.EPSILON);
+  const maxVolume = Math.max(
+    ...visibleCandles.map((candle) => Math.max(0, candle.volume)),
+    Number.EPSILON,
+  );
+  const candleWidth = Math.max(
+    2,
+    Math.min(11, (plotWidth / visibleCandles.length) * 0.62),
+  );
+  const volumeWidth = Math.max(
+    1,
+    Math.min(11, (plotWidth / visibleCandles.length) * 0.72),
+  );
+  const ma5 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma5));
+  const ma20 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma20));
+  const ma60 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma60));
+  const selectedLocalIndex =
+    selectedIndex == null ? null : selectedIndex - window.start;
+  const selectedCandle =
+    selectedLocalIndex == null ||
+    selectedLocalIndex < 0 ||
+    selectedLocalIndex >= visibleCandles.length
+      ? null
+      : visibleCandles[selectedLocalIndex];
 
-  function y(value: number) {
-    return PADDING.top + (1 - (value - minimum) / range) * plotHeight;
-  }
+  const xAt = (index: number) =>
+    PADDING.left + ((index + 0.5) / visibleCandles.length) * plotWidth;
+  const priceY = (value: number) =>
+    priceTop + (1 - (value - minimum) / priceRange) * priceHeight;
+  const volumeY = (value: number) =>
+    volumeBottom - (Math.max(0, value) / maxVolume) * VOLUME_HEIGHT;
 
   return (
-    <View accessibilityLabel="可缩放的 K 线图" onLayout={setChartWidth} style={styles.container} {...responder.panHandlers}>
+    <View
+      accessibilityLabel="可缩放、可拖动、可点按的 K 线图"
+      onLayout={setChartWidth}
+      style={styles.container}
+      {...responder.panHandlers}
+    >
       <Svg height={height} viewBox={`0 0 ${width} ${height}`} width={width}>
         {[0, 0.5, 1].map((fraction) => {
-          const lineY = PADDING.top + plotHeight * fraction;
-          return <Line key={fraction} stroke={palette.border} strokeDasharray="3 4" strokeWidth={1} x1={PADDING.left} x2={width - PADDING.right} y1={lineY} y2={lineY} />;
+          const lineY = priceTop + priceHeight * fraction;
+          return (
+            <Line
+              key={fraction}
+              stroke={palette.border}
+              strokeDasharray="3 4"
+              strokeWidth={1}
+              x1={PADDING.left}
+              x2={width - PADDING.right}
+              y1={lineY}
+              y2={lineY}
+            />
+          );
         })}
-        {window.candles.map((candle, index) => {
-          const x = PADDING.left + ((index + 0.5) / window.candles.length) * plotWidth;
+        <Line
+          stroke={palette.border}
+          strokeWidth={1}
+          x1={PADDING.left}
+          x2={width - PADDING.right}
+          y1={volumeTop}
+          y2={volumeTop}
+        />
+        {visibleCandles.map((candle, index) => {
+          const x = xAt(index);
           const color = candle.close >= candle.open ? palette.positive : palette.negative;
-          const bodyTop = y(Math.max(candle.open, candle.close));
-          const bodyBottom = y(Math.min(candle.open, candle.close));
-          return <G key={candle.ts}><Line stroke={color} strokeWidth={1} x1={x} x2={x} y1={y(candle.high)} y2={y(candle.low)} /><Rect fill={color} height={Math.max(1.5, bodyBottom - bodyTop)} rx={1} width={candleWidth} x={x - candleWidth / 2} y={bodyTop} /></G>;
+          const bodyTop = priceY(Math.max(candle.open, candle.close));
+          const bodyBottom = priceY(Math.min(candle.open, candle.close));
+          return (
+            <G key={candle.ts}>
+              <Rect
+                fill={color}
+                fillOpacity={0.48}
+                height={Math.max(1, volumeBottom - volumeY(candle.volume))}
+                width={volumeWidth}
+                x={x - volumeWidth / 2}
+                y={volumeY(candle.volume)}
+              />
+              <Line
+                stroke={color}
+                strokeWidth={1}
+                x1={x}
+                x2={x}
+                y1={priceY(candle.high)}
+                y2={priceY(candle.low)}
+              />
+              <Rect
+                fill={color}
+                height={Math.max(1.5, bodyBottom - bodyTop)}
+                rx={1}
+                width={candleWidth}
+                x={x - candleWidth / 2}
+                y={bodyTop}
+              />
+            </G>
+          );
         })}
-        <Path d={linePath(ma5, minimum, maximum, width, height)} fill="none" stroke="#F5B544" strokeWidth={1.4} />
-        <Path d={linePath(ma20, minimum, maximum, width, height)} fill="none" stroke={palette.primary} strokeWidth={1.4} />
-        {selectedIndex != null ? <Line stroke={palette.textMuted} strokeDasharray="4 4" strokeWidth={1} x1={PADDING.left + ((selectedIndex + 0.5) / window.candles.length) * plotWidth} x2={PADDING.left + ((selectedIndex + 0.5) / window.candles.length) * plotWidth} y1={PADDING.top} y2={height - PADDING.bottom} /> : null}
+        <Path d={linePath(ma5, xAt, priceY)} fill="none" stroke="#F5B544" strokeWidth={1.35} />
+        <Path d={linePath(ma20, xAt, priceY)} fill="none" stroke={palette.primary} strokeWidth={1.35} />
+        <Path d={linePath(ma60, xAt, priceY)} fill="none" stroke="#B58CFF" strokeWidth={1.35} />
+        {selectedCandle && selectedLocalIndex != null ? (
+          <>
+            <Line
+              stroke={palette.textMuted}
+              strokeDasharray="4 4"
+              strokeWidth={1}
+              x1={xAt(selectedLocalIndex)}
+              x2={xAt(selectedLocalIndex)}
+              y1={priceTop}
+              y2={volumeBottom}
+            />
+            <Line
+              stroke={palette.textMuted}
+              strokeDasharray="4 4"
+              strokeWidth={1}
+              x1={PADDING.left}
+              x2={width - PADDING.right}
+              y1={priceY(selectedCandle.close)}
+              y2={priceY(selectedCandle.close)}
+            />
+            <Circle
+              cx={xAt(selectedLocalIndex)}
+              cy={priceY(selectedCandle.close)}
+              fill={palette.surface}
+              r={3.4}
+              stroke={selectedCandle.close >= selectedCandle.open ? palette.positive : palette.negative}
+              strokeWidth={1.5}
+            />
+          </>
+        ) : null}
       </Svg>
-      <View pointerEvents="none" style={styles.axisTop}><Text style={styles.axisText}>{high.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text></View>
-      <View pointerEvents="none" style={styles.axisBottom}><Text style={styles.axisText}>{low.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text></View>
-      <View pointerEvents="none" style={styles.legend}><Text style={[styles.legendText, { color: "#F5B544" }]}>MA5</Text><Text style={[styles.legendText, { color: palette.primary }]}>MA20</Text><Text style={styles.gestureText}>双指缩放 · 拖动回看 · 点按明细</Text></View>
-      {selectedCandle ? <View pointerEvents="none" style={styles.tooltip}><Text style={styles.tooltipTime}>{formatTimestamp(selectedCandle.ts)}</Text><Text style={styles.tooltipText}>开 {selectedCandle.open.toLocaleString()} · 高 {selectedCandle.high.toLocaleString()}</Text><Text style={styles.tooltipText}>低 {selectedCandle.low.toLocaleString()} · 收 {selectedCandle.close.toLocaleString()}</Text></View> : null}
+      <View pointerEvents="none" style={styles.axisTop}>
+        <Text style={styles.axisText}>{high.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
+      </View>
+      <View pointerEvents="none" style={styles.axisBottom}>
+        <Text style={styles.axisText}>{low.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
+      </View>
+      <View pointerEvents="none" style={styles.volumeLabel}>
+        <Text style={styles.axisText}>VOL {maxVolume.toLocaleString(undefined, { maximumFractionDigits: 1 })}</Text>
+      </View>
+      <View pointerEvents="none" style={styles.legend}>
+        <Text style={[styles.legendText, { color: "#F5B544" }]}>MA5</Text>
+        <Text style={[styles.legendText, { color: palette.primary }]}>MA20</Text>
+        <Text style={[styles.legendText, { color: "#B58CFF" }]}>MA60</Text>
+      </View>
+      <View pointerEvents="none" style={styles.gestureCopy}>
+        <Text style={styles.gestureText}>双指缩放 · 拖动回看 · 点按查看</Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.md, borderWidth: 1, overflow: "hidden" },
-  empty: { alignItems: "center", backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.md, borderWidth: 1, justifyContent: "center" },
+  container: {
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  empty: {
+    alignItems: "center",
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    justifyContent: "center",
+  },
   emptyText: { color: palette.textMuted, fontSize: 13 },
-  axisTop: { position: "absolute", right: spacing.xs, top: spacing.xs },
-  axisBottom: { bottom: spacing.xs, position: "absolute", right: spacing.xs },
+  axisTop: { position: "absolute", right: spacing.xs, top: 49 },
+  axisBottom: { bottom: 86, position: "absolute", right: spacing.xs },
   axisText: { color: palette.textMuted, fontSize: 10 },
-  legend: { alignItems: "center", flexDirection: "row", gap: spacing.sm, left: PADDING.left, position: "absolute", top: spacing.xs },
+  volumeLabel: { bottom: spacing.xs, position: "absolute", right: spacing.xs },
+  legend: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: spacing.sm,
+    left: PADDING.left,
+    position: "absolute",
+    top: spacing.xs,
+  },
   legendText: { fontSize: 10, fontWeight: "700" },
-  gestureText: { color: palette.textMuted, fontSize: 9, marginLeft: spacing.xs },
-  tooltip: { backgroundColor: "rgba(7,17,31,0.94)", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, bottom: spacing.sm, left: spacing.sm, padding: spacing.xs, position: "absolute" },
-  tooltipTime: { color: palette.primary, fontSize: 10, fontWeight: "800", marginBottom: 2 },
-  tooltipText: { color: palette.text, fontSize: 10, lineHeight: 15 },
+  gestureCopy: {
+    bottom: spacing.xs,
+    left: PADDING.left,
+    position: "absolute",
+  },
+  gestureText: { color: palette.textMuted, fontSize: 9 }
 });

@@ -20,10 +20,16 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyEvaluationJournal,
 )
 from valuecell.server.db.repositories.rule_strategy_repository import (
+    RuleStrategyAlreadyArchivedError,
+    RuleStrategyArchiveNotFoundError,
+    RuleStrategyArchiveRunningError,
     RuleStrategyRepository,
 )
 from valuecell.server.services.rule_engine import RuleEngine
 
+
+ARCHIVED_STRATEGY_MUTATION_DETAIL = "Archived strategies cannot be modified or started"
+STOP_STRATEGY_BEFORE_ARCHIVING_DETAIL = "Stop the strategy before archiving it"
 
 class RuleStrategyNotFoundError(Exception):
     """Raised when an isolated rule strategy does not exist."""
@@ -31,6 +37,14 @@ class RuleStrategyNotFoundError(Exception):
 
 class RuleStrategyNotRunningError(Exception):
     """Raised when evaluation is requested for a stopped strategy."""
+
+
+class RuleStrategyArchivedError(Exception):
+    """Raised when an archived strategy receives a mutable lifecycle request."""
+
+
+class RuleStrategyRunningError(Exception):
+    """Raised when archiving is requested while a strategy is running."""
 
 
 class RuleStrategyService:
@@ -64,10 +78,12 @@ class RuleStrategyService:
         )
         return self._strategy_data(strategy)
 
-    def list(self, tenant_id: str) -> list[dict[str, Any]]:
+    def list(
+        self, tenant_id: str, include_archived: bool = False
+    ) -> list[dict[str, Any]]:
         return [
             self._strategy_data(strategy)
-            for strategy in self.repository.list(tenant_id)
+            for strategy in self.repository.list(tenant_id, include_archived)
         ]
 
     def get(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
@@ -93,6 +109,24 @@ class RuleStrategyService:
     def stop(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         return self._set_status(strategy_id, tenant_id, "stopped")
 
+    def archive(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
+        """Archive one stopped strategy while preserving its tenant-scoped history."""
+        strategy = self._require_strategy(strategy_id, tenant_id)
+        self._ensure_can_archive(strategy)
+        try:
+            archived = self.repository.archive(strategy_id, tenant_id)
+        except RuleStrategyArchiveNotFoundError as exc:
+            raise RuleStrategyNotFoundError(str(exc)) from exc
+        except RuleStrategyArchiveRunningError as exc:
+            raise RuleStrategyRunningError(
+                STOP_STRATEGY_BEFORE_ARCHIVING_DETAIL
+            ) from exc
+        except RuleStrategyAlreadyArchivedError as exc:
+            raise RuleStrategyArchivedError(
+                ARCHIVED_STRATEGY_MUTATION_DETAIL
+            ) from exc
+        return self._strategy_data(archived)
+
     def evaluate(
         self,
         strategy_id: str,
@@ -101,6 +135,7 @@ class RuleStrategyService:
         market: RuleStrategyMarketSnapshot,
     ) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
+        self._ensure_not_archived(strategy)
         if strategy.status != "running":
             raise RuleStrategyNotRunningError(
                 "Rule strategy must be running before evaluation"
@@ -165,6 +200,7 @@ class RuleStrategyService:
         configured amount is not affordable; partial paper fills are forbidden.
         """
         strategy = self._require_strategy(strategy_id, tenant_id)
+        self._ensure_not_archived(strategy)
         if strategy.status != "running":
             raise RuleStrategyNotRunningError(
                 "Rule strategy must be running before evaluation"
@@ -473,6 +509,8 @@ class RuleStrategyService:
         self, strategy_id: str, tenant_id: str, status: str
     ) -> dict[str, Any]:
         def apply(strategy: RuleStrategy) -> None:
+            if status == "running":
+                self._ensure_not_archived(strategy)
             strategy.status = status
             strategy.execution_generation = (strategy.execution_generation or 1) + 1
         return self._locked_mutate(strategy_id, tenant_id, apply)
@@ -482,6 +520,7 @@ class RuleStrategyService:
         strategy: RuleStrategy, name: str | None, description: str | None,
         config: RuleStrategyConfig | None,
     ) -> None:
+        RuleStrategyService._ensure_not_archived(strategy)
         if name is not None:
             strategy.name = name
         if description is not None:
@@ -489,6 +528,17 @@ class RuleStrategyService:
         if config is not None:
             strategy.config = config.model_dump(mode="json")
             strategy.execution_generation = (strategy.execution_generation or 1) + 1
+
+    @staticmethod
+    def _ensure_not_archived(strategy: RuleStrategy) -> None:
+        if strategy.archived_at is not None:
+            raise RuleStrategyArchivedError(ARCHIVED_STRATEGY_MUTATION_DETAIL)
+
+    @staticmethod
+    def _ensure_can_archive(strategy: RuleStrategy) -> None:
+        RuleStrategyService._ensure_not_archived(strategy)
+        if strategy.status == "running":
+            raise RuleStrategyRunningError(STOP_STRATEGY_BEFORE_ARCHIVING_DETAIL)
 
     def _locked_mutate(self, strategy_id: str, tenant_id: str, apply: Any) -> dict[str, Any]:
         """Control-plane changes share the RuleStrategy lock with dispatch.
@@ -540,6 +590,11 @@ class RuleStrategyService:
             "name": strategy.name,
             "description": strategy.description,
             "status": strategy.status,
+            "archived_at": (
+                strategy.archived_at.isoformat()
+                if strategy.archived_at is not None
+                else None
+            ),
             "mode": config.execution.environment,
             "config": strategy.config,
             "execution_generation": strategy.execution_generation,

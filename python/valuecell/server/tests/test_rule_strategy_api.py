@@ -4,8 +4,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.db.connection import get_db
+from valuecell.server.db.models.rule_strategy import RuleStrategy
+from valuecell.server.db.repositories.rule_strategy_repository import (
+    RuleStrategyRepository,
+)
 
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
@@ -14,6 +20,7 @@ from valuecell.server.services.rule_strategy_service import RuleStrategyService
 STRATEGY_ID = "rule_deterministic"
 EVALUATION_ID = "evaluation_deterministic"
 CREATED_AT = datetime(2026, 7, 10, tzinfo=timezone.utc)
+ARCHIVED_AT = datetime(2026, 7, 11, tzinfo=timezone.utc)
 FIXED_PRINCIPAL = CurrentPrincipal(
     user_id="rule-test-user", tenant_id="rule-test-tenant"
 )
@@ -34,15 +41,44 @@ class InMemoryRuleStrategyRepository:
         return strategy
 
     def get(self, strategy_id: str, tenant_id: str):
-        return self.strategy if self.strategy and strategy_id == STRATEGY_ID else None
+        if (
+            self.strategy
+            and strategy_id == STRATEGY_ID
+            and tenant_id == FIXED_PRINCIPAL.tenant_id
+        ):
+            return self.strategy
+        return None
 
-    def list(self, tenant_id: str):
-        return [self.strategy] if self.strategy else []
+    def list(self, tenant_id: str, include_archived: bool = False):
+        if tenant_id != FIXED_PRINCIPAL.tenant_id or self.strategy is None:
+            return []
+        if not include_archived and self.strategy.archived_at is not None:
+            return []
+        return [self.strategy]
 
     def update(self, strategy):
         strategy.updated_at = CREATED_AT
         self.strategy = strategy
         return strategy
+
+    def archive(self, strategy_id: str, tenant_id: str):
+        strategy = self.get(strategy_id, tenant_id)
+        if strategy is None:
+            raise KeyError(strategy_id)
+        strategy.execution_generation = (strategy.execution_generation or 1) + 1
+        strategy.archived_at = ARCHIVED_AT
+        strategy.updated_at = ARCHIVED_AT
+        self.strategy = strategy
+        return strategy
+
+    def list_running(self):
+        if (
+            self.strategy is not None
+            and self.strategy.status == "running"
+            and self.strategy.archived_at is None
+        ):
+            return [self.strategy]
+        return []
 
     def append_evaluation(self, journal):
         journal.evaluation_id = EVALUATION_ID
@@ -211,6 +247,7 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
     assert data["strategy_id"] == STRATEGY_ID
     assert data["name"] == "Oversold recovery"
     assert data["status"] == "stopped"
+    assert data["archived_at"] is None
     assert data["mode"] == "paper"
     assert data["config"]["mode"] == "paper"
     assert data["config"]["rsi"] == {
@@ -440,3 +477,130 @@ def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None
     assert [condition["code"] for condition in body["data"][0]["conditions"]] == [
         condition["code"] for condition in result["conditions"]
     ]
+
+
+def test_rule_strategy_repository_archives_and_excludes_archived_scheduler_rows():
+    engine = create_engine("sqlite://")
+    RuleStrategy.__table__.create(engine)
+    session = sessionmaker(bind=engine)()
+    repository = RuleStrategyRepository(db_session=session)
+    try:
+        repository.create(
+            RuleStrategy(
+                strategy_id="rule-archive-target",
+                tenant_id=FIXED_PRINCIPAL.tenant_id,
+                name="Archive target",
+                status="stopped",
+                config=_config(),
+            )
+        )
+
+        archived = repository.archive(
+            "rule-archive-target", FIXED_PRINCIPAL.tenant_id
+        )
+
+        assert archived.archived_at is not None
+        assert archived.execution_generation == 2
+        assert repository.list(FIXED_PRINCIPAL.tenant_id) == []
+        assert [
+            strategy.strategy_id
+            for strategy in repository.list(
+                FIXED_PRINCIPAL.tenant_id, include_archived=True
+            )
+        ] == ["rule-archive-target"]
+
+        repository.create(
+            RuleStrategy(
+                strategy_id="rule-archived-running",
+                tenant_id=FIXED_PRINCIPAL.tenant_id,
+                name="Historical running row",
+                status="running",
+                archived_at=ARCHIVED_AT,
+                config=_config(),
+            )
+        )
+
+        assert repository.list_running() == []
+    finally:
+        session.close()
+        RuleStrategy.__table__.drop(engine)
+        engine.dispose()
+
+
+def test_rule_strategy_api_archives_stopped_strategy_and_preserves_history():
+    client = _client()
+    assert (
+        client.post(
+            "/rule-strategies",
+            json={
+                "name": "Archive after evaluation",
+                "initial_capital_quote": 1_000,
+                "config": _config(),
+            },
+        ).status_code
+        == 201
+    )
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/start").status_code == 200
+    assert (
+        client.post(
+            f"/rule-strategies/{STRATEGY_ID}/evaluate", json=_evaluation_input()
+        ).status_code
+        == 200
+    )
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/stop").status_code == 200
+
+    archived = client.delete(f"/rule-strategies/{STRATEGY_ID}")
+
+    assert archived.status_code == 200
+    assert archived.json()["msg"] == "Rule strategy archived"
+    assert archived.json()["data"]["status"] == "stopped"
+    assert archived.json()["data"]["archived_at"] == ARCHIVED_AT.isoformat()
+    assert client.get("/rule-strategies").json()["data"] == []
+    archived_list = client.get(
+        "/rule-strategies", params={"include_archived": "true"}
+    )
+    assert archived_list.status_code == 200
+    assert [item["strategy_id"] for item in archived_list.json()["data"]] == [
+        STRATEGY_ID
+    ]
+    assert archived_list.json()["data"][0]["archived_at"] == ARCHIVED_AT.isoformat()
+    assert client.get(f"/rule-strategies/{STRATEGY_ID}").status_code == 200
+    history = client.get(f"/rule-strategies/{STRATEGY_ID}/evaluations")
+    assert history.status_code == 200
+    assert [entry["evaluation_id"] for entry in history.json()["data"]] == [
+        EVALUATION_ID
+    ]
+
+
+def test_rule_strategy_api_rejects_running_archival_and_archived_mutations():
+    client = _client()
+    assert (
+        client.post(
+            "/rule-strategies",
+            json={"name": "Lifecycle target", "config": _config()},
+        ).status_code
+        == 201
+    )
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/start").status_code == 200
+
+    running_archive = client.delete(f"/rule-strategies/{STRATEGY_ID}")
+
+    assert running_archive.status_code == 409
+    assert running_archive.json()["detail"] == "Stop the strategy before archiving it"
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/stop").status_code == 200
+    assert client.delete(f"/rule-strategies/{STRATEGY_ID}").status_code == 200
+
+    mutations = [
+        client.patch(
+            f"/rule-strategies/{STRATEGY_ID}", json={"name": "Not permitted"}
+        ),
+        client.post(f"/rule-strategies/{STRATEGY_ID}/start"),
+        client.post(
+            f"/rule-strategies/{STRATEGY_ID}/evaluate", json=_evaluation_input()
+        ),
+    ]
+
+    assert [response.status_code for response in mutations] == [409, 409, 409]
+    assert {response.json()["detail"] for response in mutations} == {
+        "Archived strategies cannot be modified or started"
+    }

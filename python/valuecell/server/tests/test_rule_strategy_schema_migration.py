@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 from valuecell.server.db import migrations
@@ -75,6 +75,22 @@ def test_execution_attribution_migration_uses_idempotent_concurrent_postgres_ddl
     assert "CREATE OR REPLACE FUNCTION prevent_sandbox_order_attribution_mutation" in statements
 
 
+def test_rule_strategy_archiving_migration_uses_locked_postgres_ddl():
+    session = FakeSession()
+
+    changed = migrations.migrate_rule_strategy_archiving(session)
+
+    assert changed is True
+    assert session.commits == 1
+    statements = "\n".join(session.statements)
+    assert "CREATE TABLE IF NOT EXISTS schema_migrations" in statements
+    assert "SELECT pg_advisory_xact_lock" in statements
+    assert (
+        "ALTER TABLE rule_strategies ADD COLUMN IF NOT EXISTS archived_at "
+        "TIMESTAMP WITH TIME ZONE NULL"
+    ) in statements
+    assert "INSERT INTO schema_migrations (version) VALUES (:version)" in statements
+
 def test_execution_attribution_migration_is_idempotent_on_sqlite():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -101,6 +117,42 @@ def test_execution_attribution_migration_is_idempotent_on_sqlite():
         "attempt_count", "error_code", "error_message", "submitted_at",
         "terminal_at", "updated_at", "request_payload",
     } <= intent_columns
+
+
+def test_rule_strategy_archiving_migration_is_idempotent_on_sqlite():
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE rule_strategies ("
+                "id INTEGER PRIMARY KEY, strategy_id VARCHAR(100) NOT NULL)"
+            )
+        )
+    session = sessionmaker(bind=engine)()
+    try:
+        assert migrations.migrate_rule_strategy_archiving(session) is True
+        assert "archived_at" in {
+            column["name"]
+            for column in inspect(engine).get_columns("rule_strategies")
+        }
+        assert session.execute(
+            text(
+                "SELECT COUNT(*) FROM schema_migrations "
+                "WHERE version = :version"
+            ),
+            {"version": migrations.RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION},
+        ).scalar_one() == 1
+        assert migrations.migrate_rule_strategy_archiving(session) is False
+        assert session.execute(
+            text(
+                "SELECT COUNT(*) FROM schema_migrations "
+                "WHERE version = :version"
+            ),
+            {"version": migrations.RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION},
+        ).scalar_one() == 1
+    finally:
+        session.close()
+        engine.dispose()
 
 
 def test_execution_attribution_models_define_intent_contract_and_attribution():
@@ -136,16 +188,26 @@ def test_execution_attribution_models_define_intent_contract_and_attribution():
     assert "ck_sandbox_exchange_orders_attribution_complete" in {
         constraint.name for constraint in order.constraints
     }
+    assert "archived_at" in RuleStrategy.__table__.columns
 
 
-def test_app_lifespan_wires_required_migration_before_best_effort_migrations():
+def test_app_lifespan_wires_required_migrations_before_best_effort_migrations():
     from pathlib import Path
 
     source = Path(__file__).parents[1] / "api" / "app.py"
     app_source = source.read_text(encoding="utf-8")
-    required_call = app_source.index("_run_required_execution_attribution_migration()")
+    lifespan_start = app_source.index("async def lifespan")
+    archiving_call = app_source.index(
+        "_run_required_rule_strategy_archiving_migration()", lifespan_start
+    )
+    execution_call = app_source.index(
+        "_run_required_execution_attribution_migration()", lifespan_start
+    )
     best_effort_block = app_source.index("migrate_fixed_order_amounts(session)")
 
-    assert required_call < best_effort_block
-    assert required_call < app_source.index("await _scheduler.start()")
+    assert archiving_call < best_effort_block
+    assert execution_call < best_effort_block
+    assert archiving_call < app_source.index("await _scheduler.start()")
+    assert execution_call < app_source.index("await _scheduler.start()")
+    assert "migrate_rule_strategy_archiving(session)" in app_source
     assert "migrate_rule_strategy_execution_attribution(session)" in app_source
