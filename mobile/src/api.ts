@@ -1,10 +1,10 @@
-import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import * as SecureStore from "expo-secure-store";
 import type {
   ApiEnvelope,
+  DemoConnection,
   MarketResponse,
   SaaSAccess,
-  DemoConnection,
   Session,
   Strategy,
   Workspace,
@@ -14,8 +14,21 @@ const ACCESS_TOKEN_KEY = "valuecell.mobile.access-token";
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://vc.zhiweionline.com/api/v1";
 
+export class MobileApiError extends Error {
+  constructor(
+    message: string,
+    readonly endpoint: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "MobileApiError";
+  }
+}
+
 async function readStoredSession(): Promise<string | null> {
-  if (Platform.OS === "web") return globalThis.localStorage?.getItem(ACCESS_TOKEN_KEY) ?? null;
+  if (Platform.OS === "web") {
+    return globalThis.localStorage?.getItem(ACCESS_TOKEN_KEY) ?? null;
+  }
   return SecureStore.getItemAsync(ACCESS_TOKEN_KEY);
 }
 
@@ -35,6 +48,15 @@ async function removeStoredSession(): Promise<void> {
   await SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY);
 }
 
+function errorDetail(body: unknown): string {
+  if (!body || typeof body !== "object" || !("detail" in body)) {
+    return "服务返回了无法识别的错误。";
+  }
+  const detail = body.detail;
+  if (typeof detail === "string") return detail;
+  return "服务拒绝了本次请求，请检查账户权限或请求参数。";
+}
+
 class MobileApiClient {
   private accessToken = "";
 
@@ -42,18 +64,40 @@ class MobileApiClient {
     this.accessToken = accessToken;
   }
 
+  baseUrl() {
+    return API_BASE_URL;
+  }
+
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
+    headers.set("Accept", "application/json");
     headers.set("Content-Type", "application/json");
     if (this.accessToken) headers.set("Authorization", `Bearer ${this.accessToken}`);
 
-    const response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
-    const body = (await response.json().catch(() => null)) as ApiEnvelope<T> | { detail?: unknown } | null;
-    if (!response.ok) {
-      const detail = body && "detail" in body ? body.detail : response.statusText;
-      throw new Error(typeof detail === "string" ? detail : "请求失败，请稍后重试。");
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
+    } catch {
+      throw new MobileApiError(
+        `无法连接服务：${API_BASE_URL}。请确认手机可访问该 HTTPS 地址。`,
+        path,
+      );
     }
-    if (!body || !("data" in body)) throw new Error("服务端返回格式无效。");
+
+    const body = (await response.json().catch(() => null)) as
+      | ApiEnvelope<T>
+      | { detail?: unknown }
+      | null;
+    if (!response.ok) {
+      throw new MobileApiError(
+        `${response.status}：${errorDetail(body)}`,
+        path,
+        response.status,
+      );
+    }
+    if (!body || !("data" in body)) {
+      throw new MobileApiError("服务返回格式无效。", path, response.status);
+    }
     return body.data;
   }
 
@@ -98,26 +142,33 @@ class MobileApiClient {
   }
 
   startStrategy(strategyId: string) {
-    return this.request<Strategy>(`/rule-strategies/${strategyId}/start`, { method: "POST" });
+    return this.request<Strategy>(`/rule-strategies/${strategyId}/start`, {
+      method: "POST",
+    });
   }
 
   stopStrategy(strategyId: string) {
-    return this.request<Strategy>(`/rule-strategies/${strategyId}/stop`, { method: "POST" });
+    return this.request<Strategy>(`/rule-strategies/${strategyId}/stop`, {
+      method: "POST",
+    });
   }
 
-  updateStrategy(strategyId: string, request: Pick<Strategy, "name" | "description" | "config">) {
+  updateStrategy(
+    strategyId: string,
+    request: Pick<Strategy, "name" | "description" | "config">,
+  ) {
     return this.request<Strategy>(`/rule-strategies/${strategyId}`, {
       method: "PATCH",
       body: JSON.stringify(request),
     });
   }
 
-  market(symbol: string, interval: string, lookback: number) {
-    const params = new URLSearchParams({ symbols: symbol, interval, lookback: String(lookback) });
-    return this.request<MarketResponse>(`/crypto-market/indicators?${params.toString()}`);
-  }
-
-  createStrategy(request: { name: string; description?: string; initial_capital_quote: number; config: Record<string, unknown> }) {
+  createStrategy(request: {
+    name: string;
+    description?: string;
+    initial_capital_quote: number;
+    config: Record<string, unknown>;
+  }) {
     return this.request<Strategy>("/rule-strategies", {
       method: "POST",
       body: JSON.stringify(request),
@@ -126,6 +177,17 @@ class MobileApiClient {
 
   demoConnections() {
     return this.request<DemoConnection[]>("/saas/sandbox-exchanges/connections");
+  }
+
+  market(symbol: string, interval: string, lookback: number) {
+    const params = new URLSearchParams({
+      symbols: symbol,
+      interval,
+      lookback: String(lookback),
+    });
+    return this.request<MarketResponse>(
+      `/crypto-market/indicators?${params.toString()}`,
+    );
   }
 }
 

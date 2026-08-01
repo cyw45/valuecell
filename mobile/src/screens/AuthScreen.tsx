@@ -10,11 +10,12 @@ import {
   View,
 } from "react-native";
 import { BarChart3, LockKeyhole, Mail, ShieldCheck } from "lucide-react-native";
+import { api } from "../api";
 import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
 
 export default function AuthScreen() {
-  const { signIn } = useSession();
+  const { signIn, signOut } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -29,8 +30,10 @@ export default function AuthScreen() {
     setError("");
     try {
       await signIn(email, password);
+      await api.access();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "登录失败，请稍后重试。");
+      await signOut();
     } finally {
       setSubmitting(false);
     }

@@ -18,6 +18,7 @@ export default function HomeScreen() {
   const strategies = useQuery({ queryKey: ["mobile", "strategies"], queryFn: api.strategies });
   const active = strategies.data?.find((strategy) => strategy.status === "running") ?? strategies.data?.[0];
   const refresh = () => void Promise.all([access.refetch(), strategies.refetch()]);
+  const dataError = access.error ?? strategies.error;
 
   return (
     <ScrollView
@@ -30,7 +31,7 @@ export default function HomeScreen() {
         <View style={[styles.status, { backgroundColor: access.data?.status === "active" ? palette.positiveSoft : palette.warningSoft }]}><ShieldCheck color={access.data?.status === "active" ? palette.positive : palette.warning} size={18} /><Text style={[styles.statusText, { color: access.data?.status === "active" ? palette.positive : palette.warning }]}>{access.data?.status === "active" ? "已开通" : "待开通"}</Text></View>
       </View>
       {access.isLoading || strategies.isLoading ? <Text style={styles.loading}>正在同步工作区数据…</Text> : null}
-      {access.isError || strategies.isError ? <Text style={styles.error}>工作区数据同步失败。下拉刷新后重试。</Text> : null}
+      {dataError ? <Text style={styles.error}>{dataError instanceof Error ? dataError.message : "工作区数据同步失败。下拉刷新后重试。"}</Text> : null}
       <View style={styles.metricGrid}>
         <Metric label="当前权益" value={active ? formatUsd(active.account.equity_quote) : "—"} />
         <Metric label="可用资金" value={active ? formatUsd(active.account.quote_balance) : "—"} />
