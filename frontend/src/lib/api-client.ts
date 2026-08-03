@@ -100,14 +100,33 @@ export class ApiClient {
     wrapError: boolean,
     requestSession?: Session,
   ): Promise<T> {
+    const isJson = response.headers
+      .get("content-type")
+      ?.includes("application/json");
+    const responseText = await response.text();
+    let responseData: unknown = responseText;
+    if (isJson) {
+      try {
+        responseData = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        responseData = responseText;
+      }
+    }
     if (wrapError && !response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      const message = JSON.stringify(
-        errorData.message ||
-          errorData.detail ||
-          response.statusText ||
-          `HTTP ${response.status}`,
-      );
+      const errorData =
+        typeof responseData === "object" && responseData !== null
+          ? responseData
+          : {};
+      const rawMessage =
+        ("message" in errorData && errorData.message) ||
+        ("detail" in errorData && errorData.detail) ||
+        ("msg" in errorData && errorData.msg) ||
+        response.statusText ||
+        `HTTP ${response.status}`;
+      const message =
+        typeof rawMessage === "string"
+          ? rawMessage
+          : JSON.stringify(rawMessage);
       if (response.status === 401) {
         if (!requestSession || !this.isCurrentSession(requestSession)) {
           throw new ApiError(message, response.status, errorData);
@@ -139,9 +158,22 @@ export class ApiClient {
       } else this.notifyError(message);
       throw new ApiError(message, response.status, errorData);
     }
-    return response.headers.get("content-type")?.includes("application/json")
-      ? response.json()
-      : (response.text() as unknown as T);
+    if (
+      wrapError &&
+      typeof responseData === "object" &&
+      responseData !== null &&
+      "code" in responseData &&
+      typeof responseData.code === "number" &&
+      responseData.code !== 0
+    ) {
+      const message =
+        "msg" in responseData && typeof responseData.msg === "string"
+          ? responseData.msg
+          : "请求处理失败";
+      this.notifyError(message);
+      throw new ApiError(message, responseData.code, responseData);
+    }
+    return responseData as T;
   }
 
   private isCurrentSession(requestSession: Session) {

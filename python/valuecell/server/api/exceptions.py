@@ -56,20 +56,19 @@ async def api_exception_handler(request: Request, exc: APIException) -> JSONResp
 
 
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """HTTP exception handler."""
-    # Map HTTP status codes to our status codes
-    status_code_mapping = {
-        400: StatusCode.BAD_REQUEST,
-        401: StatusCode.UNAUTHORIZED,
-        403: StatusCode.FORBIDDEN,
-        404: StatusCode.NOT_FOUND,
-        500: StatusCode.INTERNAL_ERROR,
+    """Preserve HTTP semantics while keeping ValueCell's error envelope."""
+    detail = exc.detail
+    content = {
+        "code": exc.status_code,
+        "msg": detail if isinstance(detail, str) else "Request failed",
+        "data": None,
     }
-
-    api_code = status_code_mapping.get(exc.status_code, StatusCode.INTERNAL_ERROR)
+    if not isinstance(detail, str):
+        content["detail"] = detail
     return JSONResponse(
-        status_code=200,
-        content=ErrorResponse.create(code=api_code, msg=str(exc.detail)).dict(),
+        status_code=exc.status_code,
+        content=content,
+        headers=exc.headers,
     )
 
 

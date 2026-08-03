@@ -32,6 +32,73 @@ test("builds independent request headers without leaking a stale bearer token", 
   assert.deepEqual(calls[1].headers, { "Content-Type": "application/json" });
 });
 
+test("rejects a legacy HTTP 200 business error before callers read null data", async () => {
+  const notifications: string[] = [];
+  const client = new ApiClient({
+    notifyError: (message) => notifications.push(message),
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          code: 403,
+          data: null,
+          msg: "工作区尚未开通或服务已到期",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+  });
+
+  await assert.rejects(
+    client.post("/rule-strategies", {}),
+    /工作区尚未开通或服务已到期/,
+  );
+  assert.deepEqual(notifications, ["工作区尚未开通或服务已到期"]);
+});
+
+test("uses an HTTP error message without adding JSON quotes", async () => {
+  const notifications: string[] = [];
+  const client = new ApiClient({
+    notifyError: (message) => notifications.push(message),
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          code: 403,
+          data: null,
+          msg: "工作区尚未开通或服务已到期",
+        }),
+        {
+          status: 403,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+  });
+
+  await assert.rejects(
+    client.post("/rule-strategies", {}),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message === "工作区尚未开通或服务已到期",
+  );
+  assert.deepEqual(notifications, ["工作区尚未开通或服务已到期"]);
+});
+
+test("a malformed JSON 401 still clears an expired SaaS session", async () => {
+  let clearCalls = 0;
+  const client = new ApiClient({
+    getSession: () => ({ ...session, access_token: "expired-token" }),
+    clearSession: () => {
+      clearCalls += 1;
+    },
+    fetch: async () =>
+      new Response("not-json", {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(client.get("/protected", { requiresAuth: true }));
+  assert.equal(clearCalls, 1);
+});
+
 test("clears an expired SaaS session without calling legacy refresh", async () => {
   let refreshCalls = 0;
   let clearCalls = 0;
