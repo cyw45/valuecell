@@ -58,6 +58,15 @@ def _condition(result, code: str):
     return next(condition for condition in result.conditions if condition.code == code)
 
 
+def _contains_cjk_text(value: str) -> bool:
+    return any("\u4e00" <= character <= "\u9fff" for character in value)
+
+
+def _assert_chinese_evaluation_prose(result) -> None:
+    messages = [result.reason, *(condition.detail for condition in result.conditions)]
+    assert all(_contains_cjk_text(message) for message in messages)
+
+
 @pytest.mark.parametrize(
     ("closes", "position", "expected_action", "expected_reason"),
     [
@@ -219,12 +228,112 @@ def test_flat_bollinger_window_returns_explainable_no_op():
     assert result.reason_code == "indicators_not_confirmed"
     bollinger = _condition(result, "bollinger")
     assert bollinger.state == "not_triggered"
-    assert bollinger.detail == "Bollinger bands have zero width"
+    assert bollinger.detail == "布林带宽度为零"
     assert bollinger.values == {
         "bollinger_upper": 10.0,
         "bollinger_middle": 10.0,
         "bollinger_lower": 10.0,
     }
+
+
+@pytest.mark.parametrize(
+    (
+        "closes",
+        "config",
+        "market",
+        "expected_action",
+        "expected_reason_code",
+        "expected_condition_code",
+        "expected_condition_state",
+    ),
+    [
+        pytest.param(
+            [10.0, 9.0, 8.0],
+            {"rsi": {"enabled": True, "period": 2}},
+            None,
+            "buy",
+            "indicator_buy_confirmed",
+            "rsi",
+            "triggered",
+            id="triggered",
+        ),
+        pytest.param(
+            [10.0, 11.0, 10.0],
+            {"rsi": {"enabled": True, "period": 2}},
+            None,
+            "no_op",
+            "indicators_not_confirmed",
+            "rsi",
+            "not_triggered",
+            id="not-triggered",
+        ),
+        pytest.param(
+            [10.0, 9.0, 8.0],
+            {
+                "rsi": {"enabled": True, "period": 2},
+                "risk": {"max_positions": 1},
+            },
+            {"open_position_count": 1},
+            "no_op",
+            "max_positions",
+            "max_positions",
+            "blocked",
+            id="blocked",
+        ),
+        pytest.param(
+            [10.0, 10.0, 10.0],
+            {
+                "moving_average": {
+                    "enabled": True,
+                    "short_window": 2,
+                    "long_window": 3,
+                }
+            },
+            None,
+            "no_op",
+            "insufficient_candle_history",
+            "ma_crossover",
+            "unavailable",
+            id="unavailable",
+        ),
+        pytest.param(
+            [10.0, 10.0],
+            {
+                "advanced_rules": {
+                    "enabled": True,
+                    "rsi": {
+                        "enabled": True,
+                        "interval": "1m",
+                        "period": 1,
+                        "entry_comparator": "above",
+                        "entry_threshold": -1,
+                    },
+                }
+            },
+            None,
+            "buy",
+            "advanced_entry_confirmed",
+            "rsi_entry",
+            "triggered",
+            id="advanced-entry",
+        ),
+    ],
+)
+def test_evaluation_reason_and_condition_details_are_chinese(
+    closes,
+    config,
+    market,
+    expected_action,
+    expected_reason_code,
+    expected_condition_code,
+    expected_condition_state,
+):
+    result = _evaluate(closes, config=config, market=market)
+
+    assert result.action == expected_action
+    assert result.reason_code == expected_reason_code
+    assert _condition(result, expected_condition_code).state == expected_condition_state
+    _assert_chinese_evaluation_prose(result)
 
 
 @pytest.mark.parametrize(
@@ -529,3 +638,4 @@ def test_advanced_rsi_full_range_rule_always_cycles_paper_positions(
 
     assert result.action == expected_action
     assert result.reason_code == expected_reason
+    _assert_chinese_evaluation_prose(result)

@@ -21,6 +21,7 @@ import { Link } from "react-router";
 import { toast } from "sonner";
 import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
+  useArchiveRuleStrategy,
   useCreateRuleStrategy,
   useParseRuleStrategyText,
   useRuleStrategies,
@@ -31,6 +32,16 @@ import {
 } from "@/api/rule-strategy";
 import { useSandboxConnections } from "@/api/sandbox-exchange";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -639,7 +650,13 @@ export function RuleStrategyConfiguration({
   const { t } = useTranslation();
   const [values, setValues] = useState<StrategyFormValues>(initialValues);
   const [strategyId, setStrategyId] = useActiveRuleStrategyId();
+  const [historyStrategyId, setHistoryStrategyId] = useState<string | null>(
+    null,
+  );
+  const [showArchivedStrategies, setShowArchivedStrategies] = useState(false);
+  const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
   const { tenantId } = useSaaSSession();
+  const selectedStrategyId = historyStrategyId ?? strategyId;
   const [name, setName] = useState(() =>
     t("saas.operations.strategy.defaultName"),
   );
@@ -648,12 +665,14 @@ export function RuleStrategyConfiguration({
   const [textImportSummary, setTextImportSummary] = useState("");
   const [unresolvedItems, setUnresolvedItems] = useState<string[]>([]);
   const strategiesQuery = useRuleStrategies(tenantId);
+  const archivedStrategiesQuery = useRuleStrategies(tenantId, true);
   const symbolsQuery = useGetCryptoSymbols();
-  const strategyQuery = useRuleStrategy(strategyId);
+  const strategyQuery = useRuleStrategy(selectedStrategyId);
   const createStrategy = useCreateRuleStrategy();
   const updateStrategy = useUpdateRuleStrategy(strategyId);
   const startStrategy = useStartRuleStrategy(strategyId);
   const stopStrategy = useStopRuleStrategy(strategyId);
+  const archiveStrategy = useArchiveRuleStrategy(strategyId);
   const parseStrategyText = useParseRuleStrategyText();
   const sandboxConnections = useSandboxConnections();
   const okxDemoConnections = (sandboxConnections.data ?? []).filter(
@@ -665,6 +684,9 @@ export function RuleStrategyConfiguration({
   const strategyItems = strategyPickerItems(
     strategiesQuery.data ?? [],
     strategyId,
+  );
+  const archivedStrategies = (archivedStrategiesQuery.data ?? []).filter(
+    (strategy) => strategy.archived_at !== null,
   );
 
   useEffect(() => {
@@ -707,7 +729,7 @@ export function RuleStrategyConfiguration({
   }, [strategyQuery.data]);
 
   useEffect(() => {
-    if (strategyId || symbolOptions.length === 0) return;
+    if (selectedStrategyId || symbolOptions.length === 0) return;
     setValues((current) => {
       if (current.symbols.length > 0) return current;
       const symbols = DEFAULT_STRATEGY_SYMBOLS.filter((symbol) =>
@@ -719,7 +741,7 @@ export function RuleStrategyConfiguration({
         maximumPositions: 1,
       };
     });
-  }, [strategyId, symbolOptions]);
+  }, [selectedStrategyId, symbolOptions]);
 
   const errors = useMemo(() => {
     const next: Partial<Record<keyof StrategyFormValues, string>> = {};
@@ -924,14 +946,20 @@ export function RuleStrategyConfiguration({
     updateStrategy.isPending ||
     startStrategy.isPending ||
     stopStrategy.isPending ||
+    archiveStrategy.isPending ||
     parseStrategyText.isPending;
   const storedStrategy = strategyQuery.data;
-  const executionTargetLocked = storedStrategy?.status === "running";
+  const isArchived = Boolean(historyStrategyId || storedStrategy?.archived_at);
+  const executionTargetLocked = !isArchived && storedStrategy?.status === "running";
   const savePending = createStrategy.isPending || updateStrategy.isPending;
   const selectionLimitReached = values.symbols.length >= 100;
   const ConfigurationHeading = embedded ? "h2" : "h1";
 
   const saveStrategy = async () => {
+    if (isArchived) {
+      toast.error("已归档策略仅用于历史查看，不能修改或启动。");
+      return;
+    }
     if (
       executionTargetLocked &&
       (storedStrategy.config.execution.environment !==
@@ -969,6 +997,23 @@ export function RuleStrategyConfiguration({
           ? err.message
           : t("saas.operations.strategy.toasts.operationFailed"),
       );
+    }
+  };
+
+  const archiveSelectedStrategy = async () => {
+    if (!strategyId || !storedStrategy || isArchived) return;
+    if (storedStrategy.status === "running") {
+      toast.error("请先停止策略，再归档。");
+      return;
+    }
+    try {
+      await archiveStrategy.mutateAsync();
+      setArchiveDialogOpen(false);
+      setHistoryStrategyId(null);
+      setStrategyId("");
+      toast.success("策略已归档，可在已归档历史中只读查看。");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "策略归档失败。");
     }
   };
 
@@ -1042,11 +1087,19 @@ export function RuleStrategyConfiguration({
               {t("saas.operations.strategy.subtitle")}
             </p>
           </div>
-          <Badge className="w-fit" variant="outline">
+          <Badge
+            className={cn(
+              "w-fit",
+              isArchived && "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200",
+            )}
+            variant="outline"
+          >
             <LockKeyhole />{" "}
-            {storedStrategy?.status === "running"
-              ? t("saas.operations.strategy.status.active")
-              : t("saas.operations.strategy.status.ready")}
+            {isArchived
+              ? "已归档 · 只读历史"
+              : storedStrategy?.status === "running"
+                ? t("saas.operations.strategy.status.active")
+                : t("saas.operations.strategy.status.ready")}
           </Badge>
         </div>
       </header>
@@ -1061,7 +1114,7 @@ export function RuleStrategyConfiguration({
           <CardHeader className="px-4 py-4 sm:px-5">
             <CardTitle className="text-base">已保存策略</CardTitle>
             <CardDescription>
-              选择要查看和编辑的租户策略。新浏览器会自动选中最新运行中的策略。
+              默认仅显示可运行和编辑的策略；归档策略保留在下方只读历史中。
             </CardDescription>
           </CardHeader>
           <CardContent className="px-4 pb-4 sm:px-5">
@@ -1077,12 +1130,21 @@ export function RuleStrategyConfiguration({
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {strategyItems.map((strategy) => (
                   <Button
-                    aria-pressed={strategy.selected}
+                    aria-pressed={
+                      historyStrategyId === null && strategy.selected
+                    }
                     className="h-auto items-start justify-start whitespace-normal p-3 text-left"
                     key={strategy.strategyId}
-                    onClick={() => setStrategyId(strategy.strategyId)}
+                    onClick={() => {
+                      setHistoryStrategyId(null);
+                      setStrategyId(strategy.strategyId);
+                    }}
                     type="button"
-                    variant={strategy.selected ? "default" : "outline"}
+                    variant={
+                      historyStrategyId === null && strategy.selected
+                        ? "default"
+                        : "outline"
+                    }
                   >
                     <span className="grid min-w-0 gap-1">
                       <span className="truncate font-medium">
@@ -1109,6 +1171,84 @@ export function RuleStrategyConfiguration({
                 ))}
               </div>
             )}
+
+            <div className="mt-4 border-border/70 border-t pt-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium text-sm">已归档历史</p>
+                  <p className="mt-0.5 text-muted-foreground text-xs">
+                    归档策略保留执行和账户历史，但不能修改、启动或再次归档。
+                  </p>
+                </div>
+                <Button
+                  onClick={() =>
+                    setShowArchivedStrategies((current) => !current)
+                  }
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  {showArchivedStrategies ? "收起归档历史" : "查看归档历史"}
+                </Button>
+              </div>
+              {showArchivedStrategies ? (
+                <div className="mt-3">
+                  {archivedStrategiesQuery.isLoading ? (
+                    <p className="text-muted-foreground text-sm">
+                      正在加载已归档策略…
+                    </p>
+                  ) : archivedStrategiesQuery.isError ? (
+                    <p className="text-destructive text-sm" role="alert">
+                      无法加载已归档策略。
+                    </p>
+                  ) : archivedStrategies.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">
+                      暂无已归档策略。
+                    </p>
+                  ) : (
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                      {archivedStrategies.map((strategy) => (
+                        <Button
+                          aria-pressed={
+                            historyStrategyId === strategy.strategy_id
+                          }
+                          className="h-auto items-start justify-start whitespace-normal border-amber-500/25 bg-amber-500/5 p-3 text-left hover:bg-amber-500/10"
+                          key={strategy.strategy_id}
+                          onClick={() =>
+                            setHistoryStrategyId(strategy.strategy_id)
+                          }
+                          type="button"
+                          variant={
+                            historyStrategyId === strategy.strategy_id
+                              ? "secondary"
+                              : "outline"
+                          }
+                        >
+                          <span className="grid min-w-0 gap-1">
+                            <span className="truncate font-medium">
+                              {strategy.name}
+                            </span>
+                            <span className="flex flex-wrap gap-1 text-xs">
+                              <Badge
+                                className="border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
+                                variant="outline"
+                              >
+                                已归档
+                              </Badge>
+                              <span className="text-muted-foreground">
+                                {strategy.archived_at
+                                  ? `归档于 ${new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" }).format(new Date(strategy.archived_at))}`
+                                  : "服务器已归档"}
+                              </span>
+                            </span>
+                          </span>
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -1120,6 +1260,16 @@ export function RuleStrategyConfiguration({
         )}
       >
         <form className="grid min-w-0 gap-4" noValidate>
+          {isArchived ? (
+            <Alert className="border-amber-500/35 bg-amber-500/5">
+              <AlertTriangle className="text-amber-600 dark:text-amber-300" />
+              <AlertTitle>已归档策略仅供历史查看</AlertTitle>
+              <AlertDescription>
+                配置、执行和账户记录仍可查看；修改、启动、停止与再次归档均不可用。
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <fieldset className="contents" disabled={isArchived}>
           <Alert className="border-sky-500/30 bg-sky-500/5">
             <AlertTriangle />
             <AlertTitle>
@@ -2060,6 +2210,7 @@ export function RuleStrategyConfiguration({
               />
             </CardContent>
           </Card>
+          </fieldset>
         </form>
 
         <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-0 xl:self-start">
@@ -2133,7 +2284,7 @@ export function RuleStrategyConfiguration({
               </CardDescription>
             </CardHeader>
             <CardContent className="px-4 py-4">
-              {strategyId ? (
+              {selectedStrategyId && !isArchived ? (
                 <Button
                   asChild
                   className="w-full"
@@ -2151,7 +2302,8 @@ export function RuleStrategyConfiguration({
                   type="button"
                   variant="outline"
                 >
-                  <BrainCircuit /> 请先保存策略
+                  <BrainCircuit />{" "}
+                  {isArchived ? "归档策略仅保留历史" : "请先保存策略"}
                 </Button>
               )}
             </CardContent>
@@ -2166,82 +2318,110 @@ export function RuleStrategyConfiguration({
                   : t("saas.operations.strategy.paperStrategy.title")}
               </CardTitle>
               <CardDescription>
-                {storedStrategy?.config.execution.environment === "okx_demo"
-                  ? "策略规则保持不变；停止后可切换回纸面账本或更换已验证的 Demo 连接。"
-                  : storedStrategy
-                    ? t("saas.operations.strategy.paperStrategy.status", {
-                        name: storedStrategy.name,
-                        status: storedStrategy.status,
-                      })
-                    : isValid
-                      ? t("saas.operations.strategy.paperStrategy.valid")
-                      : t("saas.operations.strategy.paperStrategy.resolve")}
+                {isArchived
+                  ? "策略已归档，配置、账户和既有记录均仅供只读查看。"
+                  : storedStrategy?.config.execution.environment === "okx_demo"
+                    ? "策略规则保持不变；停止后可切换回纸面账本或更换已验证的 Demo 连接。"
+                    : storedStrategy
+                      ? t("saas.operations.strategy.paperStrategy.status", {
+                          name: storedStrategy.name,
+                          status: storedStrategy.status,
+                        })
+                      : isValid
+                        ? t("saas.operations.strategy.paperStrategy.valid")
+                        : t("saas.operations.strategy.paperStrategy.resolve")}
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-3 px-4 py-4">
-              <Button
-                disabled={!isValid || isPending}
-                onClick={saveStrategy}
-                type="button"
-              >
-                <Target />{" "}
-                <span aria-live="polite">
-                  {savePending
-                    ? t("saas.operations.strategy.actions.saving")
-                    : t("saas.operations.strategy.actions.save")}
-                </span>
-              </Button>
-              {storedStrategy?.status === "running" ? (
-                <Button
-                  disabled={isPending}
-                  onClick={async () => {
-                    try {
-                      await stopStrategy.mutateAsync();
-                      toast.success(
-                        t("saas.operations.strategy.toasts.stopped"),
-                      );
-                    } catch (err) {
-                      toast.error(
-                        err instanceof Error
-                          ? err.message
-                          : t(
-                              "saas.operations.strategy.toasts.operationFailed",
-                            ),
-                      );
-                    }
-                  }}
-                  type="button"
-                  variant="outline"
-                >
-                  {t("saas.operations.strategy.actions.stop")}
-                </Button>
+              {isArchived ? (
+                <Alert className="border-amber-500/35 bg-amber-500/5">
+                  <AlertTriangle className="text-amber-600 dark:text-amber-300" />
+                  <AlertTitle>已归档 · 不可执行</AlertTitle>
+                  <AlertDescription>
+                    该策略的历史、账户和执行记录会保留；不能保存、启动、停止或再次归档。
+                  </AlertDescription>
+                </Alert>
               ) : (
-                <Button
-                  disabled={!strategyId || isPending}
-                  onClick={async () => {
-                    try {
-                      await startStrategy.mutateAsync();
-                      toast.success(
-                        t("saas.operations.strategy.toasts.started"),
-                      );
-                    } catch (err) {
-                      toast.error(
-                        err instanceof Error
-                          ? err.message
-                          : t(
-                              "saas.operations.strategy.toasts.operationFailed",
-                            ),
-                      );
-                    }
-                  }}
-                  type="button"
-                  variant="outline"
-                >
-                  {t("saas.operations.strategy.actions.start")}
-                </Button>
+                <>
+                  <Button
+                    disabled={!isValid || isPending}
+                    onClick={saveStrategy}
+                    type="button"
+                  >
+                    <Target />{" "}
+                    <span aria-live="polite">
+                      {savePending
+                        ? t("saas.operations.strategy.actions.saving")
+                        : t("saas.operations.strategy.actions.save")}
+                    </span>
+                  </Button>
+                  {storedStrategy?.status === "running" ? (
+                    <Button
+                      disabled={isPending}
+                      onClick={async () => {
+                        try {
+                          await stopStrategy.mutateAsync();
+                          toast.success(
+                            t("saas.operations.strategy.toasts.stopped"),
+                          );
+                        } catch (err) {
+                          toast.error(
+                            err instanceof Error
+                              ? err.message
+                              : t(
+                                  "saas.operations.strategy.toasts.operationFailed",
+                                ),
+                          );
+                        }
+                      }}
+                      type="button"
+                      variant="outline"
+                    >
+                      {t("saas.operations.strategy.actions.stop")}
+                    </Button>
+                  ) : (
+                    <>
+                      <Button
+                        disabled={!strategyId || isPending}
+                        onClick={async () => {
+                          try {
+                            await startStrategy.mutateAsync();
+                            toast.success(
+                              t("saas.operations.strategy.toasts.started"),
+                            );
+                          } catch (err) {
+                            toast.error(
+                              err instanceof Error
+                                ? err.message
+                                : t(
+                                    "saas.operations.strategy.toasts.operationFailed",
+                                  ),
+                            );
+                          }
+                        }}
+                        type="button"
+                        variant="outline"
+                      >
+                        {t("saas.operations.strategy.actions.start")}
+                      </Button>
+                      {storedStrategy ? (
+                        <Button
+                          disabled={isPending}
+                          onClick={() => setArchiveDialogOpen(true)}
+                          type="button"
+                          variant="destructive"
+                        >
+                          归档策略
+                        </Button>
+                      ) : null}
+                    </>
+                  )}
+                </>
               )}
               <p className="text-muted-foreground text-xs leading-relaxed">
-                {t("saas.operations.strategy.paperStrategy.help")}
+                {isArchived
+                  ? "归档策略不会删除既有评估、交易、资金或账户记录。"
+                  : t("saas.operations.strategy.paperStrategy.help")}
               </p>
               <Alert className="border-amber-500/30 bg-amber-500/5">
                 <AlertTriangle />
@@ -2302,13 +2482,16 @@ export function RuleStrategyConfiguration({
             <CardContent className="grid gap-3 px-4 py-4">
               <Textarea
                 className="min-h-44 text-sm"
+                disabled={isArchived}
                 onChange={(event) => setStrategyText(event.target.value)}
                 placeholder="例如：买入以 15 分钟为主，价格高于日线 20 日均线；5 分钟 MACD 金叉；15 分钟价格高于布林中线；RSI 低于 20；动能低于 20；BR 低于 30。卖出：RSI 或动能高于 85 时全部卖出。"
                 value={strategyText}
               />
               <Button
                 disabled={
-                  parseStrategyText.isPending || strategyText.trim().length < 10
+                  isArchived ||
+                  parseStrategyText.isPending ||
+                  strategyText.trim().length < 10
                 }
                 onClick={importStrategyText}
                 type="button"
@@ -2341,6 +2524,28 @@ export function RuleStrategyConfiguration({
           </Card>
         </aside>
       </div>
+      <AlertDialog open={archiveDialogOpen} onOpenChange={setArchiveDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>归档策略</AlertDialogTitle>
+            <AlertDialogDescription>
+              仅已停止的策略可以归档。将“{storedStrategy?.name ?? "当前策略"}”移入只读历史不会删除评估、交易、资金、账户或交易所执行记录，且没有恢复入口。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={archiveStrategy.isPending}>
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20"
+              disabled={archiveStrategy.isPending}
+              onClick={() => void archiveSelectedStrategy()}
+            >
+              {archiveStrategy.isPending ? "正在归档…" : "确认归档"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

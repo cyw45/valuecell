@@ -25,6 +25,8 @@ import type { RuleStrategyDemoExecution } from "@/types/rule-strategy-demo-execu
 
 const ruleStrategiesKey = (tenantId: string) =>
   ["rule-strategies", tenantId] as const;
+const ruleStrategyListKey = (tenantId: string, includeArchived: boolean) =>
+  [...ruleStrategiesKey(tenantId), "list", includeArchived] as const;
 const ruleStrategyKey = (tenantId: string, strategyId: string) =>
   [...ruleStrategiesKey(tenantId), strategyId] as const;
 const ruleStrategyLogKey = (
@@ -47,13 +49,16 @@ function invalidateRuleStrategy(
   ]);
 }
 
-export function useRuleStrategies(tenantId?: string) {
+export function useRuleStrategies(tenantId?: string, includeArchived = false) {
   return useQuery({
-    queryKey: ruleStrategiesKey(tenantId ?? ""),
+    queryKey: ruleStrategyListKey(tenantId ?? "", includeArchived),
     queryFn: () =>
-      apiClient.get<ApiResponse<RuleStrategy[]>>("/rule-strategies", {
-        requiresAuth: true,
-      }),
+      apiClient.get<ApiResponse<RuleStrategy[]>>(
+        includeArchived
+          ? "/rule-strategies?include_archived=true"
+          : "/rule-strategies",
+        { requiresAuth: true },
+      ),
     select: (response) => response.data,
     enabled: Boolean(tenantId),
   });
@@ -142,6 +147,20 @@ export function useStartRuleStrategy(strategyId?: string) {
 }
 export function useStopRuleStrategy(strategyId?: string) {
   return useRuleStrategyStatusMutation(strategyId, "stop");
+}
+
+export function useArchiveRuleStrategy(strategyId?: string) {
+  const queryClient = useQueryClient();
+  const tenantId = useSaaSSession().tenantId;
+  return useMutation({
+    mutationFn: () =>
+      apiClient.delete<ApiResponse<RuleStrategy>>(
+        `/rule-strategies/${strategyId}`,
+        { requiresAuth: true },
+      ),
+    onSuccess: () =>
+      strategyId && invalidateRuleStrategy(queryClient, tenantId, strategyId),
+  });
 }
 
 export function useEvaluateRuleStrategy(strategyId?: string) {

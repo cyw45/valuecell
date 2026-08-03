@@ -206,7 +206,7 @@ const AppSidebar: FC = () => {
         {!collapsed ? (
           <Badge
             variant="secondary"
-            className="mt-3 w-full justify-center text-[11px] font-medium"
+            className="mt-3 w-full justify-center font-medium text-[11px]"
           >
             {access.data?.is_platform_admin
               ? "平台管理员会话"
@@ -217,7 +217,7 @@ const AppSidebar: FC = () => {
           <Button
             variant="ghost"
             size="sm"
-            className="mt-2 flex h-9 w-full items-center justify-center gap-3 px-3 text-sm font-medium text-muted-foreground"
+            className="mt-2 flex h-9 w-full items-center justify-center gap-3 px-3 font-medium text-muted-foreground text-sm"
             onClick={handleSignOut}
             aria-label={t("saas.navigation.signOut")}
             title={collapsed ? t("saas.navigation.signOut") : undefined}
@@ -255,12 +255,12 @@ function NavigationGroup({
     <section
       className={cn(
         "space-y-1.5",
-        collapsed && "border-t border-border/60 pt-3 first:border-t-0 first:pt-0",
+        collapsed && "border-border/60 border-t pt-3 first:border-t-0 first:pt-0",
       )}
     >
       <div
         className={cn(
-          "flex items-center gap-2 px-3 text-[11px] font-semibold tracking-[0.04em] text-foreground/70 transition-opacity duration-150",
+          "flex items-center gap-2 px-3 font-semibold text-[11px] text-foreground/70 tracking-[0.04em] transition-opacity duration-150",
           collapsed && "pointer-events-none h-0 overflow-hidden opacity-0",
         )}
       >
@@ -302,8 +302,8 @@ function NavigationLink({
       aria-label={collapsed ? label : undefined}
       title={collapsed ? label : undefined}
       className={cn(
-        "group relative flex h-10 items-center justify-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-[background-color,color,transform] duration-150 outline-none hover:bg-slate-950/[0.05] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/[0.07]",
-        active && "bg-sky-500/10 text-sky-700 shadow-sm shadow-sky-500/5 dark:text-sky-300",
+        "group relative flex h-10 items-center justify-center gap-3 rounded-lg px-3 font-medium text-muted-foreground text-sm outline-none transition-[background-color,color,transform] duration-150 hover:bg-slate-950/[0.05] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring dark:hover:bg-white/[0.07]",
+        active && "bg-sky-500/10 text-sky-700 shadow-sky-500/5 shadow-sm dark:text-sky-300",
         active && "before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-sky-500",
         !collapsed && "justify-start",
       )}

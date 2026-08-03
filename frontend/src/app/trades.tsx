@@ -51,10 +51,10 @@ export default function TradesPage() {
               {t("saas.operations.trades.noExecutionAccount")}
             </Badge>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-semibold text-2xl tracking-tight">
             {t("saas.operations.trades.title")}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-muted-foreground text-sm">
             {t("saas.operations.trades.subtitle")}
           </p>
         </header>
@@ -82,13 +82,13 @@ export default function TradesPage() {
           </Card>
         ) : isLoading ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="p-6 text-muted-foreground text-sm">
               {t("saas.operations.trades.loading")}
             </CardContent>
           </Card>
         ) : isError ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="p-6 text-muted-foreground text-sm">
               {t("saas.operations.trades.unavailable")}
             </CardContent>
           </Card>
@@ -188,7 +188,7 @@ export default function TradesPage() {
                 </CardTitle>
               </div>
             </CardHeader>
-            <CardContent className="px-5 text-sm text-muted-foreground">
+            <CardContent className="px-5 text-muted-foreground text-sm">
               {t("saas.operations.trades.ledger.description")}
             </CardContent>
           </Card>
@@ -201,7 +201,7 @@ export default function TradesPage() {
                 </CardTitle>
               </div>
             </CardHeader>
-            <CardContent className="px-5 text-sm text-muted-foreground">
+            <CardContent className="px-5 text-muted-foreground text-sm">
               {t("saas.operations.trades.separation.description")}
             </CardContent>
           </Card>

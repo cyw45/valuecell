@@ -16,7 +16,6 @@ from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers.sandbox_exchange import create_sandbox_exchange_router
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.base import Base
-from valuecell.server.db.models.tenant_credential import TenantCredential
 
 TEST_MASTER_KEY = base64.urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("ascii")
 

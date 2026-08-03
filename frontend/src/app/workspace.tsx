@@ -18,11 +18,11 @@ export default function WorkspacePage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-6 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           {enterprise ? "企业工作区" : "个人账户"}
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">账户概览</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">账户概览</h1>
+        <p className="mt-2 text-muted-foreground text-sm">
           商业身份、服务状态和管理入口分开呈现，权限由服务端角色控制。
         </p>
       </header>
@@ -44,7 +44,7 @@ export default function WorkspacePage() {
             <Badge variant="outline">
               {enterprise ? "企业租户" : "个人账户"}
             </Badge>
-            <p className="mt-3 text-sm text-muted-foreground">
+            <p className="mt-3 text-muted-foreground text-sm">
               {access.data?.organization_name ?? "独立策略工作区"}
             </p>
           </CardContent>
@@ -61,7 +61,7 @@ export default function WorkspacePage() {
             >
               {access.data?.status === "active" ? "已开通" : "待开通 / 已到期"}
             </Badge>
-            <p className="mt-3 text-sm text-muted-foreground">
+            <p className="mt-3 text-muted-foreground text-sm">
               {access.data?.commercial_model === "revenue_share"
                 ? "企业利润分成"
                 : "人工订阅"}
@@ -74,7 +74,7 @@ export default function WorkspacePage() {
           </CardHeader>
           <CardContent>
             <Badge variant="outline">{access.data?.role ?? "—"}</Badge>
-            <p className="mt-3 text-sm text-muted-foreground">
+            <p className="mt-3 text-muted-foreground text-sm">
               权限变化立即在服务端生效。
             </p>
           </CardContent>

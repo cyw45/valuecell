@@ -23,7 +23,6 @@ import { Spinner } from "@/components/ui/spinner";
 import CloseButton from "@/components/valuecell/button/close-button";
 import { AIModelForm } from "@/components/valuecell/form/ai-model-form";
 import {
-  EXCHANGE_OPTIONS,
   ExchangeForm,
 } from "@/components/valuecell/form/exchange-form";
 import { TradingStrategyForm } from "@/components/valuecell/form/trading-strategy-form";

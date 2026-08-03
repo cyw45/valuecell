@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { LayoutChangeEvent, StyleSheet, Text, View } from "react-native";
 import Svg, { Line, Path, Rect } from "react-native-svg";
 import type { CryptoCandle, CryptoIndicatorPoint } from "../types";
-import type { ChartWindow } from "./CandlestickChart";
+import { CHART_HORIZONTAL_INSETS, type ChartWindow } from "./CandlestickChart";
 import { palette, radius, spacing } from "../theme";
 
 export type IndicatorPanel = "rsi" | "bollinger" | "momentum" | "macd";
@@ -12,10 +12,11 @@ type Props = {
   candles: CryptoCandle[];
   indicators: CryptoIndicatorPoint[];
   window?: ChartWindow;
+  selectedTimestamp?: CryptoCandle["ts"] | null;
   height?: number;
 };
 
-const PADDING = { top: 28, right: 12, bottom: 24, left: 48 };
+const PADDING = { top: 28, ...CHART_HORIZONTAL_INSETS, bottom: 24 };
 
 function finite(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -59,6 +60,13 @@ function bounds(values: Array<number | null>, includeZero = false) {
   return { minimum: low - padding, maximum: high + padding };
 }
 
+function formatAxisValue(value: number) {
+  const absolute = Math.abs(value);
+  const maximumFractionDigits =
+    absolute >= 1_000 ? 2 : absolute >= 1 ? 4 : absolute >= 0.01 ? 6 : 8;
+  return value.toLocaleString("zh-CN", { maximumFractionDigits });
+}
+
 function panelLabel(panel: IndicatorPanel) {
   switch (panel) {
     case "rsi":
@@ -66,7 +74,7 @@ function panelLabel(panel: IndicatorPanel) {
     case "bollinger":
       return "布林带 (20, 2)";
     case "momentum":
-      return "Momentum (14)";
+      return "动量 (14)";
     case "macd":
       return "MACD (12, 26, 9)";
   }
@@ -82,7 +90,8 @@ export default function IndicatorChart({
   candles,
   indicators,
   window,
-  height = 220,
+  selectedTimestamp,
+  height = 184,
 }: Props) {
   const [width, setWidth] = useState(360);
   const selectedWindow = useMemo(
@@ -100,6 +109,13 @@ export default function IndicatorChart({
   const visiblePoints = useMemo(
     () => visibleCandles.map((candle) => indicatorByTimestamp.get(candle.ts)),
     [indicatorByTimestamp, visibleCandles],
+  );
+  const selectedLocalIndex = useMemo(
+    () =>
+      selectedTimestamp == null
+        ? -1
+        : visibleCandles.findIndex((candle) => candle.ts === selectedTimestamp),
+    [selectedTimestamp, visibleCandles],
   );
 
   const setChartWidth = (event: LayoutChangeEvent) => {
@@ -242,21 +258,32 @@ export default function IndicatorChart({
             <Path d={linePath(macdSignal, xAt, yAt)} fill="none" stroke="#F5B544" strokeWidth={1.5} />
           </>
         ) : null}
+        {selectedLocalIndex >= 0 ? (
+          <Line
+            stroke={palette.textMuted}
+            strokeDasharray="4 4"
+            strokeWidth={1}
+            x1={xAt(selectedLocalIndex)}
+            x2={xAt(selectedLocalIndex)}
+            y1={PADDING.top}
+            y2={PADDING.top + plotHeight}
+          />
+        ) : null}
       </Svg>
       <View pointerEvents="none" style={styles.title}>
         <Text style={styles.titleText}>{panelLabel(panel)}</Text>
       </View>
       <View pointerEvents="none" style={styles.maxLabel}>
-        <Text style={styles.axisText}>{indicatorBounds.maximum.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
+        <Text style={styles.axisText}>{formatAxisValue(indicatorBounds.maximum)}</Text>
       </View>
       <View pointerEvents="none" style={styles.minLabel}>
-        <Text style={styles.axisText}>{indicatorBounds.minimum.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
+        <Text style={styles.axisText}>{formatAxisValue(indicatorBounds.minimum)}</Text>
       </View>
       <View pointerEvents="none" style={styles.legend}>
         {panel === "rsi" ? <Text style={[styles.legendText, { color: "#B58CFF" }]}>RSI · 30 / 70</Text> : null}
         {panel === "bollinger" ? <Text style={styles.legendText}>上轨 / 中线 / 下轨 / 收盘</Text> : null}
         {panel === "momentum" ? <Text style={styles.legendText}>零轴</Text> : null}
-        {panel === "macd" ? <Text style={styles.legendText}>MACD / Signal / Histogram</Text> : null}
+        {panel === "macd" ? <Text style={styles.legendText}>MACD / 信号 / 柱状</Text> : null}
       </View>
     </View>
   );
@@ -280,11 +307,11 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   emptyText: { color: palette.textMuted, fontSize: 13, textAlign: "center" },
-  title: { left: spacing.sm, position: "absolute", top: spacing.xs },
+  title: { left: PADDING.left, position: "absolute", top: spacing.xs },
   titleText: { color: palette.text, fontSize: 11, fontWeight: "800" },
   maxLabel: { position: "absolute", right: spacing.xs, top: spacing.xs },
   minLabel: { bottom: spacing.xs, position: "absolute", right: spacing.xs },
   axisText: { color: palette.textMuted, fontSize: 10 },
-  legend: { bottom: spacing.xs, left: spacing.sm, position: "absolute" },
+  legend: { bottom: spacing.xs, left: PADDING.left, position: "absolute" },
   legendText: { color: palette.textMuted, fontSize: 10 },
 });

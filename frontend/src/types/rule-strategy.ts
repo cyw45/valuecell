@@ -174,6 +174,7 @@ export interface RuleStrategy {
   account: RuleStrategyPaperAccount;
   created_at?: string;
   updated_at?: string;
+  archived_at: string | null;
 }
 
 export interface RuleStrategyCondition {

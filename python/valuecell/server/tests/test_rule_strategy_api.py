@@ -348,6 +348,7 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
     assert result["mode"] == "paper"
     assert result["action"] == "buy"
     assert result["reason_code"] == "indicator_buy_confirmed"
+    assert result["reason"] == "建议买入：配置指标已确认买入信号。"
     assert result["sizing"] == {
         "mode": "fixed_quote",
         "requested_quote": 100.0,
@@ -370,6 +371,13 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
         ("available_collateral", "not_triggered"),
         ("leverage_limit", "not_triggered"),
     }
+    assert all(
+        any("\u4e00" <= character <= "\u9fff" for character in text)
+        for text in [
+            result["reason"],
+            *(condition["detail"] for condition in result["conditions"]),
+        ]
+    )
 
     signals = client.get(f"/rule-strategies/{STRATEGY_ID}/signals").json()["data"]
     trades = client.get(f"/rule-strategies/{STRATEGY_ID}/trades").json()["data"]
@@ -395,7 +403,7 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
             "evaluated_at": "2026-07-10T00:00:00Z",
             "action": "buy",
             "reason_code": "indicator_buy_confirmed",
-            "reason": "Buy recommendation: configured indicators confirm a buy signal.",
+            "reason": "建议买入：配置指标已确认买入信号。",
             "sizing": result["sizing"],
             "execution": "paper_filled",
             "symbol": "BTC-USDT",

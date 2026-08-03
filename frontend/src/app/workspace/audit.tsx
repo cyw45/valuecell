@@ -14,13 +14,13 @@ export default function WorkspaceAuditPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           账户与服务 / 审计
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">
           工作区审计日志
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-muted-foreground text-sm">
           成员、订阅、合同、交易连接和订单控制事件均可追溯。
         </p>
       </header>
@@ -40,7 +40,7 @@ export default function WorkspaceAuditPage() {
               >
                 <div>
                   <p className="font-medium text-sm">{event.action}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-1 text-muted-foreground text-xs">
                     {event.target_type} · {event.target_id} ·{" "}
                     {new Date(event.created_at).toLocaleString("zh-CN")}
                   </p>
@@ -50,7 +50,7 @@ export default function WorkspaceAuditPage() {
                 </Badge>
               </article>
             )) ?? (
-              <p className="p-5 text-sm text-muted-foreground">
+              <p className="p-5 text-muted-foreground text-sm">
                 暂无审计事件。
               </p>
             )}

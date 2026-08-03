@@ -6,7 +6,7 @@ import {
   Text,
   View,
 } from "react-native";
-import Svg, { Circle, G, Line, Path, Rect } from "react-native-svg";
+import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from "react-native-svg";
 import type { CryptoCandle, CryptoIndicatorPoint } from "../types";
 import { palette, radius, spacing } from "../theme";
 
@@ -23,11 +23,13 @@ type Props = {
   onWindowChange?: (window: ChartWindow) => void;
 };
 
-const PADDING = { top: 30, right: 12, bottom: 24, left: 54 };
+export const CHART_HORIZONTAL_INSETS = { left: 8, right: 54 } as const;
+const PADDING = { top: 28, ...CHART_HORIZONTAL_INSETS, bottom: 22 };
 const MIN_VISIBLE_CANDLES = 12;
-const INITIAL_VISIBLE_CANDLES = 80;
-const VOLUME_HEIGHT = 58;
-const PANEL_GAP = 10;
+const INITIAL_VISIBLE_CANDLES = 64;
+const MAX_VISIBLE_CANDLES = 500;
+const VOLUME_HEIGHT = 54;
+const PANEL_GAP = 8;
 
 function finite(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -35,6 +37,44 @@ function finite(value: number | null | undefined): number | null {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+type TouchPoint = {
+  locationX?: number;
+  pageX?: number;
+};
+
+function coordinate(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function touchLocationX(touch: TouchPoint | undefined) {
+  return coordinate(touch?.locationX);
+}
+
+function horizontalPinch(touches: readonly TouchPoint[]) {
+  const first = touches[0];
+  const second = touches[1];
+  const firstLocationX = touchLocationX(first);
+  const secondLocationX = touchLocationX(second);
+  if (firstLocationX == null || secondLocationX == null) return null;
+
+  const firstPageX = coordinate(first?.pageX) ?? firstLocationX;
+  const secondPageX = coordinate(second?.pageX) ?? secondLocationX;
+  const distance = Math.abs(firstPageX - secondPageX);
+  if (distance < 12) return null;
+
+  return {
+    distance,
+    midpoint: (firstLocationX + secondLocationX) / 2,
+  };
+}
+
+function formatAxisValue(value: number) {
+  const absolute = Math.abs(value);
+  const maximumFractionDigits =
+    absolute >= 1_000 ? 2 : absolute >= 1 ? 4 : absolute >= 0.01 ? 6 : 8;
+  return value.toLocaleString("zh-CN", { maximumFractionDigits });
 }
 
 function linePath(
@@ -64,7 +104,7 @@ function linePath(
 export default function CandlestickChart({
   candles,
   indicators,
-  height = 370,
+  height = 420,
   onSelectCandle,
   onWindowChange,
 }: Props) {
@@ -76,6 +116,8 @@ export default function CandlestickChart({
   const endIndexRef = useRef(endIndex);
   const pinchStartDistance = useRef<number | null>(null);
   const pinchStartCount = useRef(visibleCount);
+  const pinchStartEnd = useRef(endIndex);
+  const pinchStartMidpoint = useRef<number | null>(null);
   const panStartX = useRef<number | null>(null);
   const panStartEnd = useRef(endIndex);
   const movedDuringGesture = useRef(false);
@@ -97,10 +139,11 @@ export default function CandlestickChart({
       return;
     }
 
+    const maximumVisibleCount = Math.min(MAX_VISIBLE_CANDLES, candleCount);
     const nextVisibleCount = clamp(
       visibleCountRef.current,
-      Math.min(MIN_VISIBLE_CANDLES, candleCount),
-      candleCount,
+      Math.min(MIN_VISIBLE_CANDLES, maximumVisibleCount),
+      maximumVisibleCount,
     );
     setVisibleCount(nextVisibleCount);
     visibleCountRef.current = nextVisibleCount;
@@ -111,10 +154,11 @@ export default function CandlestickChart({
 
   const window = useMemo<ChartWindow>(() => {
     if (candleCount === 0) return { start: 0, end: 0 };
+    const maximumVisibleCount = Math.min(MAX_VISIBLE_CANDLES, candleCount);
     const count = clamp(
       visibleCount,
-      Math.min(MIN_VISIBLE_CANDLES, candleCount),
-      candleCount,
+      Math.min(MIN_VISIBLE_CANDLES, maximumVisibleCount),
+      maximumVisibleCount,
     );
     const end = clamp(endIndex, count, candleCount);
     return { start: Math.max(0, end - count), end };
@@ -136,10 +180,12 @@ export default function CandlestickChart({
   }, [selectedIndex, visibleCandles.length, window.end, window.start]);
 
   useEffect(() => {
-    onSelectCandleRef.current?.(
-      selectedIndex == null ? null : candles[selectedIndex] ?? null,
-    );
-  }, [candles, selectedIndex]);
+    const selectedCandle =
+      selectedIndex != null && selectedIndex >= window.start && selectedIndex < window.end
+        ? candles[selectedIndex] ?? null
+        : null;
+    onSelectCandleRef.current?.(selectedCandle);
+  }, [candles, selectedIndex, window.end, window.start]);
 
   const indicatorByTimestamp = useMemo(
     () => new Map(indicators.map((indicator) => [indicator.ts, indicator])),
@@ -173,45 +219,95 @@ export default function CandlestickChart({
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (event) => {
           const touches = event.nativeEvent.touches;
-          panStartX.current = touches[0]?.locationX ?? null;
+          const pinch = horizontalPinch(touches);
+          panStartX.current = touchLocationX(touches[0]);
           panStartEnd.current = endIndexRef.current;
           movedDuringGesture.current = false;
-          pinchedDuringGesture.current = touches.length >= 2;
-          if (touches.length >= 2) {
-            pinchStartDistance.current = Math.abs(
-              touches[0].locationX - touches[1].locationX,
-            );
+          pinchedDuringGesture.current = pinch != null;
+          if (pinch) {
+            pinchStartDistance.current = pinch.distance;
             pinchStartCount.current = visibleCountRef.current;
+            pinchStartEnd.current = endIndexRef.current;
+            pinchStartMidpoint.current = pinch.midpoint;
           }
         },
         onPanResponderMove: (event) => {
           const touches = event.nativeEvent.touches;
-          if (touches.length >= 2 && pinchStartDistance.current != null) {
+          const pinch = horizontalPinch(touches);
+          if (pinch) {
+            const maximumVisibleCount = Math.min(MAX_VISIBLE_CANDLES, candles.length);
+            if (maximumVisibleCount === 0) return;
+
+            if (pinchStartDistance.current == null) {
+              pinchStartDistance.current = pinch.distance;
+              pinchStartCount.current = visibleCountRef.current;
+              pinchStartEnd.current = endIndexRef.current;
+              pinchStartMidpoint.current = pinch.midpoint;
+            }
+
             pinchedDuringGesture.current = true;
-            const distance = Math.abs(touches[0].locationX - touches[1].locationX);
-            const scale = Math.max(distance / Math.max(pinchStartDistance.current, 1), 0.1);
-            const nextVisibleCount = clamp(
-              Math.round(pinchStartCount.current / scale),
-              Math.min(MIN_VISIBLE_CANDLES, candles.length || 1),
-              Math.max(candles.length, 1),
+            const minimumVisibleCount = Math.min(MIN_VISIBLE_CANDLES, maximumVisibleCount);
+            const scale = clamp(
+              pinch.distance / Math.max(pinchStartDistance.current, 1),
+              0.25,
+              4,
             );
+            const initialVisibleCount = clamp(
+              pinchStartCount.current,
+              minimumVisibleCount,
+              maximumVisibleCount,
+            );
+            const nextVisibleCount = clamp(
+              Math.round(initialVisibleCount / scale),
+              minimumVisibleCount,
+              maximumVisibleCount,
+            );
+            const initialEnd = clamp(
+              pinchStartEnd.current,
+              initialVisibleCount,
+              candles.length,
+            );
+            const initialStart = Math.max(0, initialEnd - initialVisibleCount);
+            const plotWidth = Math.max(1, width - PADDING.left - PADDING.right);
+            const pinchMidpoint = pinchStartMidpoint.current ?? pinch.midpoint;
+            const focusRatio = clamp(
+              (pinchMidpoint - PADDING.left) / plotWidth,
+              0,
+              1,
+            );
+            const focalCandle = initialStart + initialVisibleCount * focusRatio;
+            const targetStart = Math.round(
+              focalCandle - nextVisibleCount * focusRatio,
+            );
+            const nextEnd = clamp(
+              targetStart + nextVisibleCount,
+              nextVisibleCount,
+              candles.length,
+            );
+
             setVisibleCount(nextVisibleCount);
             visibleCountRef.current = nextVisibleCount;
-            setEndIndex((current) => {
-              const nextEnd = clamp(nextVisibleCount, nextVisibleCount, Math.max(candles.length, nextVisibleCount));
-              const resolved = Math.max(nextEnd, Math.min(current, candles.length));
-              endIndexRef.current = resolved;
-              return resolved;
-            });
+            setEndIndex(nextEnd);
+            endIndexRef.current = nextEnd;
+            return;
+          }
+
+          if (pinchStartDistance.current != null) {
+            pinchStartDistance.current = null;
+            pinchStartMidpoint.current = null;
+            panStartX.current = touchLocationX(touches[0]);
+            panStartEnd.current = endIndexRef.current;
             return;
           }
 
           const startX = panStartX.current;
           if (startX == null || !visibleCandles.length) return;
-          const moved = (touches[0]?.locationX ?? startX) - startX;
+          const currentX = touchLocationX(touches[0]) ?? startX;
+          const moved = currentX - startX;
           if (Math.abs(moved) >= 4) movedDuringGesture.current = true;
+          const plotWidth = Math.max(1, width - PADDING.left - PADDING.right);
           const shift = Math.round(
-            (-moved / Math.max(width, 1)) * visibleCountRef.current,
+            (-moved / plotWidth) * visibleCountRef.current,
           );
           const nextEnd = clamp(
             panStartEnd.current + shift,
@@ -226,12 +322,14 @@ export default function CandlestickChart({
             chooseCandle(event.nativeEvent.locationX);
           }
           pinchStartDistance.current = null;
+          pinchStartMidpoint.current = null;
           panStartX.current = null;
           movedDuringGesture.current = false;
           pinchedDuringGesture.current = false;
         },
         onPanResponderTerminate: () => {
           pinchStartDistance.current = null;
+          pinchStartMidpoint.current = null;
           panStartX.current = null;
           movedDuringGesture.current = false;
           pinchedDuringGesture.current = false;
@@ -275,12 +373,12 @@ export default function CandlestickChart({
     Number.EPSILON,
   );
   const candleWidth = Math.max(
-    2,
-    Math.min(11, (plotWidth / visibleCandles.length) * 0.62),
+    2.5,
+    Math.min(14, (plotWidth / visibleCandles.length) * 0.76),
   );
   const volumeWidth = Math.max(
     1,
-    Math.min(11, (plotWidth / visibleCandles.length) * 0.72),
+    Math.min(12, (plotWidth / visibleCandles.length) * 0.72),
   );
   const ma5 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma5));
   const ma20 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma20));
@@ -332,6 +430,31 @@ export default function CandlestickChart({
           y1={volumeTop}
           y2={volumeTop}
         />
+        {[maximum, (maximum + minimum) / 2, minimum].map((value, index) => (
+          <SvgText
+            fill={palette.textMuted}
+            fontSize={10}
+            key={`price-scale-${index}`}
+            x={width - PADDING.right + 5}
+            y={
+              index === 0
+                ? priceTop + 9
+                : index === 2
+                  ? priceBottom - 2
+                  : priceTop + priceHeight / 2 + 3
+            }
+          >
+            {formatAxisValue(value)}
+          </SvgText>
+        ))}
+        <SvgText
+          fill={palette.textMuted}
+          fontSize={10}
+          x={PADDING.left}
+          y={volumeTop + 14}
+        >
+          {`成交量 ${formatAxisValue(maxVolume)}`}
+        </SvgText>
         {visibleCandles.map((candle, index) => {
           const x = xAt(index);
           const color = candle.close >= candle.open ? palette.positive : palette.negative;
@@ -356,7 +479,9 @@ export default function CandlestickChart({
                 y2={priceY(candle.low)}
               />
               <Rect
-                fill={color}
+                fill={candle.close >= candle.open ? color : palette.surface}
+                stroke={color}
+                strokeWidth={1}
                 height={Math.max(1.5, bodyBottom - bodyTop)}
                 rx={1}
                 width={candleWidth}
@@ -400,22 +525,14 @@ export default function CandlestickChart({
           </>
         ) : null}
       </Svg>
-      <View pointerEvents="none" style={styles.axisTop}>
-        <Text style={styles.axisText}>{high.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
-      </View>
-      <View pointerEvents="none" style={styles.axisBottom}>
-        <Text style={styles.axisText}>{low.toLocaleString(undefined, { maximumFractionDigits: 4 })}</Text>
-      </View>
-      <View pointerEvents="none" style={styles.volumeLabel}>
-        <Text style={styles.axisText}>VOL {maxVolume.toLocaleString(undefined, { maximumFractionDigits: 1 })}</Text>
-      </View>
       <View pointerEvents="none" style={styles.legend}>
         <Text style={[styles.legendText, { color: "#F5B544" }]}>MA5</Text>
         <Text style={[styles.legendText, { color: palette.primary }]}>MA20</Text>
         <Text style={[styles.legendText, { color: "#B58CFF" }]}>MA60</Text>
+        <Text style={styles.windowText}>可见 {visibleCandles.length} 根</Text>
       </View>
       <View pointerEvents="none" style={styles.gestureCopy}>
-        <Text style={styles.gestureText}>双指缩放 · 拖动回看 · 点按查看</Text>
+        <Text style={styles.gestureText}>双指横向开合缩放 · 单指横向拖动回看 · 点按查看</Text>
       </View>
     </View>
   );
@@ -438,10 +555,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   emptyText: { color: palette.textMuted, fontSize: 13 },
-  axisTop: { position: "absolute", right: spacing.xs, top: 49 },
-  axisBottom: { bottom: 86, position: "absolute", right: spacing.xs },
-  axisText: { color: palette.textMuted, fontSize: 10 },
-  volumeLabel: { bottom: spacing.xs, position: "absolute", right: spacing.xs },
   legend: {
     alignItems: "center",
     flexDirection: "row",
@@ -451,6 +564,7 @@ const styles = StyleSheet.create({
     top: spacing.xs,
   },
   legendText: { fontSize: 10, fontWeight: "700" },
+  windowText: { color: palette.textMuted, fontSize: 10, fontWeight: "700" },
   gestureCopy: {
     bottom: spacing.xs,
     left: PADDING.left,

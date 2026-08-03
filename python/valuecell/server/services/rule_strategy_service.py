@@ -322,7 +322,7 @@ class RuleStrategyService:
                     "evaluated_at": journal.created_at,
                     "action": result.get("action", "no_op"),
                     "reason_code": result.get("reason_code", "unknown"),
-                    "reason": result.get("reason", "No explanation was recorded."),
+                    "reason": result.get("reason", "未记录决策说明。"),
                     "conditions": result.get("conditions", []),
                     "indicators": result.get("indicators", {}),
                     "sizing": result.get("sizing", {}),

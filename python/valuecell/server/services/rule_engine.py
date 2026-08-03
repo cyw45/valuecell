@@ -188,30 +188,30 @@ class RuleEngine:
             elif exit_side == "sell":
                 action = "sell"
                 reason_code = "advanced_exit_confirmed"
-                reason = "Sell recommendation: configured exit rules are confirmed."
+                reason = "建议卖出：已确认配置的出场规则。"
             elif exit_side == "unavailable":
                 action = "no_op"
                 reason_code = "insufficient_candle_history"
-                reason = "No action: supplied candle history is insufficient."
+                reason = "不执行操作：提供的 K 线历史不足。"
             else:
                 action = "no_op"
                 reason_code = "no_exit_signal"
-                reason = "No action: configured exit rules are not confirmed."
+                reason = "不执行操作：未确认配置的出场规则。"
         elif entry_side == "buy":
             action = "buy"
             reason_code = "advanced_entry_confirmed"
             reason = (
-                "Buy recommendation: configured multi-timeframe rules are confirmed."
+                "建议买入：已确认配置的多周期规则。"
             )
         elif entry_side == "unavailable":
             action = "no_op"
             reason_code = "insufficient_candle_history"
-            reason = "No action: supplied candle history is insufficient."
+            reason = "不执行操作：提供的 K 线历史不足。"
         else:
             action = "no_op"
             reason_code = "advanced_entry_not_confirmed"
             reason = (
-                "No action: configured multi-timeframe entry rules are not confirmed."
+                "不执行操作：未确认配置的多周期入场规则。"
             )
 
         risk_conditions = self._risk_conditions(request, action, sizing)
@@ -247,9 +247,7 @@ class RuleEngine:
         average = self._sma([candle.close for candle in candles[-period:]])
         price = candles[-1].close
         matched = price >= average if comparator == "above" else price <= average
-        detail = (
-            f"price is {comparator} the {period}-period moving average on {interval}"
-        )
+        detail = f"价格{self._comparison_detail(comparator)}{period}期 MA（{interval}）"
         return self._assessment(
             "price_ma",
             "buy" if matched else "neutral",
@@ -291,7 +289,7 @@ class RuleEngine:
         return self._assessment(
             "macd_cross",
             "buy" if matched else "neutral",
-            f"{cross} MACD crossover on {interval}",
+            f"MACD {'金叉' if cross == 'golden' else '死叉'}（{interval}）",
             values,
         ), values
 
@@ -319,6 +317,13 @@ class RuleEngine:
         price = candles[-1].close
         target = references[reference]
         matched = price >= target if comparator == "above" else price <= target
+        band = (
+            "上轨"
+            if reference == "upper"
+            else "中轨"
+            if reference == "middle"
+            else "下轨"
+        )
         values = {
             "bollinger_upper": references["upper"],
             "bollinger_middle": middle,
@@ -329,7 +334,7 @@ class RuleEngine:
         return self._assessment(
             "bollinger_price",
             "buy" if matched else "neutral",
-            f"price is {comparator} Bollinger {reference} band on {interval}",
+            f"价格{self._comparison_detail(comparator)}布林带{band}（{interval}）",
             values,
         ), values
 
@@ -400,13 +405,14 @@ class RuleEngine:
         )
 
     def _threshold_assessments(self, code, value, rule, values):
+        label = "RSI" if code == "rsi" else "动量" if code == "momentum" else "BRAR"
         entry_matched = self._matches_threshold(
             value, rule.entry_comparator, rule.entry_threshold
         )
         entry = self._assessment(
             f"{code}_entry",
             "buy" if entry_matched else "neutral",
-            f"{code} is {rule.entry_comparator} the entry threshold",
+            f"{label}{self._comparison_detail(rule.entry_comparator)}入场阈值",
             values,
         )
         if not rule.exit_enabled:
@@ -417,7 +423,7 @@ class RuleEngine:
         exit_assessment = self._assessment(
             f"{code}_exit",
             "sell" if exit_matched else "neutral",
-            f"{code} is {rule.exit_comparator} the exit threshold",
+            f"{label}{self._comparison_detail(rule.exit_comparator)}出场阈值",
             values,
         )
         return [entry], [exit_assessment], values
@@ -425,6 +431,10 @@ class RuleEngine:
     @staticmethod
     def _matches_threshold(value: float, comparator: str, threshold: float) -> bool:
         return value >= threshold if comparator == "above" else value <= threshold
+
+    @staticmethod
+    def _comparison_detail(comparator: str) -> str:
+        return "高于或等于" if comparator == "above" else "低于或等于"
 
     @staticmethod
     def _rsi_value(closes: list[float], period: int) -> float:
@@ -458,14 +468,14 @@ class RuleEngine:
         }
         if previous_short <= previous_long and short > long:
             return self._assessment(
-                "ma_crossover", "buy", "moving averages crossed upward", values
+                "ma_crossover", "buy", "MA 已上穿", values
             ), values
         if previous_short >= previous_long and short < long:
             return self._assessment(
-                "ma_crossover", "sell", "moving averages crossed downward", values
+                "ma_crossover", "sell", "MA 已下穿", values
             ), values
         return self._assessment(
-            "ma_crossover", "neutral", "no moving-average crossover", values
+            "ma_crossover", "neutral", "未出现 MA 交叉", values
         ), values
 
     def _rsi_assessment(
@@ -490,14 +500,14 @@ class RuleEngine:
         values = {"rsi": rsi}
         if rsi <= oversold:
             return self._assessment(
-                "rsi", "buy", "RSI is at or below oversold threshold", values
+                "rsi", "buy", "RSI 已低于或等于超卖阈值", values
             ), values
         if rsi >= overbought:
             return self._assessment(
-                "rsi", "sell", "RSI is at or above overbought threshold", values
+                "rsi", "sell", "RSI 已高于或等于超买阈值", values
             ), values
         return self._assessment(
-            "rsi", "neutral", "RSI is between configured thresholds", values
+            "rsi", "neutral", "RSI 位于配置阈值之间", values
         ), values
 
     def _bollinger_assessment(
@@ -519,18 +529,18 @@ class RuleEngine:
         }
         if standard_deviation == 0:
             return self._assessment(
-                "bollinger", "neutral", "Bollinger bands have zero width", values
+                "bollinger", "neutral", "布林带宽度为零", values
             ), values
         if closes[-1] <= lower:
             return self._assessment(
-                "bollinger", "buy", "close is at or below lower Bollinger band", values
+                "bollinger", "buy", "收盘价低于或等于布林带下轨", values
             ), values
         if closes[-1] >= upper:
             return self._assessment(
-                "bollinger", "sell", "close is at or above upper Bollinger band", values
+                "bollinger", "sell", "收盘价高于或等于布林带上轨", values
             ), values
         return self._assessment(
-            "bollinger", "neutral", "close is inside Bollinger bands", values
+            "bollinger", "neutral", "收盘价位于布林带内", values
         ), values
 
     def _momentum_macd_assessment(
@@ -566,18 +576,18 @@ class RuleEngine:
             return self._assessment(
                 "momentum_macd",
                 "buy",
-                "positive momentum with upward MACD crossover",
+                "动量为正且 MACD 已上穿信号线",
                 values,
             ), values
         if momentum < 0 and previous_macd >= previous_signal and macd < signal:
             return self._assessment(
                 "momentum_macd",
                 "sell",
-                "negative momentum with downward MACD crossover",
+                "动量为负且 MACD 已下穿信号线",
                 values,
             ), values
         return self._assessment(
-            "momentum_macd", "neutral", "momentum/MACD entry conditions not met", values
+            "momentum_macd", "neutral", "未满足动量/MACD 入场条件", values
         ), values
 
     def _exit_conditions(
@@ -591,13 +601,13 @@ class RuleEngine:
                     code="take_profit",
                     category="exit",
                     state="not_triggered",
-                    detail="no open position",
+                    detail="当前无持仓",
                 ),
                 RuleStrategyConditionCheck(
                     code="stop_loss",
                     category="exit",
                     state="not_triggered",
-                    detail="no open position",
+                    detail="当前无持仓",
                 ),
             ], None
         entry_price = position.entry_price
@@ -614,9 +624,7 @@ class RuleEngine:
                 code="take_profit",
                 category="exit",
                 state="triggered" if take_profit_hit else "not_triggered",
-                detail="take-profit threshold reached"
-                if take_profit_hit
-                else "take-profit threshold not reached",
+                detail="已触及止盈阈值" if take_profit_hit else "未触及止盈阈值",
                 values={
                     "return_pct": return_pct,
                     "threshold_pct": risk.take_profit_pct,
@@ -626,9 +634,7 @@ class RuleEngine:
                 code="stop_loss",
                 category="exit",
                 state="triggered" if stop_loss_hit else "not_triggered",
-                detail="stop-loss threshold reached"
-                if stop_loss_hit
-                else "stop-loss threshold not reached",
+                detail="已触及止损阈值" if stop_loss_hit else "未触及止损阈值",
                 values={"return_pct": return_pct, "threshold_pct": risk.stop_loss_pct},
             ),
         ]
@@ -652,36 +658,36 @@ class RuleEngine:
             return (
                 "sell",
                 "take_profit_triggered",
-                "Sell recommendation: take-profit threshold reached.",
+                "建议卖出：已触及止盈阈值。",
             )
         if exit_reason == "stop_loss":
             return (
                 "sell",
                 "stop_loss_triggered",
-                "Sell recommendation: stop-loss threshold reached.",
+                "建议卖出：已触及止损阈值。",
             )
         if side == "sell":
             return (
                 "sell",
                 "indicator_sell_confirmed",
-                "Sell recommendation: configured indicators confirm a sell signal.",
+                "建议卖出：配置指标已确认卖出信号。",
             )
         if not assessments:
             return (
                 "no_op",
                 "no_enabled_indicators",
-                "No action: no indicator rule is enabled.",
+                "不执行操作：未启用任何指标规则。",
             )
         if side == "unavailable":
             return (
                 "no_op",
                 "insufficient_candle_history",
-                "No action: supplied candle history is insufficient for configured indicators.",
+                "不执行操作：提供的 K 线历史不足，无法评估配置指标。",
             )
         return (
             "no_op",
             "no_exit_signal",
-            "No action: no configured exit signal is confirmed.",
+            "不执行操作：未确认配置的出场信号。",
         )
 
     def _flat_action(
@@ -691,30 +697,30 @@ class RuleEngine:
             return (
                 "no_op",
                 "no_enabled_indicators",
-                "No action: no indicator rule is enabled.",
+                "不执行操作：未启用任何指标规则。",
             )
         if side == "buy":
             return (
                 "buy",
                 "indicator_buy_confirmed",
-                "Buy recommendation: configured indicators confirm a buy signal.",
+                "建议买入：配置指标已确认买入信号。",
             )
         if side == "sell":
             return (
                 "no_op",
                 "sell_signal_without_position",
-                "No action: sell signal cannot open a paper long position.",
+                "不执行操作：卖出信号不能开启模拟多头仓位。",
             )
         if side == "unavailable":
             return (
                 "no_op",
                 "insufficient_candle_history",
-                "No action: supplied candle history is insufficient for configured indicators.",
+                "不执行操作：提供的 K 线历史不足，无法评估配置指标。",
             )
         return (
             "no_op",
             "indicators_not_confirmed",
-            "No action: configured indicators do not confirm an entry signal.",
+            "不执行操作：未确认配置的入场信号。",
         )
 
     def _risk_conditions(
@@ -738,9 +744,7 @@ class RuleEngine:
                 code="max_positions",
                 category="risk",
                 state="blocked" if position_limit_blocked else "not_triggered",
-                detail="maximum open positions reached"
-                if position_limit_blocked
-                else "position limit permits an entry",
+                detail="已达到最大持仓数量" if position_limit_blocked else "当前持仓数量未达到上限，允许入场",
                 values={
                     "open_position_count": market.open_position_count,
                     "max_positions": risk.max_positions,
@@ -750,9 +754,9 @@ class RuleEngine:
                 code="available_collateral",
                 category="risk",
                 state="blocked" if capital_blocked else "not_triggered",
-                detail="insufficient quote balance for configured leveraged size"
+                detail="计价币余额不足以覆盖配置的杠杆仓位"
                 if capital_blocked
-                else "quote balance covers configured leveraged size",
+                else "计价币余额足以覆盖配置的杠杆仓位",
                 values={
                     "requested_quote": sizing.requested_quote,
                     "affordable_quote": sizing.affordable_quote,
@@ -762,9 +766,9 @@ class RuleEngine:
                 code="leverage_limit",
                 category="risk",
                 state="blocked" if leverage_blocked else "not_triggered",
-                detail="configured size exceeds equity-based leverage limit"
+                detail="配置仓位超过基于权益的杠杆上限"
                 if leverage_blocked
-                else "configured size is within equity-based leverage limit",
+                else "配置仓位在基于权益的杠杆上限内",
                 values={
                     "requested_quote": sizing.requested_quote,
                     "max_allowed_quote": sizing.max_allowed_quote,
@@ -858,7 +862,7 @@ class RuleEngine:
                 code=code,
                 category=category,
                 state="unavailable",
-                detail="insufficient supplied candle history",
+                detail="提供的 K 线历史数量不足",
                 values={"required_candles": required, "supplied_candles": supplied},
             ),
         )

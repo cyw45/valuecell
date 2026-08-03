@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
+from valuecell.server.services.tenant_credential_service import (
+    CredentialVaultError,
+    TenantCredentialService,
+)
 
 # These are deliberately shared service semantics, rather than exchange-specific
 # strings.  In particular submission_unknown means the remote request may have
@@ -24,10 +28,6 @@ INTENT_SUBMISSION_UNKNOWN = "submission_unknown"
 INTENT_SUBMITTED = "submitted"
 INTENT_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected", "stale"})
 ORDER_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected"})
-from valuecell.server.services.tenant_credential_service import (
-    CredentialVaultError,
-    TenantCredentialService,
-)
 
 SandboxProvider = Literal["binance", "okx"]
 
@@ -327,7 +327,7 @@ class SandboxExchangeTradingService:
                 intent.error_code = order.error_code
                 intent.error_message = str(exc)
                 intent.terminal_at = datetime.now(timezone.utc)
-        except asyncio.CancelledError as exc:
+        except asyncio.CancelledError:
             # Cancellation can race a remote create. Persist ambiguity before
             # propagating it so a caller's rollback cannot erase the audit row.
             order.status = INTENT_SUBMISSION_UNKNOWN

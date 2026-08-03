@@ -38,20 +38,37 @@ type MarketScreenProps = {
 };
 
 type MarketInterval = "1m" | "3m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
-type HistoryRange = "10D" | "30D" | "90D" | "1Y" | "custom";
+type HistoryRange = "1D" | "5D" | "1W" | "1M" | "10D" | "30D" | "90D" | "1Y" | "custom";
 type SymbolScope = "strategy" | "catalog";
 
-const INTERVALS: readonly MarketInterval[] = [
-  "1m",
-  "3m",
-  "5m",
-  "15m",
-  "30m",
-  "1h",
-  "4h",
-  "1d",
+const INTERVAL_OPTIONS: ReadonlyArray<{ value: MarketInterval; label: string }> = [
+  { value: "1m", label: "1分" },
+  { value: "3m", label: "3分" },
+  { value: "5m", label: "5分" },
+  { value: "15m", label: "15分" },
+  { value: "30m", label: "30分" },
+  { value: "1h", label: "1小时" },
+  { value: "4h", label: "4小时" },
+  { value: "1d", label: "1日" },
+];
+const TIME_RANGE_OPTIONS: ReadonlyArray<{
+  value: Exclude<HistoryRange, "custom">;
+  label: string;
+}> = [
+  { value: "1D", label: "1日" },
+  { value: "5D", label: "5日" },
+  { value: "1W", label: "1周" },
+  { value: "1M", label: "1月" },
+  { value: "10D", label: "10日" },
+  { value: "30D", label: "30日" },
+  { value: "90D", label: "90日" },
+  { value: "1Y", label: "1年" },
 ];
 const RANGE_DAYS: Record<Exclude<HistoryRange, "custom">, number> = {
+  "1D": 1,
+  "5D": 5,
+  "1W": 7,
+  "1M": 30,
   "10D": 10,
   "30D": 30,
   "90D": 90,
@@ -70,7 +87,7 @@ const INTERVAL_MS: Record<MarketInterval, number> = {
 const INDICATOR_OPTIONS: ReadonlyArray<{ value: IndicatorPanel; label: string }> = [
   { value: "rsi", label: "RSI" },
   { value: "bollinger", label: "布林带" },
-  { value: "momentum", label: "Momentum" },
+  { value: "momentum", label: "动量" },
   { value: "macd", label: "MACD" },
 ];
 
@@ -199,7 +216,9 @@ export default function MarketScreen({ route }: MarketScreenProps) {
         fromTsMs: toTsMs - RANGE_DAYS[range] * 24 * 60 * 60 * 1_000,
         toTsMs,
         valid: true,
-        label: range,
+        label:
+          TIME_RANGE_OPTIONS.find((option) => option.value === range)?.label ??
+          "时间范围",
       };
     }
     const fromTsMs = parseUtcDay(customFromDate, false);
@@ -211,6 +230,13 @@ export default function MarketScreen({ route }: MarketScreenProps) {
       label: customFromDate && customToDate ? `${customFromDate} 至 ${customToDate}` : "自定义日期",
     };
   }, [customFromDate, customToDate, range, rangeAnchor]);
+
+  useEffect(() => {
+    setVisibleWindow(undefined);
+    setSelectedCandle(null);
+  }, [dateRange.fromTsMs, dateRange.toTsMs, interval, symbol]);
+
+  const chartSnapshotKey = `${symbol}:${interval}:${dateRange.fromTsMs ?? "invalid"}:${dateRange.toTsMs ?? "invalid"}`;
   const lookback = useMemo(() => {
     if (dateRange.fromTsMs == null || dateRange.toTsMs == null) return 1;
     return Math.min(
@@ -309,7 +335,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
     >
       <View style={styles.header}>
         <View style={styles.headerCopy}>
-          <Text style={styles.eyebrow}>MARKET · RESEARCH</Text>
+          <Text style={styles.eyebrow}>服务端行情 · 研究</Text>
           <Text style={styles.title}>行情研究</Text>
           <Text style={styles.subtitle}>
             {activeStrategy
@@ -432,50 +458,50 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             <Text style={styles.cardMeta}>成交量、均线与技术指标均来自同一服务端快照</Text>
           </View>
           <Pressable
-            accessibilityLabel="在 TradingView 打开当前标的"
+            accessibilityLabel="打开外部行情图"
             accessibilityRole="button"
             disabled={!tradingViewUrl}
             onPress={() => void openTradingView()}
             style={[styles.tradingViewButton, !tradingViewUrl && styles.controlDisabled]}
           >
             <ExternalLink color={tradingViewUrl ? palette.primary : palette.textMuted} size={17} />
-            <Text style={[styles.tradingViewText, !tradingViewUrl && styles.tradingViewTextDisabled]}>TradingView</Text>
+            <Text style={[styles.tradingViewText, !tradingViewUrl && styles.tradingViewTextDisabled]}>外部图表</Text>
           </Pressable>
         </View>
         {externalReferenceError ? <Text style={styles.errorText}>{externalReferenceError}</Text> : null}
 
         <Text style={styles.controlLabel}>周期</Text>
         <ScrollView contentContainerStyle={styles.controlRow} horizontal showsHorizontalScrollIndicator={false}>
-          {INTERVALS.map((item) => (
+          {INTERVAL_OPTIONS.map((item) => (
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ selected: interval === item }}
-              key={item}
-              onPress={() => setInterval(item)}
-              style={[styles.controlChip, interval === item && styles.controlChipActive]}
+              accessibilityState={{ selected: interval === item.value }}
+              key={item.value}
+              onPress={() => setInterval(item.value)}
+              style={[styles.controlChip, interval === item.value && styles.controlChipActive]}
             >
-              <Text style={[styles.controlChipText, interval === item && styles.controlChipTextActive]}>{item}</Text>
+              <Text style={[styles.controlChipText, interval === item.value && styles.controlChipTextActive]}>{item.label}</Text>
             </Pressable>
           ))}
         </ScrollView>
 
         <View style={styles.rangeHeader}>
-          <Text style={styles.controlLabel}>历史范围</Text>
+          <Text style={styles.controlLabel}>时间范围</Text>
           <Text style={styles.rangeSummary}>{dateRange.label}</Text>
         </View>
         <ScrollView contentContainerStyle={styles.controlRow} horizontal showsHorizontalScrollIndicator={false}>
-          {(Object.keys(RANGE_DAYS) as Array<Exclude<HistoryRange, "custom">>).map((item) => (
+          {TIME_RANGE_OPTIONS.map((option) => (
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ selected: range === item }}
-              key={item}
+              accessibilityState={{ selected: range === option.value }}
+              key={option.value}
               onPress={() => {
-                setRange(item);
+                setRange(option.value);
                 setRangeAnchor(Date.now());
               }}
-              style={[styles.controlChip, range === item && styles.controlChipActive]}
+              style={[styles.controlChip, range === option.value && styles.controlChipActive]}
             >
-              <Text style={[styles.controlChipText, range === item && styles.controlChipTextActive]}>{item}</Text>
+              <Text style={[styles.controlChipText, range === option.value && styles.controlChipTextActive]}>{option.label}</Text>
             </Pressable>
           ))}
           <Pressable
@@ -526,6 +552,8 @@ export default function MarketScreen({ route }: MarketScreenProps) {
         {marketSymbol && !marketUnavailable ? (
           <>
             <CandlestickChart
+              key={chartSnapshotKey}
+              height={420}
               candles={marketSymbol.candles}
               indicators={marketSymbol.indicators}
               onSelectCandle={setSelectedCandle}
@@ -580,10 +608,12 @@ export default function MarketScreen({ route }: MarketScreenProps) {
               </Pressable>
             </View>
             <IndicatorChart
+              height={184}
               candles={marketSymbol.candles}
               indicators={marketSymbol.indicators}
               panel={indicator}
               window={visibleWindow}
+              selectedTimestamp={selectedCandle?.ts ?? null}
             />
           </>
         ) : null}
@@ -592,7 +622,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
       <View style={styles.researchNote}>
         <Text style={styles.researchNoteTitle}>研究边界</Text>
         <Text style={styles.researchNoteText}>
-          图表数据用于研究与策略观察；切换目录标的不会更改策略配置。外部 TradingView 仅作为参考。
+          图表数据用于研究与策略观察；切换目录标的不会更改策略配置。外部行情图仅作为参考。
         </Text>
       </View>
 
@@ -611,7 +641,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
           />
           <View style={styles.sheet}>
             <Text style={styles.sheetTitle}>自定义日期范围</Text>
-            <Text style={styles.sheetCopy}>使用 UTC 日期。会转换为服务端所需的 from_ts_ms 与 to_ts_ms。</Text>
+            <Text style={styles.sheetCopy}>按协调世界时日期提交；应用后会以服务端时间戳范围请求行情。</Text>
             <Text style={styles.inputLabel}>开始日期</Text>
             <TextInput
               accessibilityLabel="开始日期 YYYY-MM-DD"
@@ -822,17 +852,20 @@ const styles = StyleSheet.create({
   rangeHeader: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
   rangeSummary: { color: palette.textMuted, fontSize: 11, maxWidth: "52%", textAlign: "right" },
   sourceStrip: {
+    alignItems: "center",
     backgroundColor: palette.surfaceMuted,
     borderColor: palette.border,
     borderRadius: radius.sm,
     borderWidth: 1,
-    gap: 5,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
     padding: spacing.sm,
   },
   sourcePill: { alignSelf: "flex-start", backgroundColor: palette.primarySoft, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 4 },
   sourcePillText: { color: palette.primary, fontSize: 11, fontWeight: "800" },
   sourceText: { color: palette.textMuted, fontSize: 11, lineHeight: 16 },
-  warningText: { color: palette.warning, fontSize: 12, lineHeight: 18 },
+  warningText: { color: palette.warning, flexBasis: "100%", fontSize: 12, lineHeight: 18 },
   statePanel: { alignItems: "center", gap: spacing.sm, justifyContent: "center", minHeight: 220, padding: spacing.md },
   errorPanel: {
     alignItems: "flex-start",

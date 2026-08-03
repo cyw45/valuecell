@@ -135,7 +135,7 @@ function BookSide({
               <TableCell className="text-right tabular-nums">
                 {formatNumber(level.size, 2)}
               </TableCell>
-              <TableCell className="text-right tabular-nums text-muted-foreground">
+              <TableCell className="text-right text-muted-foreground tabular-nums">
                 {numberFixed(cumulative, 2)}
               </TableCell>
             </TableRow>
@@ -236,12 +236,12 @@ export default function PolymarketResearch() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-semibold">Polymarket Research</h1>
+                <h1 className="font-semibold text-xl">Polymarket Research</h1>
                 <Badge variant="outline">
                   <TestTube2 /> Paper and simulated only
                 </Badge>
               </div>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-muted-foreground text-sm">
                 Public Gamma catalog and CLOB order-book observations. No
                 wallet, signing, account data, or live execution.
               </p>
@@ -346,11 +346,11 @@ export default function PolymarketResearch() {
             ].map(([label, value, hint]) => (
               <Card className="gap-2 rounded-lg py-4 shadow-none" key={label}>
                 <CardContent className="px-4">
-                  <p className="text-xs text-muted-foreground">{label}</p>
+                  <p className="text-muted-foreground text-xs">{label}</p>
                   <p className="mt-1 font-semibold text-lg tabular-nums">
                     {value}
                   </p>
-                  <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
+                  <p className="mt-1 text-muted-foreground text-xs">{hint}</p>
                 </CardContent>
               </Card>
             ))}
@@ -467,7 +467,7 @@ export default function PolymarketResearch() {
                   type="number"
                   value={latencyMs}
                 />
-                <p className="text-xs leading-relaxed text-muted-foreground">
+                <p className="text-muted-foreground text-xs leading-relaxed">
                   Assumptions: {latencyMs || "0"} ms latency, visible frozen
                   public book levels, no extra slippage, and unfilled remainder
                   is cancelled. Results are simulated and not performance
@@ -487,7 +487,7 @@ export default function PolymarketResearch() {
                 </Button>
               </form>
               {replay.error ? (
-                <p className="mt-3 text-sm text-destructive">
+                <p className="mt-3 text-destructive text-sm">
                   Simulation unavailable. No result was inferred.
                 </p>
               ) : null}

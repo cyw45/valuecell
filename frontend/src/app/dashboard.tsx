@@ -31,7 +31,7 @@ import {
   useRuleStrategyDemoExecution,
   useRuleStrategyEvaluations,
   useRuleStrategyPnlCurve,
-  useRuleStrategyTrades,
+  useRuleStrategies,
 } from "@/api/rule-strategy";
 import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import { Badge } from "@/components/ui/badge";
@@ -65,7 +65,14 @@ import {
   demoExecutionCheckedAtLabel,
   demoExecutionUnvaluedAssetCount,
 } from "@/types/rule-strategy-demo-execution";
+import {
+  RuleStrategyEvaluationPath,
+  ruleStrategyActionLabel,
+  ruleStrategyEvaluationReason,
+  ruleStrategyActionTone,
+} from "@/components/valuecell/rule-strategy-evaluation-path";
 import { cn } from "@/lib/utils";
+import { useSaaSSession } from "@/store/system-store";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -236,6 +243,11 @@ export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [strategyId] = useActiveRuleStrategyId();
+  const { tenantId } = useSaaSSession();
+  const strategiesQuery = useRuleStrategies(tenantId);
+  const runningStrategyCount = strategiesQuery.data?.filter(
+    (strategy) => strategy.status === "running",
+  ).length;
   const { data: ruleStrategy } = useRuleStrategy(strategyId);
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
@@ -257,9 +269,6 @@ export default function DashboardPage() {
     ? demoExecutionUnvaluedAssetCount(demoExecution)
     : 0;
   const { data: pnlCurve } = useRuleStrategyPnlCurve(
-    isOkxDemo ? undefined : strategyId || undefined,
-  );
-  const { data: trades = [] } = useRuleStrategyTrades(
     isOkxDemo ? undefined : strategyId || undefined,
   );
   const { data: evaluations = [] } = useRuleStrategyEvaluations(
@@ -352,14 +361,17 @@ export default function DashboardPage() {
       }))
     : [];
   const account = ruleStrategy?.account;
-  const demoUsdt = Number(
-    demoBalance?.balances.find((balance) => balance.currency === "USDT")
-      ?.free ?? 0,
+  const demoUsdtBalance = demoBalance?.balances.find(
+    (balance) => balance.currency === "USDT",
   );
+  const demoUsdt =
+    demoUsdtBalance && Number.isFinite(Number(demoUsdtBalance.free))
+      ? Number(demoUsdtBalance.free)
+      : null;
   const displayEquity = isOkxDemo
-    ? (demoBalance?.total_usdt_value ?? 0)
-    : (account?.equity_quote ?? 0);
-  const displayCash = isOkxDemo ? demoUsdt : (account?.quote_balance ?? 0);
+    ? (demoBalance?.total_usdt_value ?? null)
+    : (account?.equity_quote ?? null);
+  const displayCash = isOkxDemo ? demoUsdt : (account?.quote_balance ?? null);
   const holdingRows = useMemo(
     () =>
       isOkxDemo
@@ -367,10 +379,10 @@ export default function DashboardPage() {
             symbol: position.symbol.replace("/", "-"),
             position: {
               quantity: position.quantity,
-              entry_price: position.mark_price ?? 0,
-              mark_price: position.mark_price ?? 0,
+              entry_price: position.mark_price,
+              mark_price: position.mark_price,
             },
-            value: position.notional_usdt ?? 0,
+            value: position.notional_usdt,
             profit: null,
           }))
         : Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
@@ -381,17 +393,28 @@ export default function DashboardPage() {
           }),
     [account?.positions, demoPositions, isOkxDemo],
   );
+  const hasAccountSnapshot = isOkxDemo
+    ? Boolean(demoExecution)
+    : Boolean(account);
+  const knownHoldingValues = holdingRows
+    .map((row) => row.value)
+    .filter((value): value is number => value !== null);
+  const holdingValue =
+    hasAccountSnapshot && knownHoldingValues.length === holdingRows.length
+      ? knownHoldingValues.reduce((total, value) => total + value, 0)
+      : null;
   const pnl =
-    (account?.realized_pnl_quote ?? 0) + (account?.unrealized_pnl_quote ?? 0);
+    isOkxDemo || !account
+      ? null
+      : account.realized_pnl_quote + account.unrealized_pnl_quote;
   const pnlPercent =
-    account && account.initial_capital_quote > 0
+    pnl !== null && account && account.initial_capital_quote > 0
       ? (pnl / account.initial_capital_quote) * 100
-      : 0;
-  const invested = isOkxDemo
-    ? Math.max(displayEquity - displayCash, 0)
-    : account
-      ? account.equity_quote - account.quote_balance
-      : 0;
+      : null;
+  const invested =
+    displayEquity !== null && displayCash !== null
+      ? Math.max(displayEquity - displayCash, 0)
+      : null;
   const latestRsi =
     market?.indicators[market.indicators.length - 1]?.rsi ?? null;
   const rsiDescription =
@@ -403,16 +426,15 @@ export default function DashboardPage() {
           ? "超买区：高于 70"
           : "中性区：30–70";
   const capitalUtilization =
-    displayEquity > 0
-      ? Math.min(
-          Math.max((Math.max(invested, 0) / displayEquity) * 100, 0),
-          100,
-        )
+    displayEquity !== null && invested !== null && displayEquity > 0
+      ? Math.min(Math.max((invested / displayEquity) * 100, 0), 100)
       : null;
   const utilizationDescription = isOkxDemo
-    ? "OKX Demo 已估值资产中非可用 USDT 的比例"
+    ? hasAccountSnapshot
+      ? "OKX Demo 已估值资产中非可用 USDT 的比例"
+      : "等待 OKX Demo 策略账户同步"
     : capitalUtilization === null
-      ? "等待策略账户"
+      ? "等待纸面策略账户"
       : "已投入资金 ÷ 当前组合权益";
   const recentSignals = evaluations
     .filter((item) => item.action !== "no_op")
@@ -433,7 +455,7 @@ export default function DashboardPage() {
       : null,
   ].filter((item): item is string => item !== null);
   const recentlyScanned = evaluations.slice(0, 8);
-  const requestedCapital = latestEvaluation?.sizing.requested_quote ?? 0;
+  const requestedCapital = latestEvaluation?.sizing.requested_quote;
 
   const scrollToStrategyConfiguration = useCallback(() => {
     document.getElementById("strategy-configuration")?.scrollIntoView({
@@ -510,29 +532,83 @@ export default function DashboardPage() {
         </header>
 
         <section
-          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6"
           aria-label="投资组合概览"
         >
           <KpiCard
             icon={WalletCards}
             label="组合权益"
             value={
-              <>
-                <TerminalValue value={displayEquity} /> USDT
-              </>
+              displayEquity === null ? (
+                "等待同步"
+              ) : (
+                <>
+                  <TerminalValue value={displayEquity} /> USDT
+                </>
+              )
             }
             detail={
               isOkxDemo
-                ? `共享 OKX Demo 账户估值 · ${demoCheckedAtTime}${demoUnvaluedAssetCount > 0 ? ` · ${demoUnvaluedAssetCount} 项资产未估值` : ""}`
-                : `初始资金 ${currency.format(account?.initial_capital_quote ?? 10_000)} USDT`
+                ? demoExecution
+                  ? `共享 OKX Demo 账户估值 · ${demoCheckedAtTime}${demoUnvaluedAssetCount > 0 ? ` · ${demoUnvaluedAssetCount} 项资产未估值` : ""}`
+                  : demoExecutionError
+                    ? "OKX Demo 策略账户暂不可读；不会以纸面账户替代。"
+                    : "等待 OKX Demo 策略账户同步"
+                : account
+                  ? `初始资金 ${currency.format(account.initial_capital_quote)} USDT`
+                  : "等待纸面策略账户"
             }
           />
           <KpiCard
-            icon={pnl >= 0 ? TrendingUp : TrendingDown}
+            icon={Layers3}
+            label="持仓市值"
+            value={
+              holdingValue === null ? (
+                hasAccountSnapshot ? "市值不可用" : "等待同步"
+              ) : (
+                <>
+                  <TerminalValue value={holdingValue} /> USDT
+                </>
+              )
+            }
+            detail={
+              isOkxDemo
+                ? hasAccountSnapshot
+                  ? holdingValue === null
+                    ? "OKX Demo 持仓含未估值资产，市值不可用"
+                    : `OKX Demo 策略归属持仓 ${holdingRows.length} 个 · 归属订单 ${demoOrders.length} 笔`
+                  : "等待 OKX Demo 交易所持仓"
+                : hasAccountSnapshot
+                  ? `按纸面策略账户标记价计入 ${holdingRows.length} 个持仓`
+                  : "等待纸面策略账户"
+            }
+          />
+          <KpiCard
+            icon={CircleDollarSign}
+            label="可用资金"
+            value={
+              displayCash === null ? (
+                "等待同步"
+              ) : (
+                <>
+                  <TerminalValue value={displayCash} /> USDT
+                </>
+              )
+            }
+            detail={
+              invested === null
+                ? "等待账户同步"
+                : `已投入 ${currency.format(invested)} USDT`
+            }
+          />
+          <KpiCard
+            icon={pnl === null || pnl >= 0 ? TrendingUp : TrendingDown}
             label={isOkxDemo ? "账户盈亏" : "总收益与亏损"}
             value={
               isOkxDemo ? (
                 "不可用"
+              ) : pnl === null ? (
+                "等待账户"
               ) : (
                 <>
                   <TerminalValue signed value={pnl} /> USDT
@@ -542,28 +618,45 @@ export default function DashboardPage() {
             detail={
               isOkxDemo
                 ? (demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用")
-                : `策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`
+                : pnlPercent === null
+                  ? "等待纸面策略账户"
+                  : `策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`
             }
-            trend={isOkxDemo ? "neutral" : pnl >= 0 ? "positive" : "negative"}
+            trend={
+              isOkxDemo || pnl === null
+                ? "neutral"
+                : pnl >= 0
+                  ? "positive"
+                  : "negative"
+            }
           />
           <KpiCard
-            icon={CircleDollarSign}
-            label="可用资金"
+            icon={Cpu}
+            label="运行中策略"
             value={
-              <>
-                <TerminalValue value={displayCash} /> USDT
-              </>
+              runningStrategyCount === undefined
+                ? "等待列表"
+                : `${runningStrategyCount} 个`
             }
-            detail={`已投入 ${currency.format(Math.max(invested, 0))} USDT`}
+            detail={
+              ruleStrategy
+                ? `当前策略：${ruleStrategy.status === "running" ? "运行中" : "已停止"}`
+                : "尚未选中策略"
+            }
+            trend={
+              runningStrategyCount && runningStrategyCount > 0
+                ? "positive"
+                : "neutral"
+            }
           />
           <KpiCard
-            icon={Layers3}
-            label="策略执行情况"
-            value={`${holdingRows.length} / ${ruleStrategy?.config.risk.max_positions ?? 0}`}
+            icon={Crosshair}
+            label="关注币种"
+            value={ruleStrategy ? `${trackedSymbols.length} 个` : "—"}
             detail={
-              isOkxDemo
-                ? `策略归属订单 ${demoOrders.length} 笔 · 共享账户持仓 ${holdingRows.length} 个 · ${demoCheckedAtTime}`
-                : `已成交 ${trades.length} 笔模拟交易，扫描 ${trackedSymbols.length} 个币种`
+              ruleStrategy
+                ? `当前策略按 ${ruleStrategy.config.interval} 周期扫描`
+                : "尚未配置策略"
             }
             trend="neutral"
           />
@@ -607,34 +700,46 @@ export default function DashboardPage() {
             </p>
             <p className="mt-1 text-muted-foreground text-xs">
               {ruleStrategy
-                ? `${trackedSymbols.length} 个币种 · ${ruleStrategy.config.interval} 周期`
+                ? `${ruleStrategy.status === "running" ? "运行中" : "已停止"} · ${trackedSymbols.length} 个币种 · ${ruleStrategy.config.interval} 周期`
                 : "前往策略配置页面启用扫描"}
             </p>
           </div>
           <div className="bg-card/95 px-3 py-3">
             <div className="flex items-center gap-2 text-emerald-500">
               <Crosshair className="size-3.5" />
-              <span className="terminal-label">本轮筛选</span>
+              <span className="terminal-label">当前持仓</span>
             </div>
             <p className="terminal-number mt-2 font-semibold text-lg">
-              {holdingRows.length}{" "}
+              {hasAccountSnapshot ? holdingRows.length : "—"}{" "}
               <span className="text-muted-foreground text-xs">个当前持仓</span>
             </p>
             <p className="mt-1 text-muted-foreground text-xs">
-              合格币种按本轮数量均分资金
+              {hasAccountSnapshot
+                ? isOkxDemo
+                  ? "来自 OKX Demo 交易所持仓"
+                  : "来自纸面策略账户持仓"
+                : isOkxDemo
+                  ? "等待 OKX Demo 账户同步"
+                  : "等待纸面策略账户"}
             </p>
           </div>
           <div className="bg-card/95 px-3 py-3">
             <div className="flex items-center gap-2 text-amber-500">
               <CircleDollarSign className="size-3.5" />
-              <span className="terminal-label">最新单币额度</span>
+              <span className="terminal-label">本轮请求额度</span>
             </div>
             <p className="terminal-number mt-2 font-semibold text-lg">
-              <TerminalValue value={requestedCapital} />{" "}
-              <span className="text-muted-foreground text-xs">USDT</span>
+              {requestedCapital === undefined ? (
+                <span className="text-muted-foreground">—</span>
+              ) : (
+                <>
+                  <TerminalValue value={requestedCapital} />{" "}
+                  <span className="text-muted-foreground text-xs">USDT</span>
+                </>
+              )}
             </p>
             <p className="mt-1 text-muted-foreground text-xs">
-              总资金 ÷ 本轮合格币种数，向下取整
+              以本次服务器评估的资金记录为准。
             </p>
           </div>
           <div className="bg-card/95 px-3 py-3">
@@ -658,6 +763,8 @@ export default function DashboardPage() {
             </p>
           </div>
         </section>
+
+        <RuleStrategyEvaluationPath evaluation={latestEvaluation} />
 
         <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
@@ -751,18 +858,10 @@ export default function DashboardPage() {
                     <span
                       className={cn(
                         "mt-1 block text-xs",
-                        item.action === "buy"
-                          ? "text-emerald-500"
-                          : item.action === "sell"
-                            ? "text-rose-500"
-                            : "text-muted-foreground",
+                        ruleStrategyActionTone(item.action),
                       )}
                     >
-                      {item.action === "buy"
-                        ? "符合入场"
-                        : item.action === "sell"
-                          ? "符合离场"
-                          : "继续观察"}
+                      {ruleStrategyActionLabel(item.action)}
                     </span>
                   </button>
                 ))
@@ -948,10 +1047,26 @@ export default function DashboardPage() {
                     : "已根据信号建立的模拟持仓"}
                 </p>
               </div>
-              <Badge variant="outline">{holdingRows.length} 个持仓</Badge>
+              <Badge variant="outline">
+                {hasAccountSnapshot ? `${holdingRows.length} 个持仓` : "等待同步"}
+              </Badge>
             </div>
             <CardContent className="p-0">
-              {holdingRows.length === 0 ? (
+              {!hasAccountSnapshot ? (
+                <div className="px-4 py-12 text-center">
+                  <BarChart3 className="mx-auto size-6 text-muted-foreground/60" />
+                  <p className="mt-3 text-muted-foreground text-sm">
+                    {isOkxDemo
+                      ? demoExecutionError
+                        ? "OKX Demo 账户暂不可读。"
+                        : "正在同步 OKX Demo 交易所持仓。"
+                      : "正在读取纸面策略账户。"}
+                  </p>
+                  <p className="mt-1 text-muted-foreground text-xs">
+                    不会以另一种账户来源替代当前策略的持仓。
+                  </p>
+                </div>
+              ) : holdingRows.length === 0 ? (
                 <div className="px-4 py-12 text-center">
                   <BarChart3 className="mx-auto size-6 text-muted-foreground/60" />
                   <p className="mt-3 text-muted-foreground text-sm">
@@ -976,12 +1091,14 @@ export default function DashboardPage() {
                         </span>
                         <span className="block text-muted-foreground text-xs">
                           {position.quantity.toFixed(6)} 个，入场价{" "}
-                          {compactCurrency.format(position.entry_price)}
+                          {position.entry_price === null
+                            ? "不可用"
+                            : compactCurrency.format(position.entry_price)}
                         </span>
                       </span>
                       <span className="text-right tabular-nums">
                         <span className="block font-medium text-sm">
-                          {currency.format(value)}
+                          {value === null ? "市值不可用" : currency.format(value)}
                         </span>
                         <span
                           className={cn(
@@ -1136,10 +1253,10 @@ export default function DashboardPage() {
                     >
                       <span>
                         <span className="block font-medium text-sm">
-                          {signal.action === "buy" ? "买入信号" : "卖出信号"}
+                          {ruleStrategyActionLabel(signal.action)}建议
                         </span>
                         <span className="block max-w-48 truncate text-muted-foreground text-xs">
-                          {signal.reason}
+                          {ruleStrategyEvaluationReason(signal)}
                         </span>
                       </span>
                       <Badge
@@ -1150,7 +1267,7 @@ export default function DashboardPage() {
                         }
                         variant="outline"
                       >
-                        {signal.action === "buy" ? "买入" : "卖出"}
+                        {ruleStrategyActionLabel(signal.action)}
                       </Badge>
                     </div>
                   ))}
@@ -1174,6 +1291,10 @@ export default function DashboardPage() {
               <span className="font-semibold text-muted-foreground text-sm">
                 不可用
               </span>
+            ) : pnl === null ? (
+              <span className="font-semibold text-muted-foreground text-sm">
+                等待账户同步
+              </span>
             ) : (
               <span
                 className={cn(
@@ -1191,6 +1312,12 @@ export default function DashboardPage() {
               <div className="grid h-60 place-items-center text-center">
                 <p className="text-muted-foreground text-sm">
                   {demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用。"}
+                </p>
+              </div>
+            ) : !account ? (
+              <div className="grid h-60 place-items-center text-center">
+                <p className="text-muted-foreground text-sm">
+                  正在读取纸面策略账户与收益曲线。
                 </p>
               </div>
             ) : pnlCurve?.length ? (

@@ -4,7 +4,6 @@ import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -16,13 +15,13 @@ export default function WorkspaceBillingPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           账户与服务 / 订阅
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">
           订阅与结算
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-muted-foreground text-sm">
           个人账户显示人工订阅；企业租户显示合同和高水位线分成结算。
         </p>
       </header>
@@ -45,13 +44,13 @@ export default function WorkspaceBillingPage() {
                 ? "已开通"
                 : "待开通 / 已到期"}
             </Badge>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               到期时间：
               {subscription?.ends_at
                 ? new Date(subscription.ends_at).toLocaleString("zh-CN")
                 : "—"}
             </p>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-sm">
               开通方式：线下付款后由平台管理员人工开通。
             </p>
           </CardContent>
@@ -68,11 +67,11 @@ export default function WorkspaceBillingPage() {
                 <p className="text-sm">
                   合同编号：{agreement.agreement_number}
                 </p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-muted-foreground text-sm">
                   分成比例：
                   {(Number(agreement.revenue_share_rate) * 100).toFixed(2)}%
                 </p>
-                <p className="text-sm text-muted-foreground">
+                <p className="text-muted-foreground text-sm">
                   高水位线：{agreement.high_water_mark_quote} USDT
                 </p>
                 <div className="divide-y rounded-md border">
@@ -92,7 +91,7 @@ export default function WorkspaceBillingPage() {
                 </div>
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 当前没有企业利润分成合同。
               </p>
             )}

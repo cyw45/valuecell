@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import { useTheme } from "../theme-context";
 import { radius, spacing } from "../theme";
 
@@ -10,9 +10,10 @@ export type MetricCardProps = {
   caption?: string;
   tone?: MetricTone;
   onPress?: () => void;
+  style?: StyleProp<ViewStyle>;
 };
 
-export function MetricCard({ label, value, caption, tone = "default", onPress }: MetricCardProps) {
+export function MetricCard({ label, value, caption, tone = "default", onPress, style }: MetricCardProps) {
   const { tokens } = useTheme();
   const valueColor = {
     default: tokens.text,
@@ -28,13 +29,13 @@ export function MetricCard({ label, value, caption, tone = "default", onPress }:
   });
   const content = <><Text style={styles.label}>{label}</Text><Text numberOfLines={1} style={styles.value}>{value}</Text>{caption ? <Text numberOfLines={2} style={styles.caption}>{caption}</Text> : null}</>;
 
-  if (!onPress) return <View style={styles.root}>{content}</View>;
+  if (!onPress) return <View style={[styles.root, style]}>{content}</View>;
   return (
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [styles.root, pressed && { backgroundColor: tokens.surfaceRaised }]}
+      style={({ pressed }) => [styles.root, style, pressed && { backgroundColor: tokens.surfaceRaised }]}
     >
       {content}
     </Pressable>
