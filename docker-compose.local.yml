@@ -33,7 +33,7 @@ services:
       dockerfile: docker/frontend.Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
-        VITE_WORLDMONITOR_URL: ${WORLDMONITOR_PUBLIC_URL:-}
+        VITE_WORLDMONITOR_URL: ${WORLDMONITOR_PUBLIC_URL:?Set WORLDMONITOR_PUBLIC_URL via --env-file docker/runtime/.env}
     image: valuecell-local-frontend:latest
     depends_on:
       - backend
