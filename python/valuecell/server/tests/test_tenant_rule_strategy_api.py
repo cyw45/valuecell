@@ -188,12 +188,13 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
         client.post(
             f"/rule-strategies/{strategy_id}/evaluate", json=_evaluation_input()
         ),
+        client.get(f"/rule-strategies/{strategy_id}/pnl-curve"),
         *[
             client.get(f"/rule-strategies/{strategy_id}/{log_type}")
             for log_type in ("signals", "trades", "funding")
         ],
     ]
-    assert [response.status_code for response in denied_responses] == [404] * 7
+    assert [response.status_code for response in denied_responses] == [404] * 8
 
     principal[0] = CurrentPrincipal(user_id="user-a", tenant_id="tenant-a")
     tenant_a_list = client.get("/rule-strategies")

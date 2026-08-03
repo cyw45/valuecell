@@ -9,12 +9,12 @@ import {
   Text,
   View,
 } from "react-native";
-import Svg, { Path } from "react-native-svg";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { ChevronRight, LineChart, RefreshCw } from "lucide-react-native";
 import { api } from "../api";
 import {
   BottomSheetSelector,
+  EquityCurveChart,
   MetricCard,
   PrimaryButton,
   SectionCard,
@@ -52,19 +52,6 @@ import {
 
 type StrategyOverviewRoute = RouteProp<WorkbenchStackParamList, "StrategyOverview">;
 
-function pnlSparkline(points: Array<{ cumulative_pnl: number }>): string {
-  if (points.length < 2) return "";
-  const values = points.map((point) => point.cumulative_pnl);
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  const range = Math.max(maximum - minimum, Number.EPSILON);
-  return values
-    .map(
-      (value, index) =>
-        `${index === 0 ? "M" : "L"}${((index / (values.length - 1)) * 180).toFixed(1)} ${(48 - ((value - minimum) / range) * 44).toFixed(1)}`,
-    )
-    .join(" ");
-}
 
 function demoPositionValue(
   positions: Array<{ notional_usdt: number | null }>,
@@ -149,6 +136,10 @@ export default function StrategyOverviewScreen() {
   });
 
   const refresh = () => {
+    if (isDemo) {
+      void Promise.all([strategies.refetch(), evaluations.refetch(), demo.refetch()]);
+      return;
+    }
     void Promise.all([
       strategies.refetch(),
       account.refetch(),
@@ -156,7 +147,6 @@ export default function StrategyOverviewScreen() {
       evaluations.refetch(),
       trades.refetch(),
       funding.refetch(),
-      demo.refetch(),
     ]);
   };
   const selectStrategy = (strategyId: string) => {
@@ -195,7 +185,6 @@ export default function StrategyOverviewScreen() {
   const runningCount = (strategies.data ?? []).filter(
     (item) => item.status === "running" && !item.archived_at,
   ).length;
-  const pnlPath = pnlSparkline(pnl.data ?? []);
 
   return (
     <ScrollView
@@ -206,6 +195,7 @@ export default function StrategyOverviewScreen() {
           refreshing={
             strategies.isRefetching ||
             account.isRefetching ||
+            pnl.isRefetching ||
             evaluations.isRefetching ||
             demo.isRefetching
           }
@@ -340,9 +330,13 @@ export default function StrategyOverviewScreen() {
             {latestEvaluation ? <StrategyEvaluationPanel evaluation={latestEvaluation} /> : evaluations.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取最近评估。</Text></View> : <Text style={styles.muted}>服务端尚无评估记录，无法假定任何条件或执行结果。</Text>}
           </SectionCard>
 
-          <SectionCard actionLabel="查看 PnL" onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })} title="PnL 曲线">
-            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnlPath ? <Svg height={58} viewBox="0 0 180 52" width="100%"><Path d={pnlPath} fill="none" stroke={palette.primary} strokeWidth={2.5} /></Svg> : <Text style={styles.muted}>服务端尚未返回可绘制的 PnL 点。</Text>}
-            <Text style={styles.chartCaption}>{pnl.data?.length ?? 0} 个服务端曲线点</Text>
+          <SectionCard
+            actionLabel="查看 PnL"
+            description="权益、初始本金与累计 PnL 均来自服务端账本；单指横向拖动回看，双指横向开合缩放。"
+            onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })}
+            title="策略权益曲线"
+          >
+            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnl.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取服务端权益曲线。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} points={pnl.data ?? []} />}
           </SectionCard>
 
           <SectionCard actionLabel="全部成交" onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId })} title="最近成交">
@@ -409,7 +403,6 @@ const styles = StyleSheet.create({
   accountLabel: { color: palette.textMuted, fontSize: 11, fontWeight: "800" },
   accountValue: { color: palette.text, fontSize: 15, fontWeight: "900" },
   rule: { backgroundColor: palette.border, height: 1 },
-  chartCaption: { color: palette.textMuted, fontSize: 11 },
   refreshButton: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, justifyContent: "center", minHeight: 48, paddingHorizontal: spacing.md },
   refreshText: { color: palette.textMuted, fontSize: 14, fontWeight: "800" },
   pressed: { opacity: 0.76 },
