@@ -69,13 +69,13 @@ export default function AdminContractsPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           平台管理 / 合同
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">
           企业利润分成
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-muted-foreground text-sm">
           合同激活后，企业租户获得工作区权限；分成使用资金账户对账与高水位线计算。
         </p>
       </header>
@@ -87,7 +87,7 @@ export default function AdminContractsPage() {
               每个资金账户每个周期独立结算，净入出金先调整高水位线。
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4 text-sm text-muted-foreground">
+          <CardContent className="space-y-4 text-muted-foreground text-sm">
             <p>可分成利润 = max(0, 期末权益 − 调整后高水位线)。</p>
             <p>应收分成 = 可分成利润 × 合同分成比例。</p>
             <p>

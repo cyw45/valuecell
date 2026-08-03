@@ -26,13 +26,13 @@ export default function AdminAuditPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           平台管理 / 审计
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">
           全局审计日志
         </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="mt-2 text-muted-foreground text-sm">
           套餐、订阅、合同、成员和实盘控制动作均以不可变事件保存。
         </p>
       </header>
@@ -52,7 +52,7 @@ export default function AdminAuditPage() {
               >
                 <div>
                   <p className="font-medium text-sm">{event.action}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-1 text-muted-foreground text-xs">
                     {event.target_type} · {event.target_id} ·{" "}
                     {new Date(event.created_at).toLocaleString("zh-CN")}
                   </p>
@@ -62,7 +62,7 @@ export default function AdminAuditPage() {
                 </Badge>
               </article>
             )) ?? (
-              <p className="p-5 text-sm text-muted-foreground">
+              <p className="p-5 text-muted-foreground text-sm">
                 暂无审计事件。
               </p>
             )}

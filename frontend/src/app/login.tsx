@@ -88,17 +88,16 @@ export default function LoginPage() {
   }
 
   return (
-    <div
-      className="flex size-full items-center justify-center bg-muted/40"
-      role="main"
+    <main
       aria-label={t("saas.login.aria.authentication")}
+      className="flex size-full items-center justify-center bg-muted/40"
     >
       <div className="w-full max-w-sm px-4">
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="font-semibold text-2xl tracking-tight">
             {t("saas.brand")}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-muted-foreground text-sm">
             {t("saas.login.subtitle")}
           </p>
         </div>
@@ -182,7 +181,7 @@ export default function LoginPage() {
               <CardContent>
                 <form onSubmit={handleRegisterSubmit} className="space-y-4">
                   <fieldset className="space-y-2">
-                    <legend className="text-sm font-medium">注册类型</legend>
+                    <legend className="font-medium text-sm">注册类型</legend>
                     <div className="grid grid-cols-2 gap-2">
                       {(
                         [
@@ -205,10 +204,10 @@ export default function LoginPage() {
                           }
                           type="button"
                         >
-                          <span className="block text-sm font-medium">
+                          <span className="block font-medium text-sm">
                             {label}
                           </span>
-                          <span className="mt-1 block text-xs text-muted-foreground">
+                          <span className="mt-1 block text-muted-foreground text-xs">
                             {description}
                           </span>
                         </button>
@@ -274,7 +273,7 @@ export default function LoginPage() {
                   <div className="space-y-1.5">
                     <Label htmlFor="reg-password">
                       {t("saas.login.password")}{" "}
-                      <span className="text-xs text-muted-foreground">
+                      <span className="text-muted-foreground text-xs">
                         {t("saas.login.minimumPasswordLength")}
                       </span>
                     </Label>
@@ -309,6 +308,6 @@ export default function LoginPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </div>
+    </main>
   );
 }

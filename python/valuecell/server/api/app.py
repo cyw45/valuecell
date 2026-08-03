@@ -137,6 +137,18 @@ def _ensure_system_env_and_load() -> None:
         pass
 
 
+def _run_required_rule_strategy_archiving_migration() -> None:
+    """Run the fail-closed archive schema migration after table creation."""
+    from ..db.connection import get_database_manager
+    from ..db.migrations import migrate_rule_strategy_archiving
+
+    session = get_database_manager().get_session()
+    try:
+        migrate_rule_strategy_archiving(session)
+    finally:
+        session.close()
+
+
 def _run_required_execution_attribution_migration() -> None:
     """Run the fail-closed schema migration after table creation at startup."""
     from ..db.connection import get_database_manager
@@ -186,6 +198,10 @@ def create_app() -> FastAPI:
                 manager.configure_baostock()
             except Exception as exc:
                 logger.warning("Legacy initialization unavailable: {}", exc)
+
+        # Archive filtering is required before scheduler reconciliation can read
+        # strategy rows, so failures intentionally prevent startup.
+        _run_required_rule_strategy_archiving_migration()
 
         # This migration is required for every execution-capable deployment. Keep
         # it outside the best-effort legacy data migration below: failure must

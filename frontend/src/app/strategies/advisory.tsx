@@ -76,10 +76,10 @@ export default function StrategyAdvisoryPage() {
                 <Badge variant="secondary">AI 策略审阅</Badge>
                 <Badge variant="outline">仅建议</Badge>
               </div>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+              <h1 className="mt-2 font-semibold text-2xl tracking-tight">
                 {strategyQuery.data?.name ?? "策略配置审阅"}
               </h1>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="mt-1 text-muted-foreground text-sm">
                 使用 HiCode GPT-5.5
                 对已保存配置和确定性评估记录进行中文只读分析。
               </p>

@@ -219,7 +219,7 @@ def test_flat_bollinger_window_returns_explainable_no_op():
     assert result.reason_code == "indicators_not_confirmed"
     bollinger = _condition(result, "bollinger")
     assert bollinger.state == "not_triggered"
-    assert bollinger.detail == "Bollinger bands have zero width"
+    assert bollinger.detail == "布林带宽度为零"
     assert bollinger.values == {
         "bollinger_upper": 10.0,
         "bollinger_middle": 10.0,

@@ -127,7 +127,7 @@ export const TradingStrategyForm = withForm({
     const fieldValue = (field: StrategyConfigField) =>
       field.persistence_target === "trading_config"
         ? form.state.values[field.key as TradingConfigFieldKey]
-        : (form.state.values.strategy_params ?? {})[field.key];
+        : form.state.values.strategy_params?.[field.key];
 
     const updateFieldValue = (field: StrategyConfigField, value: unknown) => {
       if (field.persistence_target === "trading_config") {

@@ -29,6 +29,7 @@ class RuleStrategy(Base):
     config = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    archived_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         CheckConstraint("execution_generation >= 1", name="ck_rule_strategies_execution_generation"),

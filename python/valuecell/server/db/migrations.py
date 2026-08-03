@@ -44,6 +44,81 @@ def ensure_rule_strategy_journal_read_index(session: Session) -> None:
     )
     session.commit()
 
+RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION = "20260801_rule_strategy_archiving_v1"
+# Stable, namespaced advisory-lock key for the duration of the migration transaction.
+RULE_STRATEGY_ARCHIVING_MIGRATION_LOCK_KEY = 7720250720
+
+
+def migrate_rule_strategy_archiving(session: Session) -> bool:
+    """Install archive-state DDL exactly once, failing closed on errors."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "rule strategy archiving migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+
+    # PostgreSQL locks before reading the marker, preventing competing startup
+    # processes from concurrently applying the same DDL and marker.
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": RULE_STRATEGY_ARCHIVING_MIGRATION_LOCK_KEY},
+        )
+
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION},
+    ).fetchall():
+        return False
+
+    if dialect == "postgresql":
+        _migrate_rule_strategy_archiving_postgresql(session)
+    else:
+        _migrate_rule_strategy_archiving_sqlite(session)
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION,
+    )
+    return True
+
+
+def _migrate_rule_strategy_archiving_postgresql(session: Session) -> None:
+    """Apply archive-state DDL with PostgreSQL's idempotent column syntax."""
+    session.execute(
+        text(
+            "ALTER TABLE rule_strategies ADD COLUMN IF NOT EXISTS archived_at "
+            "TIMESTAMP WITH TIME ZONE NULL"
+        )
+    )
+
+
+def _migrate_rule_strategy_archiving_sqlite(session: Session) -> None:
+    """Apply archive-state DDL after inspecting SQLite's legacy table shape."""
+    columns = {
+        row[1]
+        for row in session.execute(text("PRAGMA table_info(rule_strategies)")).fetchall()
+    }
+    if "archived_at" not in columns:
+        session.execute(
+            text(
+                "ALTER TABLE rule_strategies ADD COLUMN archived_at "
+                "TIMESTAMP WITH TIME ZONE NULL"
+            )
+        )
+
 
 def migrate_rule_strategy_execution_attribution(session: Session) -> bool:
     """Install execution-attribution DDL exactly once, failing closed on errors."""

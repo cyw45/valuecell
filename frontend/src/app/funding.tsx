@@ -57,7 +57,7 @@ export default function FundingPage() {
           </CardHeader>
           <CardContent>
             {pnlPoints.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
+              <p className="py-8 text-center text-muted-foreground text-sm">
                 {t("saas.operations.funding.pnl.empty")}
               </p>
             ) : (
@@ -72,19 +72,19 @@ export default function FundingPage() {
 
         {!strategyId ? (
           <Card className="border-dashed">
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="p-6 text-muted-foreground text-sm">
               {t("saas.operations.funding.noStrategy")}
             </CardContent>
           </Card>
         ) : isLoading ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="p-6 text-muted-foreground text-sm">
               {t("saas.operations.funding.loading")}
             </CardContent>
           </Card>
         ) : isError ? (
           <Card>
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="p-6 text-muted-foreground text-sm">
               {t("saas.operations.funding.unavailable")}
             </CardContent>
           </Card>
@@ -141,7 +141,7 @@ export default function FundingPage() {
           </Card>
         ) : (
           <Card className="border-dashed">
-            <CardContent className="p-6 text-sm text-muted-foreground">
+            <CardContent className="p-6 text-muted-foreground text-sm">
               {t("saas.operations.funding.empty")}
             </CardContent>
           </Card>
@@ -160,7 +160,7 @@ export default function FundingPage() {
                 {t("saas.operations.funding.connections.description")}
               </CardDescription>
             </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
+            <CardContent className="text-muted-foreground text-sm">
               {t("saas.operations.funding.connections.empty")}
             </CardContent>
           </Card>
@@ -176,7 +176,7 @@ export default function FundingPage() {
                 {t("saas.operations.funding.safety.description")}
               </CardDescription>
             </CardHeader>
-            <CardContent className="text-sm text-muted-foreground">
+            <CardContent className="text-muted-foreground text-sm">
               {t("saas.operations.funding.safety.body")}
             </CardContent>
           </Card>

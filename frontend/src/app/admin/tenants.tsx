@@ -103,11 +103,11 @@ export default function AdminTenantsPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           平台管理 / 租户
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">租户账户</h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">租户账户</h1>
+        <p className="mt-2 text-muted-foreground text-sm">
           个人账户与企业租户是不同的商业主体；企业租户可使用成员、资金账户、合同与结算能力。
         </p>
       </header>
@@ -137,7 +137,7 @@ export default function AdminTenantsPage() {
                   <span className="block font-medium text-sm">
                     {tenant.name}
                   </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
+                  <span className="mt-1 block text-muted-foreground text-xs">
                     {tenant.organization_name ?? "个人工作区"}
                   </span>
                 </span>
@@ -173,7 +173,7 @@ export default function AdminTenantsPage() {
               <>
                 <div className="rounded-md border bg-muted/30 p-4">
                   <p className="font-medium">{selected.name}</p>
-                  <p className="mt-1 text-sm text-muted-foreground">
+                  <p className="mt-1 text-muted-foreground text-sm">
                     ID：{selected.id}
                   </p>
                 </div>
@@ -225,7 +225,7 @@ export default function AdminTenantsPage() {
                 <section className="grid gap-3 border-t pt-5">
                   <div>
                     <h2 className="font-medium">开通订阅</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">
+                    <p className="mt-1 text-muted-foreground text-sm">
                       开通后，工作区才能保存策略、连接模拟交易所并提交测试订单。
                     </p>
                   </div>
@@ -277,7 +277,7 @@ export default function AdminTenantsPage() {
                 </section>
               </>
             ) : (
-              <p className="text-sm text-muted-foreground">请选择左侧租户。</p>
+              <p className="text-muted-foreground text-sm">请选择左侧租户。</p>
             )}
           </CardContent>
         </Card>

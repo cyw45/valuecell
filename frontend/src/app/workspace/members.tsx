@@ -63,10 +63,10 @@ export default function WorkspaceMembersPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           企业管理 / 成员
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">
           成员与角色
         </h1>
       </header>
@@ -115,7 +115,7 @@ export default function WorkspaceMembersPage() {
                 </Button>
               </form>
             ) : (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-muted-foreground text-sm">
                 只有 owner 或 admin 可以修改成员。
               </p>
             )}
@@ -136,7 +136,7 @@ export default function WorkspaceMembersPage() {
                   <Badge variant="outline">{member.role}</Badge>
                 </div>
               )) ?? (
-                <p className="p-5 text-sm text-muted-foreground">
+                <p className="p-5 text-muted-foreground text-sm">
                   暂无可显示成员。
                 </p>
               )}

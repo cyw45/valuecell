@@ -58,10 +58,10 @@ export default function AdminPlansPage() {
   return (
     <main className="scroll-container flex flex-1 flex-col gap-5 p-5 lg:p-8">
       <header>
-        <p className="text-sm font-medium text-sky-600 dark:text-sky-300">
+        <p className="font-medium text-sky-600 text-sm dark:text-sky-300">
           平台管理 / 套餐
         </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">订阅套餐</h1>
+        <h1 className="mt-1 font-semibold text-2xl tracking-tight">订阅套餐</h1>
       </header>
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Card>
@@ -80,7 +80,7 @@ export default function AdminPlansPage() {
                 >
                   <div>
                     <p className="font-medium">{plan.name}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
+                    <p className="mt-1 text-muted-foreground text-sm">
                       {plan.code} · {plan.duration_days} 天 ·{" "}
                       {(plan.price_cents / 100).toLocaleString()}{" "}
                       {plan.currency}

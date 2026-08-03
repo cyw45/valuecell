@@ -5,10 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from valuecell.server.services.sandbox_exchange_trading_service import (
-    SandboxExchangeTradingService,
-    SandboxTradingError,
-)
+from valuecell.server.services.sandbox_exchange_trading_service import SandboxTradingError
 
 
 class DemoExecutionReadModelError(ValueError):
