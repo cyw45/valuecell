@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -27,7 +27,7 @@ const tenantTranslations = {
 export default function AuthScreen() {
   const { t } = useI18n();
   const { tokens } = useTheme();
-  const { register, signIn } = useSession();
+  const { authNotice, dismissAuthNotice, rememberedEmail, register, signIn } = useSession();
   const [mode, setMode] = useState<AuthMode>("login");
   const [tenantType, setTenantType] = useState<TenantType>("personal");
   const [email, setEmail] = useState("");
@@ -37,6 +37,10 @@ export default function AuthScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const isRegistration = mode === "register";
+
+  useEffect(() => {
+    if (!email && rememberedEmail) setEmail(rememberedEmail);
+  }, [email, rememberedEmail]);
 
   const styles = useMemo(() => StyleSheet.create({
     page: { backgroundColor: tokens.canvas, flex: 1 },
@@ -73,6 +77,7 @@ export default function AuthScreen() {
   }), [tokens]);
 
   function switchMode(nextMode: AuthMode) {
+    dismissAuthNotice();
     setMode(nextMode);
     setError("");
   }
@@ -91,6 +96,7 @@ export default function AuthScreen() {
       return;
     }
 
+    dismissAuthNotice();
     setSubmitting(true);
     setError("");
     try {
@@ -136,13 +142,13 @@ export default function AuthScreen() {
             <TextInput
               accessibilityLabel={t("auth.email")}
               autoCapitalize="none"
-              autoComplete="email"
+              autoComplete="username"
               keyboardType="email-address"
               onChangeText={setEmail}
               placeholder={t("auth.email")}
               placeholderTextColor={tokens.textMuted}
               style={styles.input}
-              textContentType="emailAddress"
+              textContentType="username"
               value={email}
             />
           </View>
@@ -150,13 +156,13 @@ export default function AuthScreen() {
             <LockKeyhole color={tokens.textMuted} size={18} />
             <TextInput
               accessibilityLabel={t("auth.password")}
-              autoComplete="password"
+              autoComplete={isRegistration ? "new-password" : "current-password"}
               onChangeText={setPassword}
               placeholder={t("auth.password")}
               placeholderTextColor={tokens.textMuted}
               secureTextEntry
               style={styles.input}
-              textContentType="password"
+              textContentType={isRegistration ? "newPassword" : "password"}
               value={password}
             />
           </View>
@@ -208,7 +214,7 @@ export default function AuthScreen() {
               ) : null}
             </>
           ) : null}
-          {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+          {authNotice ?? error ? <Text accessibilityRole="alert" style={styles.error}>{authNotice ?? error}</Text> : null}
           <Pressable
             accessibilityRole="button"
             disabled={submitting}

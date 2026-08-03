@@ -1393,29 +1393,53 @@ export default function DashboardPage() {
         </section>
 
         <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-          <div className="flex flex-col gap-2 border-border/70 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="font-semibold">组合收益与亏损</h2>
+              <h2 className="font-semibold">策略权益曲线</h2>
               <p className="mt-0.5 text-muted-foreground text-xs">
                 {isOkxDemo
                   ? "OKX Demo 共享账户盈亏不可用；不会以纸面账本替代。"
-                  : "模拟执行产生的已实现与未实现收益汇总"}
+                  : "基于服务器记录的初始资金、组合权益与累计盈亏"}
               </p>
             </div>
             {isOkxDemo ? (
               <span className="font-semibold text-muted-foreground text-sm">
                 不可用
               </span>
-            ) : (
-              <span
-                className={cn(
-                  "font-semibold text-sm tabular-nums",
-                  pnl >= 0 ? "text-emerald-500" : "text-rose-500",
-                )}
-              >
-                {pnl >= 0 ? "+" : ""}
-                {currency.format(pnl)} USDT
+            ) : !account ? (
+              <span className="font-semibold text-muted-foreground text-sm">
+                等待账户同步
               </span>
+            ) : (
+              <div className="grid grid-cols-3 gap-x-4 text-right tabular-nums">
+                <div>
+                  <p className="terminal-label">初始资金</p>
+                  <p className="mt-1 whitespace-nowrap font-semibold text-sm">
+                    {currency.format(account.initial_capital_quote)} USDT
+                  </p>
+                </div>
+                <div>
+                  <p className="terminal-label">当前权益</p>
+                  <p className="mt-1 whitespace-nowrap font-semibold text-sm">
+                    {currency.format(account.equity_quote)} USDT
+                  </p>
+                </div>
+                <div>
+                  <p className="terminal-label">累计盈亏</p>
+                  <p
+                    className={cn(
+                      "mt-1 whitespace-nowrap font-semibold text-sm",
+                      pnl !== null && pnl >= 0
+                        ? "text-emerald-500"
+                        : "text-rose-500",
+                    )}
+                  >
+                    {pnl === null
+                      ? "—"
+                      : `${pnl >= 0 ? "+" : ""}${currency.format(pnl)}`} USDT
+                  </p>
+                </div>
+              </div>
             )}
           </div>
           <CardContent className="p-2 sm:p-4">
@@ -1425,16 +1449,23 @@ export default function DashboardPage() {
                   {demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用。"}
                 </p>
               </div>
+            ) : !account ? (
+              <div className="grid h-60 place-items-center text-center">
+                <p className="text-muted-foreground text-sm">
+                  正在读取纸面策略账户与收益曲线。
+                </p>
+              </div>
             ) : pnlCurve?.length ? (
               <PnlLineChart
                 data={pnlCurve}
                 height={240}
+                mode="equity"
                 theme={isDark ? "dark" : "light"}
               />
             ) : (
               <div className="grid h-60 place-items-center text-center">
                 <p className="text-muted-foreground text-sm">
-                  首个评估周期完成后将显示收益曲线。
+                  暂无服务器记录的策略权益曲线。
                 </p>
               </div>
             )}

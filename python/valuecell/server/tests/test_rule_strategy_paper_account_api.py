@@ -294,7 +294,14 @@ def test_pnl_curve_skips_demo_and_incomplete_legacy_account_snapshots():
     response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
 
     assert response.status_code == 200
-    assert response.json()["data"] == []
+    assert response.json()["data"] == [
+        {
+            "ts": "2026-07-12T00:00:00Z",
+            "cumulative_pnl": 0.0,
+            "equity_quote": 1_000.0,
+            "action": "initial",
+        }
+    ]
 
 
 def test_batch_cycle_uses_fixed_amount_and_blocks_unaffordable_entries():

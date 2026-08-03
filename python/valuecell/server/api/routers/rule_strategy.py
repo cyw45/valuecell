@@ -364,12 +364,28 @@ def create_rule_strategy_router(
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[list[dict[str, Any]]]:
         require_strategy_read(principal)
-        # Verify strategy exists and is tenant-scoped
+        # Verify strategy exists, is tenant-scoped, and supplies the immutable
+        # capital and timestamp for the curve's baseline.
         try:
-            rule_service.get(strategy_id, principal.tenant_id)
+            strategy = rule_service.get(strategy_id, principal.tenant_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+        initial_capital = float(strategy["config"]["initial_capital_quote"])
+        created_at = strategy["created_at"]
+        created_at_str = (
+            created_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if created_at is not None
+            else ""
+        )
+        points: list[dict[str, Any]] = [
+            {
+                "ts": created_at_str,
+                "cumulative_pnl": 0.0,
+                "equity_quote": initial_capital,
+                "action": "initial",
+            }
+        ]
         journals = list(
             reversed(
                 rule_service.repository.get_evaluations(
@@ -377,7 +393,6 @@ def create_rule_strategy_router(
                 )
             )
         )
-        points: list[dict[str, Any]] = []
         for journal in journals:
             result: dict[str, Any] = journal.result or {}
             raw_account = result.get("account")

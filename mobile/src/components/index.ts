@@ -1,6 +1,7 @@
 export { BottomSheetSelector, type BottomSheetOption, type BottomSheetSelectorProps } from "./BottomSheetSelector";
 export { ConfirmSheet, type ConfirmSheetProps } from "./ConfirmSheet";
 export { DangerButton, type DangerButtonProps } from "./DangerButton";
+export { EquityCurveChart } from "./EquityCurveChart";
 export { ListRow, type ListRowProps } from "./ListRow";
 export { MetricCard, type MetricCardProps, type MetricTone } from "./MetricCard";
 export { PrimaryButton, type PrimaryButtonProps } from "./PrimaryButton";

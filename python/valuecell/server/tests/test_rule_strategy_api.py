@@ -122,16 +122,115 @@ def _evaluation_input() -> dict:
     }
 
 
-def _client() -> TestClient:
+def _client(repository: InMemoryRuleStrategyRepository | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(
         create_rule_strategy_router(
-            service=RuleStrategyService(repository=InMemoryRuleStrategyRepository())
+            service=RuleStrategyService(
+                repository=repository or InMemoryRuleStrategyRepository()
+            )
         )
     )
     app.dependency_overrides[get_current_principal] = lambda: FIXED_PRINCIPAL
     app.dependency_overrides[get_db] = lambda: SimpleNamespace(query=lambda _model: SimpleNamespace(filter_by=lambda **_kwargs: SimpleNamespace(first=lambda: None)))
     return TestClient(app)
+
+
+def _pnl_curve_client() -> tuple[TestClient, InMemoryRuleStrategyRepository]:
+    repository = InMemoryRuleStrategyRepository()
+    return _client(repository), repository
+
+
+def test_pnl_curve_returns_initial_capital_baseline_before_any_evaluation():
+    client, _ = _pnl_curve_client()
+    assert (
+        client.post(
+            "/rule-strategies",
+            json={
+                "name": "Baseline only",
+                "initial_capital_quote": 1_000,
+                "config": _config(),
+            },
+        ).status_code
+        == 201
+    )
+
+    response = client.get(f"/rule-strategies/{STRATEGY_ID}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [
+        {
+            "ts": "2026-07-10T00:00:00Z",
+            "cumulative_pnl": 0.0,
+            "equity_quote": 1_000.0,
+            "action": "initial",
+        }
+    ]
+
+
+def test_pnl_curve_places_one_baseline_before_chronological_journals():
+    client, repository = _pnl_curve_client()
+    assert (
+        client.post(
+            "/rule-strategies",
+            json={
+                "name": "Baseline and journals",
+                "initial_capital_quote": 1_000,
+                "config": _config(),
+            },
+        ).status_code
+        == 201
+    )
+    repository.evaluations.extend(
+        [
+            SimpleNamespace(
+                created_at=datetime(2026, 7, 11, tzinfo=timezone.utc),
+                result={
+                    "account": {
+                        "initial_capital_quote": 1_000,
+                        "quote_balance": 1_025,
+                        "equity_quote": 1_025,
+                    },
+                    "action": "buy",
+                },
+            ),
+            SimpleNamespace(
+                created_at=datetime(2026, 7, 12, tzinfo=timezone.utc),
+                result={
+                    "account": {
+                        "initial_capital_quote": 1_000,
+                        "equity_quote": 1_015,
+                        "quote_balance": 1_015,
+                    },
+                    "action": "sell",
+                },
+            ),
+        ]
+    )
+
+    response = client.get(f"/rule-strategies/{STRATEGY_ID}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [
+        {
+            "ts": "2026-07-10T00:00:00Z",
+            "cumulative_pnl": 0.0,
+            "equity_quote": 1_000.0,
+            "action": "initial",
+        },
+        {
+            "ts": "2026-07-11T00:00:00Z",
+            "cumulative_pnl": 25.0,
+            "equity_quote": 1_025.0,
+            "action": "buy",
+        },
+        {
+            "ts": "2026-07-12T00:00:00Z",
+            "cumulative_pnl": 15.0,
+            "equity_quote": 1_015.0,
+            "action": "sell",
+        },
+    ]
 
 
 def test_okx_demo_execution_config_requires_a_sandbox_connection_and_spot_risk_limits():

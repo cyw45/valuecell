@@ -1,18 +1,28 @@
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { api, clearSession, loadSession, persistSession } from "./api";
+import {
+  api,
+  clearSession,
+  loadRememberedEmail,
+  loadSession,
+  persistRememberedEmail,
+  persistSession,
+} from "./api";
 import type { PostAuthTab } from "./navigation/types";
 import type { SaaSAuthResponse, SaaSRegisterRequest, Session } from "./types";
 
 type SessionContextValue = {
-  session: Session | null;
-  ready: boolean;
+  authNotice: string | null;
+  dismissAuthNotice: () => void;
   postAuthTab: PostAuthTab;
-  replaceSession: (next: SaaSAuthResponse, postAuthTab: PostAuthTab) => Promise<void>;
-  signIn: (email: string, password: string) => Promise<void>;
+  ready: boolean;
+  rememberedEmail: string;
   register: (request: SaaSRegisterRequest) => Promise<void>;
-  switchWorkspace: (tenantId: string) => Promise<void>;
+  replaceSession: (next: SaaSAuthResponse, postAuthTab: PostAuthTab) => Promise<void>;
+  session: Session | null;
+  signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  switchWorkspace: (tenantId: string) => Promise<void>;
 };
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -21,11 +31,29 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
   const [postAuthTab, setPostAuthTab] = useState<PostAuthTab>("工作台");
+  const [rememberedEmail, setRememberedEmail] = useState("");
+  const [authNotice, setAuthNotice] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  const endSession = useCallback(async (notice: string | null) => {
+    await clearSession();
+    await queryClient.cancelQueries({ queryKey: ["mobile"] });
+    queryClient.removeQueries({ queryKey: ["mobile"] });
+    setPostAuthTab("工作台");
+    setSession(null);
+    setAuthNotice(notice);
+  }, [queryClient]);
+
   useEffect(() => {
-    void loadSession()
-      .then(setSession)
+    api.setUnauthorizedHandler(() => endSession("登录已过期，请重新登录。"));
+    return () => api.setUnauthorizedHandler(null);
+  }, [endSession]);
+  useEffect(() => {
+    void Promise.all([loadSession(), loadRememberedEmail()])
+      .then(([restoredSession, storedEmail]) => {
+        setRememberedEmail(storedEmail ?? restoredSession?.email ?? "");
+        setSession(restoredSession);
+      })
       .catch(() => setSession(null))
       .finally(() => setReady(true));
   }, []);
@@ -38,7 +66,9 @@ export function SessionProvider({ children }: PropsWithChildren) {
       tenantId: next.tenant_id,
       email: next.email,
     };
-    await persistSession(saved);
+    await Promise.all([persistSession(saved), persistRememberedEmail(saved.email)]);
+    setRememberedEmail(saved.email);
+    setAuthNotice(null);
     setPostAuthTab(nextPostAuthTab);
     setSession(saved);
   }, [queryClient]);
@@ -56,14 +86,11 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [postAuthTab, replaceSession]);
 
   const signOut = useCallback(async () => {
-    await clearSession();
-    queryClient.removeQueries({ queryKey: ["mobile"] });
-    setPostAuthTab("工作台");
-    setSession(null);
-  }, [queryClient]);
+    await endSession(null);
+  }, [endSession]);
 
   return (
-    <SessionContext.Provider value={{ session, ready, postAuthTab, replaceSession, signIn, register, switchWorkspace, signOut }}>
+    <SessionContext.Provider value={{ authNotice, dismissAuthNotice: () => setAuthNotice(null), postAuthTab, ready, rememberedEmail, register, replaceSession, session, signIn, signOut, switchWorkspace }}>
       {children}
     </SessionContext.Provider>
   );

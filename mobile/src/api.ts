@@ -3,6 +3,7 @@ import * as SecureStore from "expo-secure-store";
 import type * as Types from "./types";
 
 const ACCESS_TOKEN_KEY = "valuecell.mobile.access-token";
+const REMEMBERED_EMAIL_KEY = "valuecell.mobile.remembered-email";
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://vc.zhiweionline.com/api/v1";
 
@@ -10,6 +11,8 @@ type RequestOptions = {
   authenticated?: boolean;
 };
 
+
+type UnauthorizedHandler = () => Promise<void>;
 type StrategyLogType = "signals" | "trades" | "funding";
 type StrategyLogEntry<T extends StrategyLogType> = T extends "signals"
   ? Types.RuleStrategyLogEntry
@@ -102,6 +105,11 @@ function pathSegment(value: string): string {
 
 class MobileApiClient {
   private accessToken = "";
+  private unauthorizedHandler: UnauthorizedHandler | null = null;
+
+  setUnauthorizedHandler = (handler: UnauthorizedHandler | null): void => {
+    this.unauthorizedHandler = handler;
+  };
 
   setAccessToken = (accessToken: string): void => {
     this.accessToken = accessToken;
@@ -134,6 +142,9 @@ class MobileApiClient {
     const body = (await response.json().catch(() => null)) as unknown;
     if (!response.ok) {
       const detail = errorDetail(body);
+      if (options.authenticated && response.status === 401) {
+        await this.unauthorizedHandler?.();
+      }
       throw new MobileApiError(detail.message, path, response.status, detail.code);
     }
     if (!isRecord(body) || !("data" in body)) {
@@ -684,4 +695,19 @@ export async function persistSession(session: Types.Session): Promise<void> {
 export async function clearSession(): Promise<void> {
   api.setAccessToken("");
   await removeStoredSession();
+}
+
+export async function loadRememberedEmail(): Promise<string | null> {
+  if (Platform.OS === "web") {
+    return globalThis.localStorage?.getItem(REMEMBERED_EMAIL_KEY) ?? null;
+  }
+  return SecureStore.getItemAsync(REMEMBERED_EMAIL_KEY);
+}
+
+export async function persistRememberedEmail(email: string): Promise<void> {
+  if (Platform.OS === "web") {
+    globalThis.localStorage?.setItem(REMEMBERED_EMAIL_KEY, email);
+    return;
+  }
+  await SecureStore.setItemAsync(REMEMBERED_EMAIL_KEY, email);
 }
