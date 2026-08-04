@@ -12,6 +12,7 @@ import {
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { ChevronRight, LineChart, RefreshCw } from "lucide-react-native";
 import { api } from "../api";
+import { StrategyExportPanel } from "../components/StrategyExportPanel";
 import {
   BottomSheetSelector,
   EquityCurveChart,
@@ -348,6 +349,8 @@ export default function StrategyOverviewScreen() {
           </SectionCard>
         </>
       )}
+
+      <StrategyExportPanel strategyId={activeId} />
 
       <PrimaryButton label="查看策略详情" leading={<LineChart color={palette.canvas} size={19} />} onPress={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })} />
       <Pressable accessibilityLabel="刷新策略工作台" accessibilityRole="button" onPress={refresh} style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>

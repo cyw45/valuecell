@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
+import { fetch as expoFetch } from "expo/fetch";
 import type * as Types from "./types";
 
 const ACCESS_TOKEN_KEY = "valuecell.mobile.access-token";
@@ -10,6 +11,17 @@ const API_BASE_URL =
 type RequestOptions = {
   authenticated?: boolean;
 };
+
+export type StrategyExportFile = Readonly<{
+  bytes: Uint8Array<ArrayBuffer>;
+  filename: string;
+  mimeType: string;
+}>;
+
+export type StrategyExportDateRange = Readonly<{
+  fromDate?: string;
+  toDate?: string;
+}>;
 
 
 type UnauthorizedHandler = () => Promise<void>;
@@ -103,6 +115,28 @@ function pathSegment(value: string): string {
   return encodeURIComponent(value);
 }
 
+function attachmentFilename(contentDisposition: string | null): string {
+  const header = contentDisposition ?? "";
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  const quoted = /filename="([^"]+)"/i.exec(header)?.[1];
+  const unquoted = /filename=([^;\s]+)/i.exec(header)?.[1];
+  const rawFilename = encoded ?? quoted ?? unquoted;
+  if (!rawFilename) return "策略历史导出.xlsx";
+
+  let decodedFilename = rawFilename;
+  try {
+    decodedFilename = decodeURIComponent(rawFilename);
+  } catch {
+    // Use the server-supplied filename verbatim when it is not URI encoded.
+  }
+  const safeFilename = decodedFilename
+    .replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!safeFilename) return "策略历史导出.xlsx";
+  return /\.xlsx$/i.test(safeFilename) ? safeFilename : `${safeFilename}.xlsx`;
+}
+
 class MobileApiClient {
   private accessToken = "";
   private unauthorizedHandler: UnauthorizedHandler | null = null;
@@ -152,6 +186,42 @@ class MobileApiClient {
     }
 
     return (body as unknown as Types.ApiEnvelope<T>).data;
+  }
+
+  private async authenticatedBinaryRequest(path: string): Promise<StrategyExportFile> {
+    const headers = new Headers();
+    headers.set("Accept", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    if (this.accessToken) {
+      headers.set("Authorization", `Bearer ${this.accessToken}`);
+    }
+
+    const response = await expoFetch(`${API_BASE_URL}${path}`, {
+      credentials: "omit",
+      headers,
+      method: "GET",
+    }).catch(() => {
+      throw new MobileApiError(
+        `无法连接服务：${API_BASE_URL}。请确认手机可访问该 HTTPS 地址。`,
+        path,
+      );
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as unknown;
+      const detail = errorDetail(body);
+      if (response.status === 401) {
+        await this.unauthorizedHandler?.();
+      }
+      throw new MobileApiError(detail.message, path, response.status, detail.code);
+    }
+
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      filename: attachmentFilename(response.headers.get("content-disposition")),
+      mimeType:
+        response.headers.get("content-type") ??
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    };
   }
 
   private authenticatedRequest<T>(
@@ -225,6 +295,21 @@ class MobileApiClient {
     this.authenticatedRequest<Types.Strategy>(
       `/rule-strategies/${pathSegment(strategyId)}`,
     );
+
+  strategyExport = (
+    strategyId: string,
+    { fromDate, toDate }: StrategyExportDateRange = {},
+  ): Promise<StrategyExportFile> => {
+    const params = new URLSearchParams();
+    if (fromDate) params.set("from_date", fromDate);
+    if (toDate) params.set("to_date", toDate);
+    return this.authenticatedBinaryRequest(
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/export`,
+        params,
+      ),
+    );
+  };
 
   createStrategy = (
     request: Types.CreateRuleStrategyRequest,

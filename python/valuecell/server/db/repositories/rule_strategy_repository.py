@@ -1,6 +1,7 @@
 """Database repository for paper-only rule strategies and evaluation journals."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import desc
@@ -13,6 +14,7 @@ from ..models.rule_strategy import (
     RuleStrategyEvaluationJournal,
     RuleStrategyExecutionIntent,
 )
+from ..models.sandbox_exchange_order import SandboxExchangeOrder
 
 
 class RuleStrategyRepository:
@@ -210,6 +212,81 @@ class RuleStrategyRepository:
             for journal in journals:
                 session.expunge(journal)
             return journals
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def get_evaluations_for_export(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        start_at: datetime | None = None,
+        end_at_exclusive: datetime | None = None,
+    ) -> list[RuleStrategyEvaluationJournal]:
+        """Return complete tenant-scoped journals in chronological export order."""
+        session = self._get_session()
+        try:
+            query = session.query(RuleStrategyEvaluationJournal).filter(
+                RuleStrategyEvaluationJournal.strategy_id == strategy_id,
+                RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+            )
+            if start_at is not None:
+                query = query.filter(RuleStrategyEvaluationJournal.created_at >= start_at)
+            if end_at_exclusive is not None:
+                query = query.filter(
+                    RuleStrategyEvaluationJournal.created_at < end_at_exclusive
+                )
+            journals = query.order_by(
+                RuleStrategyEvaluationJournal.created_at.asc(),
+                RuleStrategyEvaluationJournal.id.asc(),
+            ).all()
+            for journal in journals:
+                session.expunge(journal)
+            return journals
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def get_execution_records_for_export(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        evaluation_ids: list[str],
+    ) -> tuple[list[RuleStrategyExecutionIntent], list[SandboxExchangeOrder]]:
+        """Return execution facts only for already tenant-scoped export journals."""
+        if not evaluation_ids:
+            return [], []
+        session = self._get_session()
+        try:
+            intents = (
+                session.query(RuleStrategyExecutionIntent)
+                .filter(
+                    RuleStrategyExecutionIntent.strategy_id == strategy_id,
+                    RuleStrategyExecutionIntent.tenant_id == tenant_id,
+                    RuleStrategyExecutionIntent.evaluation_id.in_(evaluation_ids),
+                )
+                .order_by(
+                    RuleStrategyExecutionIntent.created_at.asc(),
+                    RuleStrategyExecutionIntent.id.asc(),
+                )
+                .all()
+            )
+            orders = (
+                session.query(SandboxExchangeOrder)
+                .filter(
+                    SandboxExchangeOrder.strategy_id == strategy_id,
+                    SandboxExchangeOrder.tenant_id == tenant_id,
+                    SandboxExchangeOrder.evaluation_id.in_(evaluation_ids),
+                )
+                .order_by(
+                    SandboxExchangeOrder.created_at.asc(),
+                    SandboxExchangeOrder.id.asc(),
+                )
+                .all()
+            )
+            for record in [*intents, *orders]:
+                session.expunge(record)
+            return intents, orders
         finally:
             if self.db_session is None:
                 session.close()

@@ -19,6 +19,10 @@ export interface ApiResponse<T> {
   data: T;
   msg: string;
 }
+export interface BinaryDownload {
+  blob: Blob;
+  filename?: string;
+}
 export interface RequestConfig {
   requiresAuth?: boolean;
   headers?: Record<string, string>;
@@ -236,6 +240,57 @@ export class ApiClient {
       config.wrapError ?? true,
       requestSession,
     );
+  }
+  /** Fetches an authenticated attachment without exposing session tokens in a URL. */
+  async download(
+    endpoint: string,
+    config: RequestConfig = {},
+  ): Promise<BinaryDownload> {
+    const headers: Record<string, string> = { ...config.headers };
+    const requestSession = config.requiresAuth
+      ? { ...this.getSession() }
+      : undefined;
+    if (requestSession?.access_token)
+      headers.Authorization = `Bearer ${requestSession.access_token}`;
+    const requestConfig: RequestInit = {
+      method: "GET",
+      headers,
+      signal: config.signal,
+      keepalive: config.keepalive,
+    };
+    const fetcher = this.fetcher;
+    const receiver = typeof window === "undefined" ? globalThis : window;
+    const response = await fetcher.call(
+      receiver,
+      getServerUrl(endpoint),
+      requestConfig,
+    );
+    if (
+      !response.ok ||
+      response.headers.get("content-type")?.includes("application/json")
+    ) {
+      await this.handleResponse<never>(
+        response,
+        config.wrapError ?? true,
+        requestSession,
+      );
+      throw new ApiError("服务器未返回 Excel 文件", response.status);
+    }
+    const contentDisposition =
+      response.headers.get("content-disposition") ?? "";
+    const encodedFilename =
+      /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition)?.[1];
+    const quotedFilename =
+      /filename="?([^";]+)"?/i.exec(contentDisposition)?.[1];
+    let filename: string | undefined;
+    try {
+      filename = encodedFilename
+        ? decodeURIComponent(encodedFilename)
+        : quotedFilename;
+    } catch {
+      filename = quotedFilename;
+    }
+    return { blob: await response.blob(), filename };
   }
   get<T>(endpoint: string, config?: RequestConfig) {
     return this.request<T>("GET", endpoint, undefined, config);

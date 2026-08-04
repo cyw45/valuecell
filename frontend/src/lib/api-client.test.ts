@@ -32,6 +32,36 @@ test("builds independent request headers without leaking a stale bearer token", 
   assert.deepEqual(calls[1].headers, { "Content-Type": "application/json" });
 });
 
+test("downloads an authenticated workbook without exposing the token in the URL", async () => {
+  let requestUrl = "";
+  let requestHeaders: HeadersInit | undefined;
+  const client = new ApiClient({
+    getSession: () => ({ ...session, access_token: "download-token" }),
+    fetch: async (url, init) => {
+      requestUrl = String(url);
+      requestHeaders = init?.headers;
+      return new Response(new Uint8Array([80, 75, 3, 4]), {
+        headers: {
+          "content-disposition":
+            "attachment; filename*=UTF-8''strategy%20history.xlsx",
+          "content-type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+      });
+    },
+  });
+
+  const workbook = await client.download(
+    "/rule-strategies/strategy-1/export?from_date=2026-08-01",
+    { requiresAuth: true },
+  );
+
+  assert.equal(workbook.filename, "strategy history.xlsx");
+  assert.equal(workbook.blob.size, 4);
+  assert.equal(requestUrl.includes("download-token"), false);
+  assert.deepEqual(requestHeaders, { Authorization: "Bearer download-token" });
+});
+
 test("rejects a legacy HTTP 200 business error before callers read null data", async () => {
   const notifications: string[] = [];
   const client = new ApiClient({

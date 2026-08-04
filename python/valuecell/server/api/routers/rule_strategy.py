@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
@@ -45,6 +48,10 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
 from valuecell.server.services.saas_access_service import (
     require_active_tenant,
     require_tenant_permission,
+)
+from valuecell.server.services.rule_strategy_export_service import (
+    XLSX_MEDIA_TYPE,
+    RuleStrategyExportService,
 )
 
 
@@ -101,6 +108,7 @@ def create_rule_strategy_router(
     rule_service = service or RuleStrategyService()
     advisory_service = RuleStrategyAdvisoryService()
     text_import_service = RuleStrategyTextImportService()
+    export_service = RuleStrategyExportService(rule_service)
 
     def require_strategy_read(principal: CurrentPrincipal) -> None:
         require_active_tenant(principal)
@@ -353,6 +361,38 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(
             data=data, msg="Paper evaluation explanations retrieved"
+        )
+
+    @router.get(
+        "/{strategy_id}/export",
+        responses={200: {"content": {XLSX_MEDIA_TYPE: {}}}},
+    )
+    async def export_rule_strategy(
+        strategy_id: str,
+        from_date: date | None = Query(default=None),
+        to_date: date | None = Query(default=None),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> Response:
+        """Download complete, tenant-scoped strategy history as an XLSX workbook."""
+        require_strategy_read(principal)
+        if from_date is not None and to_date is not None and from_date > to_date:
+            raise HTTPException(
+                status_code=422,
+                detail="from_date must be on or before to_date",
+            )
+        try:
+            workbook, filename = export_service.build(
+                strategy_id,
+                principal.tenant_id,
+                from_date,
+                to_date,
+            )
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return Response(
+            content=workbook,
+            media_type=XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     @router.get(

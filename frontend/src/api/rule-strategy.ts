@@ -77,6 +77,27 @@ export function useRuleStrategy(strategyId?: string) {
     enabled: Boolean(strategyId && tenantId),
   });
 }
+export type RuleStrategyExportRequest = {
+  strategyId: string;
+  fromDate?: string;
+  toDate?: string;
+};
+
+/** Downloads a tenant-authorized strategy workbook as a browser attachment. */
+export function useExportRuleStrategy() {
+  return useMutation({
+    mutationFn: ({ strategyId, fromDate, toDate }: RuleStrategyExportRequest) => {
+      const query = new URLSearchParams();
+      if (fromDate) query.set("from_date", fromDate);
+      if (toDate) query.set("to_date", toDate);
+      const suffix = query.size > 0 ? `?${query}` : "";
+      return apiClient.download(
+        `/rule-strategies/${encodeURIComponent(strategyId)}/export${suffix}`,
+        { requiresAuth: true },
+      );
+    },
+  });
+}
 
 /** Reads only the exchange-authoritative Demo execution model for one strategy. */
 export function useRuleStrategyDemoExecution(

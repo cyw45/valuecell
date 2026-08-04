@@ -4,6 +4,7 @@ import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "r
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { Archive, Bot, ChartCandlestick, CirclePlay, Pause, Wallet } from "lucide-react-native";
 import { api } from "../api";
+import { StrategyExportPanel } from "../components/StrategyExportPanel";
 import { accessGate, canMutate } from "../access";
 import {
   ConfirmSheet,
@@ -163,6 +164,8 @@ export default function StrategyDetailScreen() {
           <Text style={styles.row}>高级规则：{config.advanced_rules.enabled ? `已启用（入场${config.advanced_rules.entry_confirmation_mode === "all" ? "全部满足" : "任一满足"} · 退出${config.advanced_rules.exit_confirmation_mode === "all" ? "全部满足" : "任一满足"}）` : "未启用"}</Text>
         </View>
       </SectionCard>
+
+      <StrategyExportPanel strategyId={strategyId} />
 
       {!item.archived_at ? <SectionCard description={mayManage ? "启停和归档会由服务端再次校验当前租户、状态与执行代际。" : "当前帐号仅可查看策略状态。"} title="策略操作">
         {mayManage ? <>

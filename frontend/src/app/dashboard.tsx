@@ -497,7 +497,6 @@ export default function DashboardPage() {
     return (
       <div
         aria-busy="true"
-        aria-label="正在加载仪表盘"
         className="grid size-full place-items-center text-muted-foreground"
       >
         <div className="flex items-center gap-2 text-sm">

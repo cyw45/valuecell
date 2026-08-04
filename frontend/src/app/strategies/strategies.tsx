@@ -4,6 +4,7 @@ import {
   BarChart3,
   BrainCircuit,
   CandlestickChart,
+  FileDown,
   FileText,
   Gauge,
   Layers3,
@@ -18,7 +19,7 @@ import {
   TrendingUp,
   WandSparkles,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -26,6 +27,7 @@ import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
   useCreateRuleStrategy,
   useDeleteRuleStrategy,
+  useExportRuleStrategy,
   useParseRuleStrategyText,
   useRuleStrategies,
   useRuleStrategy,
@@ -483,6 +485,136 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
       <span className="text-muted-foreground">{label}</span>
       <span className="text-right font-medium tabular-nums">{value}</span>
     </div>
+  );
+}
+function RuleStrategyExportPanel({
+  strategyId,
+  strategyName,
+}: {
+  strategyId?: string;
+  strategyName?: string;
+}) {
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [exportError, setExportError] = useState("");
+  const exportStrategy = useExportRuleStrategy();
+  const downloadInFlight = useRef(false);
+  const invalidDateRange = Boolean(fromDate && toDate && fromDate > toDate);
+
+  const downloadWorkbook = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (
+      !strategyId ||
+      invalidDateRange ||
+      exportStrategy.isPending ||
+      downloadInFlight.current
+    )
+      return;
+    setExportError("");
+    downloadInFlight.current = true;
+    const selectedDate = fromDate || toDate;
+    try {
+      const workbook = await exportStrategy.mutateAsync({
+        strategyId,
+        fromDate: fromDate || selectedDate || undefined,
+        toDate: toDate || selectedDate || undefined,
+      });
+      const objectUrl = URL.createObjectURL(workbook.blob);
+      const serverFilename = workbook.filename?.trim();
+      const filename = serverFilename?.toLowerCase().endsWith(".xlsx")
+        ? serverFilename
+        : `${serverFilename || "策略导出"}.xlsx`;
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+    } catch (error) {
+      setExportError(
+        error instanceof Error ? error.message : "Excel 导出失败，请稍后重试。",
+      );
+    } finally {
+      downloadInFlight.current = false;
+    }
+  };
+
+  return (
+    <Card className="gap-0 rounded-lg border-sky-500/25 bg-sky-500/[0.02] py-0 shadow-none">
+      <CardHeader className="flex flex-row items-start justify-between gap-4 border-b px-4 py-4 sm:px-5">
+        <div>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FileDown className="size-4 text-sky-600 dark:text-sky-300" />
+            策略历史导出
+          </CardTitle>
+          <CardDescription className="mt-1">
+            {strategyName
+              ? `下载“${strategyName}”的参数、成交、资金与执行明细。`
+              : "请选择已保存策略后下载其历史记录。"}
+          </CardDescription>
+        </div>
+        <Badge className="shrink-0" variant="outline">
+          Excel (.xlsx)
+        </Badge>
+      </CardHeader>
+      <CardContent className="p-4 sm:p-5">
+        <form className="grid gap-4" noValidate onSubmit={downloadWorkbook}>
+          <fieldset
+            className="grid gap-4 disabled:cursor-not-allowed disabled:opacity-70 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end"
+            disabled={!strategyId || exportStrategy.isPending}
+          >
+            <div className="grid gap-1.5">
+              <Label htmlFor="strategy-export-from-date">开始日期</Label>
+              <Input
+                aria-describedby="strategy-export-date-help"
+                id="strategy-export-from-date"
+                onChange={(event) => {
+                  setFromDate(event.target.value);
+                  setExportError("");
+                }}
+                type="date"
+                value={fromDate}
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="strategy-export-to-date">结束日期</Label>
+              <Input
+                aria-describedby="strategy-export-date-help"
+                id="strategy-export-to-date"
+                onChange={(event) => {
+                  setToDate(event.target.value);
+                  setExportError("");
+                }}
+                type="date"
+                value={toDate}
+              />
+            </div>
+            <Button
+              disabled={!strategyId || invalidDateRange || exportStrategy.isPending}
+              type="submit"
+            >
+              <FileDown />
+              {exportStrategy.isPending ? "正在生成 Excel…" : "下载 Excel"}
+            </Button>
+          </fieldset>
+          <p className="text-muted-foreground text-xs" id="strategy-export-date-help">
+            按 UTC 自然日筛选，起止日期均包含在内；只填一天时按同一天导出，全部留空则导出全部历史记录。
+          </p>
+          {invalidDateRange ? (
+            <p className="text-destructive text-sm" role="alert">
+              开始日期不得晚于结束日期。
+            </p>
+          ) : null}
+          {exportError ? (
+            <p className="text-destructive text-sm" role="alert">
+              {exportError}
+            </p>
+          ) : null}
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 export function RuleStrategyConfiguration({
@@ -1239,6 +1371,12 @@ export function RuleStrategyConfiguration({
             </div>
           </CardContent>
         </Card>
+        <div className="pt-4">
+          <RuleStrategyExportPanel
+            strategyId={storedStrategy?.strategy_id ?? strategyId}
+            strategyName={storedStrategy?.name}
+          />
+        </div>
       </div>
 
       <div
