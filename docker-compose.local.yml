@@ -16,6 +16,10 @@ services:
       API_PORT: 8000
       PYTHONIOENCODING: utf-8
       VALUECELL_QUANT_ONLY_MODE: "true"
+      WORLD_MONITOR_ENABLED: "true"
+      WORLD_MONITOR_API_URL: http://worldmonitor:8080
+      WORLD_MONITOR_API_TOKEN: ${WORLD_MONITOR_API_TOKEN:?WORLD_MONITOR_API_TOKEN is required}
+      WORLD_MONITOR_SYNC_INTERVAL_S: ${WORLD_MONITOR_SYNC_INTERVAL_S:-300}
     command: ["/app/python/.venv/bin/python", "-m", "uvicorn", "valuecell.server.main:app", "--host", "0.0.0.0", "--port", "8000"]
     volumes:
       - ./python/valuecell:/app/python/valuecell:ro
