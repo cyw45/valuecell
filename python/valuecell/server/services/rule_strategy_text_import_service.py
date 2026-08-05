@@ -43,9 +43,9 @@ class RuleStrategyTextImportService:
             )
 
         try:
-            # Keep the complete synchronous request below the outer proxy timeout.
-            # Retrying would continue after the browser has already received a 504.
-            timeout = httpx.Timeout(45.0, connect=5.0)
+            # Compilation runs as a background job, so model generation is not bounded
+            # by the browser or reverse-proxy request lifetime.
+            timeout = httpx.Timeout(None, connect=10.0, write=30.0, pool=10.0)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     f"{provider_config.base_url.rstrip('/')}/chat/completions",
@@ -65,7 +65,7 @@ class RuleStrategyTextImportService:
         except httpx.TimeoutException as exc:
             logger.warning("Strategy text import provider timed out")
             raise RuleStrategyTextImportUnavailableError(
-                "AI 策略分析服务请求超时，请重试；本次请求不会继续后台解析"
+                "AI 策略分析服务请求超时（连接或传输），请重试"
             ) from exc
         except httpx.HTTPError as exc:
             logger.warning("Strategy text import provider request failed: {}", type(exc).__name__)

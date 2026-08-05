@@ -65,7 +65,8 @@ async def test_text_import_uses_one_bounded_provider_attempt(monkeypatch):
     )
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs):
-            assert kwargs["timeout"].read == 45.0
+            assert kwargs["timeout"].read is None
+            assert kwargs["timeout"].connect == 10.0
 
         async def __aenter__(self):
             return self
@@ -108,7 +109,8 @@ async def test_text_import_does_not_retry_after_provider_timeout(monkeypatch):
 
     class FakeAsyncClient:
         def __init__(self, *args, **kwargs):
-            assert kwargs["timeout"].read == 45.0
+            assert kwargs["timeout"].read is None
+            assert kwargs["timeout"].connect == 10.0
 
         async def __aenter__(self):
             return self

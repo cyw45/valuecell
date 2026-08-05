@@ -369,6 +369,15 @@ export interface RuleStrategyTextImportProposal {
   rejection_reasons: string[];
 }
 
+export interface RuleStrategyTextImportJob {
+  job_id: string;
+  status: "pending" | "running" | "completed" | "failed";
+  proposal: RuleStrategyTextImportProposal | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface RuleStrategyEvaluationHistoryEntry
   extends RuleStrategyEvaluation {
   symbol?: string;

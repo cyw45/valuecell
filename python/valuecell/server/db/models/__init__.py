@@ -19,6 +19,7 @@ from .strategy_holding import StrategyHolding
 from .strategy_instruction import StrategyInstruction
 from .strategy_portfolio import StrategyPortfolioView
 from .rule_strategy import RuleStrategy, RuleStrategyEvaluationJournal
+from .rule_strategy_text_import_job import RuleStrategyTextImportJobRecord
 from .tenant import SaaSUser, Tenant, TenantMembership, TenantProfile
 from .tenant_credential import TenantCredential
 from .sandbox_exchange_order import SandboxExchangeOrder
@@ -52,6 +53,7 @@ __all__ = [
     "StrategyInstruction",
     "RuleStrategy",
     "RuleStrategyEvaluationJournal",
+    "RuleStrategyTextImportJobRecord",
     "SaaSUser",
     "Tenant",
     "TenantMembership",

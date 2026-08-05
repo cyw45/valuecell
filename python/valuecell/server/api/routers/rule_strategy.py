@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -33,9 +34,12 @@ from valuecell.server.services.rule_strategy_advisory_service import (
     RuleStrategyAdvisoryService,
     RuleStrategyAdvisoryUnavailableError,
 )
-from valuecell.server.services.rule_strategy_text_import_service import (
-    RuleStrategyTextImportService,
-    RuleStrategyTextImportUnavailableError,
+from valuecell.server.services.rule_strategy_text_import_job_service import (
+    RuleStrategyTextImportJob,
+    RuleStrategyTextImportJobCapacityError,
+    RuleStrategyTextImportJobConflictError,
+    RuleStrategyTextImportJobNotFoundError,
+    get_rule_strategy_text_import_job_service,
 )
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     DemoExecutionReadModelError,
@@ -99,6 +103,12 @@ class RuleStrategyTextImportRequest(BaseModel):
     strategy_text: str = Field(min_length=10, max_length=8_000)
 
 
+class RuleStrategyTextImportJobRequest(RuleStrategyTextImportRequest):
+    """Idempotent background strategy compilation request."""
+
+    request_id: UUID
+
+
 def create_rule_strategy_router(
     service: RuleStrategyService | None = None,
 ) -> APIRouter:
@@ -107,7 +117,7 @@ def create_rule_strategy_router(
     router = APIRouter(prefix="/rule-strategies", tags=["rule-strategies"])
     rule_service = service or RuleStrategyService()
     advisory_service = RuleStrategyAdvisoryService()
-    text_import_service = RuleStrategyTextImportService()
+    text_import_jobs = get_rule_strategy_text_import_job_service()
     export_service = RuleStrategyExportService(rule_service)
 
     def require_strategy_read(principal: CurrentPrincipal) -> None:
@@ -127,11 +137,52 @@ def create_rule_strategy_router(
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[RuleStrategyTextImportProposal]:
         require_strategy_manage(principal)
+        raise HTTPException(
+            status_code=410,
+            detail="Use /parse-strategy-text/jobs for background strategy parsing",
+        )
+
+    @router.post(
+        "/parse-strategy-text/jobs",
+        response_model=SuccessResponse[RuleStrategyTextImportJob],
+        status_code=202,
+    )
+    async def submit_strategy_text_import(
+        request: RuleStrategyTextImportJobRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[RuleStrategyTextImportJob]:
+        require_strategy_manage(principal)
         try:
-            data = await text_import_service.parse(request.strategy_text)
-        except RuleStrategyTextImportUnavailableError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return SuccessResponse.create(data=data, msg="Strategy text parsed for review")
+            data = await text_import_jobs.submit_async(
+                request.strategy_text,
+                tenant_id=principal.tenant_id,
+                user_id=principal.user_id,
+                request_id=str(request.request_id),
+            )
+        except RuleStrategyTextImportJobCapacityError as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from exc
+        except RuleStrategyTextImportJobConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Strategy text parsing started")
+
+    @router.get(
+        "/parse-strategy-text/jobs/{job_id}",
+        response_model=SuccessResponse[RuleStrategyTextImportJob],
+    )
+    async def get_strategy_text_import_job(
+        job_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[RuleStrategyTextImportJob]:
+        require_strategy_manage(principal)
+        try:
+            data = await text_import_jobs.get_async(
+                job_id,
+                tenant_id=principal.tenant_id,
+                user_id=principal.user_id,
+            )
+        except RuleStrategyTextImportJobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Strategy text parsing status")
 
     @router.post("", response_model=SuccessResponse[dict[str, Any]], status_code=201)
     async def create_rule_strategy(

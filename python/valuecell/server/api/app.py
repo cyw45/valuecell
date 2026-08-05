@@ -300,11 +300,19 @@ def create_app() -> FastAPI:
         except Exception as exc:
             logger.warning("Strategy scheduler initialization deferred: {}", exc)
 
+        from ..services.rule_strategy_text_import_job_service import (
+            get_rule_strategy_text_import_job_service,
+        )
+
+        text_import_jobs = get_rule_strategy_text_import_job_service()
+        text_import_jobs.start()
+
         yield
         # Shutdown
         logger.info("ValueCell Server shutting down...")
         if _scheduler is not None:
             await _scheduler.stop()
+        await text_import_jobs.stop()
         if world_intelligence_task is not None:
             world_intelligence_task.cancel()
             try:

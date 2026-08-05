@@ -17,6 +17,7 @@ import type {
   RuleStrategyLog,
   RuleStrategyLogEntry,
   RuleStrategyPnlPoint,
+  RuleStrategyTextImportJob,
   RuleStrategyTextImportProposal,
   RuleStrategyTradeLogEntry,
   UpdateRuleStrategyRequest,
@@ -261,12 +262,47 @@ export function useRuleStrategyAdvisory(strategyId?: string) {
 }
 export function useParseRuleStrategyText() {
   return useMutation({
-    mutationFn: (strategyText: string) =>
-      apiClient.post<ApiResponse<RuleStrategyTextImportProposal>>(
-        "/rule-strategies/parse-strategy-text",
-        { strategy_text: strategyText },
+    mutationFn: async (strategyText: string) => {
+      const requestId = crypto.randomUUID();
+      const submitted = await apiClient.post<
+        ApiResponse<RuleStrategyTextImportJob>
+      >(
+        "/rule-strategies/parse-strategy-text/jobs",
+        { strategy_text: strategyText, request_id: requestId },
         { requiresAuth: true },
-      ),
+      );
+      let job = submitted.data;
+      let consecutivePollingFailures = 0;
+      while (job.status === "pending" || job.status === "running") {
+        const delay = Math.min(
+          2_000 * 2 ** consecutivePollingFailures,
+          16_000,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        try {
+          const response = await apiClient.get<
+            ApiResponse<RuleStrategyTextImportJob>
+          >(`/rule-strategies/parse-strategy-text/jobs/${job.job_id}`, {
+            requiresAuth: true,
+          });
+          job = response.data;
+          consecutivePollingFailures = 0;
+        } catch (error) {
+          consecutivePollingFailures += 1;
+          if (consecutivePollingFailures >= 5) throw error;
+        }
+      }
+      if (job.status === "failed") {
+        throw new Error(job.error ?? "策略文本解析失败。");
+      }
+      if (!job.proposal) {
+        throw new Error("策略文本解析完成，但未返回解析结果。");
+      }
+      return {
+        ...submitted,
+        data: job.proposal,
+      } as ApiResponse<RuleStrategyTextImportProposal>;
+    },
   });
 }
 function useRuleStrategyLog<T>(
