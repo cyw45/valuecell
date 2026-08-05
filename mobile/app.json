@@ -14,7 +14,7 @@
     "android": {
       "package": "com.zhiweionline.valuecell",
       "adaptiveIcon": {
-        "backgroundColor": "#07111F",
+        "backgroundColor": "#F7F7F7",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
