@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from loguru import logger
-from sqlalchemy import text
+from sqlalchemy import Boolean, String, bindparam, text
 from sqlalchemy.orm import Session
 
+from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.rule_strategy import RuleStrategy
 from valuecell.server.db.models.tenant import Tenant, TenantProfile
 
@@ -262,7 +263,23 @@ def _extend_execution_intent_state(session: Session, dialect: str) -> None:
             )
 
 
+def _strategy_monitor_symbol_backfill_statement():
+    return text(
+        "INSERT INTO rule_strategy_monitor_symbols "
+        "(tenant_id, strategy_id, symbol, state, protected_held, consecutive_low_volume_days) "
+        "SELECT :tenant_id, :strategy_id, :symbol, 'candidate', :protected_held, 0 "
+        "WHERE NOT EXISTS (SELECT 1 FROM rule_strategy_monitor_symbols "
+        "WHERE tenant_id = :tenant_id AND strategy_id = :strategy_id AND symbol = :symbol)"
+    ).bindparams(
+        bindparam("tenant_id", type_=String(36)),
+        bindparam("strategy_id", type_=String(100)),
+        bindparam("symbol", type_=String(32)),
+        bindparam("protected_held", type_=Boolean()),
+    )
+
+
 def _backfill_strategy_product_state(session: Session) -> None:
+    monitor_symbol_statement = _strategy_monitor_symbol_backfill_statement()
     for strategy in session.query(RuleStrategy).all():
         config = dict(strategy.config or {})
         capital = float(config.get("initial_capital_quote", 10_000.0))
@@ -326,13 +343,7 @@ def _backfill_strategy_product_state(session: Session) -> None:
         )
         for symbol in config.get("symbols") or []:
             session.execute(
-                text(
-                    "INSERT INTO rule_strategy_monitor_symbols "
-                    "(tenant_id, strategy_id, symbol, state, protected_held, consecutive_low_volume_days) "
-                    "SELECT :tenant_id, :strategy_id, :symbol, 'candidate', :protected_held, 0 "
-                    "WHERE NOT EXISTS (SELECT 1 FROM rule_strategy_monitor_symbols "
-                    "WHERE tenant_id = :tenant_id AND strategy_id = :strategy_id AND symbol = :symbol)"
-                ),
+                monitor_symbol_statement,
                 {
                     "tenant_id": strategy.tenant_id,
                     "strategy_id": strategy.strategy_id,
@@ -479,6 +490,7 @@ def migrate_tenant_profiles(session: Session) -> int:
     return len(profiles)
 
 RULE_STRATEGY_VALIDATION_MIGRATION_VERSION = "20260805_rule_strategy_validation_v1"
+RULE_STRATEGY_VALIDATION_MIGRATION_LOCK_KEY = 7720250722
 
 
 def migrate_rule_strategy_validation(session: Session) -> bool:
@@ -488,6 +500,11 @@ def migrate_rule_strategy_validation(session: Session) -> bool:
         raise RuntimeError(
             "rule strategy validation migration supports PostgreSQL and SQLite, "
             f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": RULE_STRATEGY_VALIDATION_MIGRATION_LOCK_KEY},
         )
     session.execute(
         text(
@@ -507,8 +524,8 @@ def migrate_rule_strategy_validation(session: Session) -> bool:
         RuleStrategyValidationPoint,
         RuleStrategyValidationRun,
     )
-    session.bind.metadata.create_all(
-        session.bind,
+    Base.metadata.create_all(
+        bind=session.bind,
         tables=[
             RuleStrategyValidationRun.__table__,
             RuleStrategyValidationDataset.__table__,
