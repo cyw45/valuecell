@@ -20,11 +20,15 @@ from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyEvaluationJournal,
+    RuleStrategyEvent,
 )
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
 )
 from valuecell.server.services.rule_engine import RuleEngine
+from valuecell.server.services.rule_strategy_templates import (
+    get_rule_strategy_template,
+)
 
 
 class RuleStrategyNotFoundError(Exception):
@@ -39,8 +43,13 @@ class RuleStrategyRunningUpdateError(Exception):
     """Raised when configuration changes are requested for a running strategy."""
 
 
-class RuleStrategyRunConflictError(Exception):
-    """Raised when another strategy already runs for the tenant."""
+class RuleStrategyStartAdmissionError(Exception):
+    """Raised when current account, risk, monitor, or scope facts block start."""
+
+    def __init__(self, reason_code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason_code = reason_code
+        self.detail = detail
 
 
 class RuleStrategyDeleteConflictError(Exception):
@@ -69,24 +78,91 @@ class RuleStrategyService:
         description: str | None,
         config: RuleStrategyConfig,
     ) -> dict[str, Any]:
-        strategy = self.repository.create(
-            RuleStrategy(
-                strategy_id=f"rule_{uuid4().hex}",
-                tenant_id=tenant_id,
-                name=name,
-                description=description,
-                status="stopped",
-                paper_mode=True,
-                config=config.model_dump(mode="json"),
-            )
+        strategy = RuleStrategy(
+            strategy_id=f"rule_{uuid4().hex}",
+            tenant_id=tenant_id,
+            name=name,
+            description=description,
+            status="stopped",
+            paper_mode=True,
+            config=config.model_dump(mode="json"),
         )
+        create_with_state = getattr(self.repository, "create_with_current_state", None)
+        if create_with_state is None:
+            strategy = self.repository.create(strategy)
+        else:
+            strategy = create_with_state(
+                strategy,
+                scope="paper_virtual",
+                credential_id=None,
+                symbol_candidates=config.symbols,
+            )
         return self._strategy_data(strategy)
 
-    def list(self, tenant_id: str) -> list[dict[str, Any]]:
-        return [
-            self._strategy_data(strategy)
-            for strategy in self.repository.list(tenant_id)
-        ]
+    def instantiate_template(
+        self,
+        tenant_id: str,
+        *,
+        template_id: str,
+        name: str,
+        initial_capital_quote: float,
+        symbol_candidates: list[str],
+        scope: str,
+        credential_id: str | None,
+    ) -> dict[str, Any]:
+        """Clone a code-owned template into a stopped tenant strategy."""
+        template = get_rule_strategy_template(template_id)
+        if template is None:
+            raise ValueError(f"Unknown rule strategy template '{template_id}'")
+        if any(
+            item.name == name
+            for item in self.repository.list(tenant_id, include_archived=True)
+        ):
+            raise ValueError("Rule strategy name already exists for this tenant")
+        config = template.clone_config(
+            initial_capital_quote=initial_capital_quote,
+            symbol_candidates=symbol_candidates,
+        )
+        if scope != "paper_virtual":
+            config = config.model_copy(
+                update={
+                    "execution": config.execution.model_copy(
+                        update={
+                            "environment": "okx_demo",
+                            "sandbox_connection_id": credential_id,
+                        }
+                    )
+                }
+            )
+        strategy = RuleStrategy(
+            strategy_id=f"rule_{uuid4().hex}",
+            tenant_id=tenant_id,
+            name=name,
+            status="stopped",
+            paper_mode=scope == "paper_virtual",
+            config=config.model_dump(mode="json"),
+        )
+        creator = getattr(self.repository, "create_with_current_state", None)
+        if creator is None:
+            strategy = self.repository.create(strategy)
+        else:
+            strategy = creator(
+                strategy,
+                scope=scope,
+                credential_id=credential_id,
+                symbol_candidates=config.symbols,
+            )
+        return self._strategy_data(strategy)
+
+    def list(
+        self, tenant_id: str, *, include_archived: bool = False
+    ) -> list[dict[str, Any]]:
+        strategies = (
+            self.repository.list(tenant_id, include_archived=True)
+            if include_archived
+            else self.repository.list(tenant_id)
+        )
+        return [self._strategy_data(strategy) for strategy in strategies]
 
     def get(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         return self._strategy_data(self._require_strategy(strategy_id, tenant_id))
@@ -108,29 +184,38 @@ class RuleStrategyService:
         )
 
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
-        start_exclusive = getattr(self.repository, "start_exclusive", None)
-        if start_exclusive is None:
-            strategy = self._require_strategy(strategy_id, tenant_id)
-            if any(
-                item.status == "running" and item.strategy_id != strategy_id
-                for item in self.repository.list(tenant_id)
-            ):
-                raise RuleStrategyRunConflictError(
-                    "Another rule strategy is already running for this tenant"
-                )
-            strategy.status = "running"
-            strategy.execution_generation = (strategy.execution_generation or 1) + 1
-            return self._strategy_data(self.repository.update(strategy))
-        strategy, conflict = start_exclusive(strategy_id, tenant_id)
-        if strategy is None:
-            raise RuleStrategyNotFoundError(
-                f"Rule strategy '{strategy_id}' was not found"
-            )
-        if conflict:
-            raise RuleStrategyRunConflictError(
-                "Another rule strategy is already running for this tenant"
-            )
-        return self._strategy_data(strategy)
+        """Start one strategy after current account and monitor admission checks."""
+        self._require_strategy(strategy_id, tenant_id)
+        state_reader = getattr(self.repository, "get_account_state", None)
+        monitor_reader = getattr(self.repository, "monitors", None)
+        if state_reader is not None and monitor_reader is not None:
+            current_state = state_reader(strategy_id, tenant_id)
+            if current_state is not None:
+                _account, risk = current_state
+                if risk.state == "halted":
+                    raise RuleStrategyStartAdmissionError(
+                        risk.reason_code or "risk_state_halted",
+                        risk.reason_detail or "策略账户风险状态已停止执行。",
+                    )
+                if (
+                    risk.reason_code == "shared_exchange_account_requires_dedicated_scope"
+                ):
+                    raise RuleStrategyStartAdmissionError(
+                        risk.reason_code,
+                        risk.reason_detail or "共享交易所账户未证明隔离。",
+                    )
+                monitors = monitor_reader(strategy_id, tenant_id)
+                if not any(item.state in {"admitted", "held"} for item in monitors):
+                    raise RuleStrategyStartAdmissionError(
+                        "no_admitted_monitor_symbols",
+                        "策略至少需要一个已准入或持仓保留的监控标的。",
+                    )
+
+        def apply(current: RuleStrategy) -> None:
+            current.status = "running"
+            current.execution_generation = (current.execution_generation or 1) + 1
+
+        return self._locked_mutate(strategy_id, tenant_id, apply)
 
     def stop(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         return self._set_status(strategy_id, tenant_id, "stopped")
@@ -176,7 +261,7 @@ class RuleStrategyService:
                 "Manual evaluation requires a synchronized OKX Demo account; "
                 "use scheduled Demo evaluation instead"
             )
-        account_before = self._account_from_history(strategy, tenant_id, config)
+        account_before = self._current_paper_account(strategy, tenant_id, config)
         engine_market = self._engine_market(
             account_before, market, config.risk.leverage
         )
@@ -199,7 +284,7 @@ class RuleStrategyService:
                 account_before, market, result_data
             )
         result_data["account"] = account_after.model_dump(mode="json")
-        journal = self.repository.append_evaluation(
+        journal = self._append_evaluation_statefully(
             RuleStrategyEvaluationJournal(
                 evaluation_id=f"evaluation_{uuid4().hex}",
                 tenant_id=tenant_id,
@@ -210,7 +295,10 @@ class RuleStrategyService:
                 ],
                 trades=self._trade_entries(result_data, fill),
                 funding=[result.funding.model_dump(mode="json")],
-            )
+            ),
+            account_after if config.execution.environment == "paper" else None,
+            tenant_id,
+            strategy_id,
         )
         return {
             "strategy_id": strategy_id,
@@ -245,7 +333,7 @@ class RuleStrategyService:
             None
             if is_demo
             else self._mark_account_for_cycle(
-                self._account_from_history(strategy, tenant_id, config),
+                self._current_paper_account(strategy, tenant_id, config),
                 [market for _, market in market_inputs],
             )
         )
@@ -281,8 +369,12 @@ class RuleStrategyService:
                 )
             evaluated.append((market, result_data))
 
-        sell_items = [item for item in evaluated if item[1]["action"] == "sell"]
-        remaining_items = [item for item in evaluated if item[1]["action"] != "sell"]
+        sell_items = [
+            item for item in evaluated if item[1]["action"] in {"sell", "reduce", "close"}
+        ]
+        remaining_items = [
+            item for item in evaluated if item[1]["action"] not in {"sell", "reduce", "close"}
+        ]
         output: list[dict[str, Any]] = []
 
         # An exchange-backed strategy uses its exchange account as the execution
@@ -589,9 +681,100 @@ class RuleStrategyService:
     def account(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
         config = RuleStrategyConfig.model_validate(strategy.config)
-        return self._account_from_history(strategy, tenant_id, config).model_dump(
+        return self._current_paper_account(strategy, tenant_id, config).model_dump(
             mode="json"
         )
+
+    def _current_paper_account(
+        self,
+        strategy: RuleStrategy,
+        tenant_id: str,
+        config: RuleStrategyConfig,
+    ) -> RuleStrategyPaperAccount:
+        """Load the durable account row; journal replay remains recovery-only."""
+        state_reader = getattr(self.repository, "get_account_state", None)
+        if state_reader is not None:
+            current_state = state_reader(strategy.strategy_id, tenant_id)
+            if current_state is not None:
+                account, _risk = current_state
+                try:
+                    positions = {
+                        symbol: RuleStrategyPaperPosition.model_validate(position)
+                        for symbol, position in (account.positions or {}).items()
+                    }
+                    return RuleStrategyPaperAccount(
+                        initial_capital_quote=account.allocation_quote,
+                        quote_balance=account.quote_balance,
+                        positions=positions,
+                        realized_pnl_quote=account.realized_pnl_quote,
+                        unrealized_pnl_quote=account.unrealized_pnl_quote,
+                        equity_quote=account.equity_quote,
+                    )
+                except ValidationError:
+                    self._halt_corrupt_account_state(strategy, tenant_id)
+                    raise RuleStrategyNotRunningError(
+                        "Strategy account state is corrupt and has been halted"
+                    )
+        return self._account_from_history(strategy, tenant_id, config)
+
+    def _halt_corrupt_account_state(
+        self, strategy: RuleStrategy, tenant_id: str
+    ) -> None:
+        """Fail closed when durable state cannot safely reconstruct balances."""
+        state_reader = getattr(self.repository, "get_account_state", None)
+        if state_reader is None:
+            return
+        current_state = state_reader(strategy.strategy_id, tenant_id)
+        if current_state is None:
+            return
+        _account, risk = current_state
+        risk.state = "halted"
+        risk.reason_code = "corrupt_current_account_state"
+        risk.reason_detail = "当前策略账户状态损坏，已停止执行。"
+        updater = getattr(self.repository, "update_risk_state", None)
+        if updater is not None:
+            updater(risk)
+
+    def _append_evaluation_statefully(
+        self,
+        journal: RuleStrategyEvaluationJournal,
+        account: RuleStrategyPaperAccount | None,
+        tenant_id: str,
+        strategy_id: str,
+    ) -> RuleStrategyEvaluationJournal:
+        """Write paper account state, evaluation evidence, and event in one commit."""
+        state_reader = getattr(self.repository, "get_account_state", None)
+        state_writer = getattr(self.repository, "append_evaluation_with_state", None)
+        if account is None or state_reader is None or state_writer is None:
+            return self.repository.append_evaluation(journal)
+        current_state = state_reader(strategy_id, tenant_id)
+        if current_state is None:
+            return self.repository.append_evaluation(journal)
+        account_row, risk = current_state
+        before_state = {
+            "quote_balance": account_row.quote_balance,
+            "equity_quote": account_row.equity_quote,
+            "positions": account_row.positions,
+        }
+        account_row.quote_balance = account.quote_balance
+        account_row.positions = {
+            symbol: position.model_dump(mode="json")
+            for symbol, position in account.positions.items()
+        }
+        account_row.realized_pnl_quote = account.realized_pnl_quote
+        account_row.unrealized_pnl_quote = account.unrealized_pnl_quote
+        account_row.equity_quote = account.equity_quote
+        event = RuleStrategyEvent(
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            correlation_id=journal.evaluation_id,
+            evaluation_id=journal.evaluation_id,
+            actor="system",
+            reason_code="evaluation_committed",
+            before_state=before_state,
+            after_state=account.model_dump(mode="json"),
+        )
+        return state_writer(journal, account_row, risk, event)
 
     def _account_from_history(
         self, strategy: RuleStrategy, tenant_id: str, config: RuleStrategyConfig
@@ -651,16 +834,20 @@ class RuleStrategyService:
             if isinstance(account, RuleStrategyPaperAccount)
             else account
         )
-        journal = self.repository.append_evaluation(
-            RuleStrategyEvaluationJournal(
-                evaluation_id=f"evaluation_{uuid4().hex}",
-                tenant_id=tenant_id,
-                strategy_id=strategy_id,
-                result=result_data,
-                signals=result_data["conditions"],
-                trades=self._trade_entries(result_data, fill),
-                funding=[result_data["funding"]],
-            )
+        journal_record = RuleStrategyEvaluationJournal(
+            evaluation_id=f"evaluation_{uuid4().hex}",
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            result=result_data,
+            signals=result_data["conditions"],
+            trades=self._trade_entries(result_data, fill),
+            funding=[result_data["funding"]],
+        )
+        journal = self._append_evaluation_statefully(
+            journal_record,
+            account if isinstance(account, RuleStrategyPaperAccount) else None,
+            tenant_id,
+            strategy_id,
         )
         return {
             "strategy_id": strategy_id,
@@ -762,7 +949,8 @@ class RuleStrategyService:
         fill: dict[str, Any] | None = None
         existing = positions.get(market.symbol)
 
-        if result["action"] == "buy":
+        action = result["action"]
+        if action in {"buy", "entry", "add"}:
             quote_amount = float(result["sizing"]["requested_quote"])
             if quote_amount > account.quote_balance:
                 raise ValueError("paper buy must be blocked before account mutation")
@@ -784,9 +972,7 @@ class RuleStrategyService:
                 quote_balance = account.quote_balance - quote_amount
             elif quote_amount > 0 and existing is not None:
                 combined_quantity = existing.quantity + quantity
-                combined_cost = (
-                    existing.quantity * existing.entry_price + quote_amount
-                )
+                combined_cost = existing.quantity * existing.entry_price + quote_amount
                 positions[market.symbol] = RuleStrategyPaperPosition(
                     quantity=combined_quantity,
                     entry_price=combined_cost / combined_quantity,
@@ -807,16 +993,37 @@ class RuleStrategyService:
                 quote_balance = account.quote_balance - quote_amount
             else:
                 quote_balance = account.quote_balance
-        elif result["action"] == "sell" and existing is not None:
-            quote_amount = existing.quantity * market.price
-            realized_trade = existing.quantity * (market.price - existing.entry_price)
+        elif action in {"sell", "reduce", "close"} and existing is not None:
+            if action == "reduce":
+                requested_quote = float(result["sizing"].get("requested_quote", 0.0))
+                quantity = min(
+                    existing.quantity,
+                    requested_quote / market.price if requested_quote > 0 else existing.quantity,
+                )
+            else:
+                quantity = existing.quantity
+            quote_amount = quantity * market.price
+            realized_trade = quantity * (market.price - existing.entry_price)
             realized += realized_trade
-            positions.pop(market.symbol)
+            remaining_quantity = existing.quantity - quantity
+            if remaining_quantity <= 1e-12:
+                positions.pop(market.symbol)
+            else:
+                positions[market.symbol] = existing.model_copy(
+                    update={
+                        "quantity": remaining_quantity,
+                        "mark_price": market.price,
+                        "highest_price": max(
+                            existing.highest_price or existing.entry_price,
+                            market.price,
+                        ),
+                    }
+                )
             quote_balance = account.quote_balance + quote_amount
             fill = {
                 "symbol": market.symbol,
                 "price": market.price,
-                "quantity": existing.quantity,
+                "quantity": quantity,
                 "quote_amount": quote_amount,
                 "realized_pnl_quote": realized_trade,
             }

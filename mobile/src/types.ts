@@ -8,8 +8,8 @@ export type TenantRole =
 
 export type TenantType = "personal" | "enterprise";
 export type ExecutionEnvironment = "paper" | "okx_demo";
-export type RuleStrategyStatus = "running" | "stopped";
-export type RuleStrategyAction = "buy" | "sell" | "no_op";
+export type RuleStrategyStatus = "running" | "stopped" | "archived";
+export type RuleStrategyAction = "entry" | "add" | "reduce" | "close" | "buy" | "sell" | "no_op";
 export type RuleStrategyConditionState =
   | "triggered"
   | "not_triggered"
@@ -1017,4 +1017,24 @@ export type MarketResponse = CryptoMarketIndicators;
 export interface DemoConnection extends SandboxConnection {
   revoked?: boolean;
   revoked_at?: string | null;
+}
+
+export interface RuleStrategyMonitorState {
+  symbol: string;
+  state: "candidate" | "admitted" | "held" | "removed";
+  reason_code: string | null;
+  reason_detail: string | null;
+  evaluated_at: string | null;
+  next_check_at: string | null;
+  protected_held: boolean;
+}
+
+export interface RuleStrategyRiskState {
+  state: "normal" | "warn" | "only_reduce" | "halted";
+  daily_equity_baseline: number;
+  high_water_equity: number;
+  current_drawdown_pct: number;
+  cooldown_until: string | null;
+  reason_code: string | null;
+  reason_detail: string | null;
 }

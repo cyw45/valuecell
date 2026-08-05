@@ -8,6 +8,8 @@ export default [
   route("/dashboard", "app/dashboard.tsx"),
   route("/charts", "app/charts.tsx"),
   route("/strategies", "app/strategies/strategies.tsx"),
+  route("/strategies/new", "app/strategies/strategies.tsx", { id: "strategy-new" }),
+  route("/strategies/:strategyId/edit", "app/strategies/strategies.tsx", { id: "strategy-edit" }),
   route("/strategies/advisory", "app/strategies/advisory.tsx"),
   route("/trades", "app/trades.tsx"),
   route("/funding", "app/funding.tsx"),

@@ -346,6 +346,19 @@ def test_rule_strategy_api_persists_paper_only_config_and_refuses_live_fields():
         "max_additions": 0,
         "max_positions": 1,
         "leverage": 1.0,
+        "daily_loss_halt_pct": None,
+        "max_drawdown_only_reduce_pct": None,
+        "symbol_daily_drop_force_close_pct": None,
+        "reentry_cooldown_hours": None,
+        "min_add_price_move_pct": None,
+        "brar_extreme_br_threshold": None,
+        "brar_extreme_ar_threshold": None,
+        "brar_extreme_cooldown_hours": None,
+        "br_breakout_lower_bound": None,
+        "br_breakout_upper_bound": None,
+        "br_breakout_threshold": None,
+        "br_breakout_lookback_bars": None,
+        "br_breakout_cooldown_hours": None,
     }
     assert not {"api_key", "secret_key", "live", "exchange_order_id"} & set(data)
 

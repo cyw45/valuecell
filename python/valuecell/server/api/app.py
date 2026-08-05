@@ -27,7 +27,10 @@ from .routers.saas_admin import create_saas_admin_router
 from .routers.tenant_credential import create_tenant_credential_router
 from .routers.sandbox_exchange import create_sandbox_exchange_router
 from .routers.live_execution import create_live_execution_router
-from .routers.rule_strategy import create_rule_strategy_router
+from .routers.rule_strategy import (
+    create_rule_strategy_router,
+    create_rule_strategy_template_router,
+)
 from .routers.strategy_api import create_strategy_api_router
 from ..services.crypto_market_service import get_crypto_market_service
 from ..services.sandbox_exchange_trading_service import SandboxExchangeTradingService
@@ -151,17 +154,19 @@ def _run_required_rule_strategy_archiving_migration() -> None:
 
 
 def _run_required_execution_attribution_migration() -> None:
-    """Run the fail-closed schema migration after table creation at startup."""
+    """Run required strategy state migrations before scheduler startup."""
     from ..db.connection import get_database_manager
     from ..db.migrations import (
-        ensure_single_running_rule_strategy_index,
         migrate_rule_strategy_execution_attribution,
+        migrate_rule_strategy_validation,
+        migrate_strategy_product_state,
     )
 
     session = get_database_manager().get_session()
     try:
         migrate_rule_strategy_execution_attribution(session)
-        ensure_single_running_rule_strategy_index(session)
+        migrate_strategy_product_state(session)
+        migrate_rule_strategy_validation(session)
     finally:
         session.close()
 
@@ -433,8 +438,9 @@ def _add_routes(app: FastAPI, settings) -> None:
         create_strategy_api_router(quant_only_mode=settings.QUANT_ONLY_MODE),
         prefix=API_PREFIX,
     )
-    # Include standalone deterministic paper rule strategy API.
+    # Include standalone deterministic rule-strategy and immutable-template APIs.
     app.include_router(create_rule_strategy_router(), prefix=API_PREFIX)
+    app.include_router(create_rule_strategy_template_router(), prefix=API_PREFIX)
 
 
 # For uvicorn

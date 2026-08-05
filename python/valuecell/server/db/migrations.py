@@ -13,24 +13,8 @@ EXECUTION_ATTRIBUTION_MIGRATION_VERSION = "20260719_rule_strategy_execution_attr
 # Stable, namespaced advisory-lock key for the duration of the migration transaction.
 EXECUTION_ATTRIBUTION_MIGRATION_LOCK_KEY = 7720250719
 RULE_STRATEGY_JOURNAL_INDEX_NAME = "ix_rule_strategy_journal_tenant_strategy_created"
-RULE_STRATEGY_SINGLE_RUNNING_INDEX_NAME = "uq_rule_strategies_tenant_single_running"
 
 
-def ensure_single_running_rule_strategy_index(session: Session) -> None:
-    """Enforce at most one running strategy per tenant across concurrent requests."""
-    dialect = session.bind.dialect.name
-    if dialect not in {"postgresql", "sqlite"}:
-        raise RuntimeError(
-            "single-running strategy migration supports PostgreSQL and SQLite, "
-            f"got {dialect!r}"
-        )
-    session.execute(
-        text(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {RULE_STRATEGY_SINGLE_RUNNING_INDEX_NAME} "
-            "ON rule_strategies (tenant_id) WHERE status = 'running'"
-        )
-    )
-    session.commit()
 
 
 def ensure_rule_strategy_journal_read_index(session: Session) -> None:
@@ -120,6 +104,242 @@ def _migrate_rule_strategy_archiving_sqlite(session: Session) -> None:
         )
 
 
+
+STRATEGY_PRODUCT_STATE_MIGRATION_VERSION = "20260805_strategy_product_state_v1"
+STRATEGY_PRODUCT_STATE_MIGRATION_LOCK_KEY = 7720250721
+
+
+def migrate_strategy_product_state(session: Session) -> bool:
+    """Install current strategy account state before scheduler reconciliation."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "strategy product state migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": STRATEGY_PRODUCT_STATE_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    applied = session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": STRATEGY_PRODUCT_STATE_MIGRATION_VERSION},
+    ).fetchall()
+    if applied:
+        return False
+    _create_strategy_product_state_tables(session, dialect)
+    _extend_execution_intent_state(session, dialect)
+    session.execute(
+        text("DROP INDEX IF EXISTS uq_rule_strategies_tenant_single_running")
+    )
+    _backfill_strategy_product_state(session)
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": STRATEGY_PRODUCT_STATE_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=STRATEGY_PRODUCT_STATE_MIGRATION_VERSION,
+    )
+    return True
+
+
+def _create_strategy_product_state_tables(session: Session, dialect: str) -> None:
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    primary_id = "BIGSERIAL PRIMARY KEY" if dialect == "postgresql" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    json_type = "JSON"
+    statements = (
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_accounts (
+            id {primary_id},
+            tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+            strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE CASCADE,
+            scope VARCHAR(32) NOT NULL, credential_id VARCHAR(36) REFERENCES tenant_credentials(id) ON DELETE RESTRICT,
+            allocation_quote FLOAT NOT NULL, quote_balance FLOAT NOT NULL, positions {json_type} NOT NULL DEFAULT '{{}}',
+            realized_pnl_quote FLOAT NOT NULL DEFAULT 0, unrealized_pnl_quote FLOAT NOT NULL DEFAULT 0,
+            equity_quote FLOAT NOT NULL, version INTEGER NOT NULL DEFAULT 1, active BOOLEAN NOT NULL DEFAULT 1,
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_rule_strategy_account_tenant_strategy UNIQUE (tenant_id, strategy_id)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_risk_states (
+            id {primary_id},
+            account_id INTEGER NOT NULL UNIQUE REFERENCES rule_strategy_accounts(id) ON DELETE CASCADE,
+            tenant_id VARCHAR(36) NOT NULL, strategy_id VARCHAR(100) NOT NULL, state VARCHAR(16) NOT NULL,
+            daily_equity_baseline FLOAT NOT NULL, high_water_equity FLOAT NOT NULL,
+            current_drawdown_pct FLOAT NOT NULL DEFAULT 0, cooldown_until {timestamp_type},
+            reason_code VARCHAR(96), reason_detail VARCHAR(1000), version INTEGER NOT NULL DEFAULT 1,
+            updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_monitor_symbols (
+            id {primary_id},
+            tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+            strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE CASCADE,
+            symbol VARCHAR(32) NOT NULL, state VARCHAR(16) NOT NULL DEFAULT 'candidate',
+            reason_code VARCHAR(96), reason_detail VARCHAR(1000), evaluated_at {timestamp_type},
+            next_check_at {timestamp_type}, protected_held BOOLEAN NOT NULL DEFAULT 0,
+            consecutive_low_volume_days INTEGER NOT NULL DEFAULT 0, lease_owner VARCHAR(100), lease_until {timestamp_type},
+            CONSTRAINT uq_rule_strategy_monitor_symbol UNIQUE (tenant_id, strategy_id, symbol)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_order_attempts (
+            id VARCHAR(36) PRIMARY KEY, intent_id VARCHAR(36) NOT NULL REFERENCES rule_strategy_execution_intents(id) ON DELETE CASCADE,
+            tenant_id VARCHAR(36) NOT NULL, venue VARCHAR(32) NOT NULL, client_order_id VARCHAR(128) NOT NULL,
+            venue_order_id VARCHAR(128), requested_price VARCHAR(32), requested_quantity VARCHAR(32) NOT NULL,
+            status VARCHAR(32) NOT NULL, reconciliation_source VARCHAR(32), error_code VARCHAR(96),
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_rule_strategy_order_attempt_venue_client UNIQUE (venue, client_order_id)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_fills (
+            id VARCHAR(36) PRIMARY KEY, intent_id VARCHAR(36) NOT NULL REFERENCES rule_strategy_execution_intents(id) ON DELETE CASCADE,
+            attempt_id VARCHAR(36) REFERENCES rule_strategy_order_attempts(id) ON DELETE SET NULL,
+            tenant_id VARCHAR(36) NOT NULL, average_price VARCHAR(32) NOT NULL, quantity VARCHAR(32) NOT NULL,
+            fee_quote VARCHAR(32) NOT NULL DEFAULT '0', remaining_quantity VARCHAR(32) NOT NULL DEFAULT '0',
+            observed_slippage_pct VARCHAR(32) NOT NULL DEFAULT '0', reconciliation_source VARCHAR(32) NOT NULL,
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_events (
+            id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+            strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE CASCADE,
+            account_id INTEGER REFERENCES rule_strategy_accounts(id) ON DELETE SET NULL, correlation_id VARCHAR(100) NOT NULL,
+            evaluation_id VARCHAR(100), intent_id VARCHAR(36), order_attempt_id VARCHAR(36), monitor_symbol_id INTEGER,
+            actor VARCHAR(16) NOT NULL, reason_code VARCHAR(96) NOT NULL, payload_version INTEGER NOT NULL DEFAULT 1,
+            before_state {json_type} NOT NULL DEFAULT '{{}}', after_state {json_type} NOT NULL DEFAULT '{{}}',
+            created_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS rule_strategy_execution_leases (
+            strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE CASCADE,
+            execution_generation INTEGER NOT NULL, owner_id VARCHAR(100) NOT NULL, expires_at {timestamp_type} NOT NULL,
+            updated_at {timestamp_type} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (strategy_id, execution_generation)
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_rule_strategy_risk_tenant_strategy ON rule_strategy_risk_states (tenant_id, strategy_id)",
+        "CREATE INDEX IF NOT EXISTS ix_rule_strategy_monitor_due ON rule_strategy_monitor_symbols (state, next_check_at)",
+        "CREATE INDEX IF NOT EXISTS ix_rule_strategy_events_tenant_strategy ON rule_strategy_events (tenant_id, strategy_id, created_at)",
+    )
+    for statement in statements:
+        session.execute(text(statement))
+
+
+def _extend_execution_intent_state(session: Session, dialect: str) -> None:
+    additions = {
+        "accepted_quote": "VARCHAR(32)",
+        "accepted_quantity": "VARCHAR(32)",
+        "decision_price": "VARCHAR(32)",
+        "execution_target": "VARCHAR(32) NOT NULL DEFAULT 'paper'",
+        "leg_kind": "VARCHAR(16) NOT NULL DEFAULT 'entry'",
+        "lifecycle_state": "VARCHAR(32) NOT NULL DEFAULT 'pending'",
+    }
+    if dialect == "postgresql":
+        for name, definition in additions.items():
+            session.execute(
+                text(
+                    "ALTER TABLE rule_strategy_execution_intents "
+                    f"ADD COLUMN IF NOT EXISTS {name} {definition}"
+                )
+            )
+        return
+    columns = {
+        row[1]
+        for row in session.execute(
+            text("PRAGMA table_info(rule_strategy_execution_intents)")
+        ).fetchall()
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            session.execute(
+                text(
+                    "ALTER TABLE rule_strategy_execution_intents "
+                    f"ADD COLUMN {name} {definition}"
+                )
+            )
+
+
+def _backfill_strategy_product_state(session: Session) -> None:
+    for strategy in session.query(RuleStrategy).all():
+        config = dict(strategy.config or {})
+        capital = float(config.get("initial_capital_quote", 10_000.0))
+        execution = dict(config.get("execution") or {})
+        environment = execution.get("environment", "paper")
+        credential_id = execution.get("sandbox_connection_id")
+        scope = "paper_virtual" if environment == "paper" else "dedicated_credential"
+        existing_account = session.execute(
+            text(
+                "SELECT id FROM rule_strategy_accounts "
+                "WHERE tenant_id = :tenant_id AND strategy_id = :strategy_id"
+            ),
+            {"tenant_id": strategy.tenant_id, "strategy_id": strategy.strategy_id},
+        ).first()
+        if existing_account is None:
+            session.execute(
+                text(
+                    "INSERT INTO rule_strategy_accounts "
+                    "(tenant_id, strategy_id, scope, credential_id, allocation_quote, quote_balance, positions, "
+                    "realized_pnl_quote, unrealized_pnl_quote, equity_quote, version, active) "
+                    "VALUES (:tenant_id, :strategy_id, :scope, :credential_id, :capital, :capital, :positions, "
+                    "0, 0, :capital, 1, :active)"
+                ),
+                {
+                    "tenant_id": strategy.tenant_id,
+                    "strategy_id": strategy.strategy_id,
+                    "scope": scope,
+                    "credential_id": credential_id,
+                    "capital": capital,
+                    "positions": "{}",
+                    "active": True,
+                }
+            )
+        account_id = session.execute(
+            text(
+                "SELECT id FROM rule_strategy_accounts "
+                "WHERE tenant_id = :tenant_id AND strategy_id = :strategy_id"
+            ),
+            {"tenant_id": strategy.tenant_id, "strategy_id": strategy.strategy_id},
+        ).scalar_one()
+        state = "normal" if environment == "paper" else "only_reduce"
+        reason_code = None if environment == "paper" else "shared_exchange_account_requires_dedicated_scope"
+        session.execute(
+            text(
+                "INSERT INTO rule_strategy_risk_states "
+                "(account_id, tenant_id, strategy_id, state, daily_equity_baseline, high_water_equity, "
+                "current_drawdown_pct, reason_code, reason_detail, version) "
+                "SELECT :account_id, :tenant_id, :strategy_id, :state, :capital, :capital, "
+                "0, :reason_code, :reason_detail, 1 "
+                "WHERE NOT EXISTS (SELECT 1 FROM rule_strategy_risk_states WHERE account_id = :account_id)"
+            ),
+            {
+                "account_id": account_id,
+                "tenant_id": strategy.tenant_id,
+                "strategy_id": strategy.strategy_id,
+                "state": state,
+                "capital": capital,
+                "reason_code": reason_code,
+                "reason_detail": "共享交易所账户未证明隔离，已仅允许减仓或平仓。" if reason_code else None,
+            },
+        )
+        for symbol in config.get("symbols") or []:
+            session.execute(
+                text(
+                    "INSERT INTO rule_strategy_monitor_symbols "
+                    "(tenant_id, strategy_id, symbol, state, protected_held, consecutive_low_volume_days) "
+                    "SELECT :tenant_id, :strategy_id, :symbol, 'candidate', :protected_held, 0 "
+                    "WHERE NOT EXISTS (SELECT 1 FROM rule_strategy_monitor_symbols "
+                    "WHERE tenant_id = :tenant_id AND strategy_id = :strategy_id AND symbol = :symbol)"
+                ),
+                {
+                    "tenant_id": strategy.tenant_id,
+                    "strategy_id": strategy.strategy_id,
+                    "symbol": str(symbol).upper().replace("/", "-"),
+                    "protected_held": False,
+                },
+            )
 def migrate_rule_strategy_execution_attribution(session: Session) -> bool:
     """Install execution-attribution DDL exactly once, failing closed on errors."""
     dialect = session.bind.dialect.name
@@ -158,7 +378,7 @@ def _intent_table_ddl(json_type: str, timestamp_type: str, payload_default: str)
             execution_generation INTEGER NOT NULL CHECK (execution_generation >= 1),
             execution_source VARCHAR(32) NOT NULL DEFAULT 'rule_strategy',
             tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
-            credential_id VARCHAR(36) NOT NULL REFERENCES tenant_credentials(id) ON DELETE RESTRICT,
+            credential_id VARCHAR(36) REFERENCES tenant_credentials(id) ON DELETE RESTRICT,
             idempotency_key VARCHAR(128) NOT NULL,
             symbol VARCHAR(32) NOT NULL,
             side VARCHAR(8) NOT NULL,
@@ -257,3 +477,52 @@ def migrate_tenant_profiles(session: Session) -> int:
         session.commit()
         logger.info("Created profiles for {count} existing tenants", count=len(profiles))
     return len(profiles)
+
+RULE_STRATEGY_VALIDATION_MIGRATION_VERSION = "20260805_rule_strategy_validation_v1"
+
+
+def migrate_rule_strategy_validation(session: Session) -> bool:
+    """Create reproducible validation tables before any validation worker starts."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "rule strategy validation migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": RULE_STRATEGY_VALIDATION_MIGRATION_VERSION},
+    ).first():
+        return False
+    from valuecell.server.db.models.rule_strategy_validation import (
+        RuleStrategyValidationDataset,
+        RuleStrategyValidationFill,
+        RuleStrategyValidationPoint,
+        RuleStrategyValidationRun,
+    )
+    session.bind.metadata.create_all(
+        session.bind,
+        tables=[
+            RuleStrategyValidationRun.__table__,
+            RuleStrategyValidationDataset.__table__,
+            RuleStrategyValidationPoint.__table__,
+            RuleStrategyValidationFill.__table__,
+        ],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": RULE_STRATEGY_VALIDATION_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=RULE_STRATEGY_VALIDATION_MIGRATION_VERSION,
+    )
+    return True

@@ -217,21 +217,19 @@ def test_rule_strategies_derive_tenant_scope_from_principal_and_isolate_records(
     ]
 
 
-def test_only_one_rule_strategy_can_run_per_tenant_without_implicit_stop():
+def test_same_tenant_strategies_run_concurrently_without_implicit_stop():
     client, principal = _tenant_client()
     first = _create_strategy(client, "first")
     second = _create_strategy(client, "second")
 
     assert client.post(f"/rule-strategies/{first}/start").status_code == 200
-    rejected = client.post(f"/rule-strategies/{second}/start")
-    assert rejected.status_code == 409
+    assert client.post(f"/rule-strategies/{second}/start").status_code == 200
     assert client.get(f"/rule-strategies/{first}").json()["data"]["status"] == "running"
-    assert client.get(f"/rule-strategies/{second}").json()["data"]["status"] == "stopped"
+    assert client.get(f"/rule-strategies/{second}").json()["data"]["status"] == "running"
 
     principal[0] = CurrentPrincipal(user_id="user-b", tenant_id="tenant-b")
     other_tenant = _create_strategy(client, "other tenant")
     assert client.post(f"/rule-strategies/{other_tenant}/start").status_code == 200
-
 
 def test_rule_strategy_delete_lifecycle_and_tenant_isolation():
     repository = TenantRuleStrategyRepository()

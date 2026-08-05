@@ -1,5 +1,5 @@
-export type RuleStrategyStatus = "running" | "stopped";
-export type RuleStrategyAction = "buy" | "sell" | "no_op";
+export type RuleStrategyStatus = "running" | "stopped" | "archived";
+export type RuleStrategyAction = "entry" | "add" | "reduce" | "close" | "buy" | "sell" | "no_op";
 export type RuleConditionState =
   | "triggered"
   | "not_triggered"
@@ -201,6 +201,11 @@ export interface RuleStrategyRiskConfig {
   max_additions: number;
   max_positions: number;
   leverage: number;
+  daily_loss_halt_pct?: number | null;
+  max_drawdown_only_reduce_pct?: number | null;
+  symbol_daily_drop_force_close_pct?: number | null;
+  reentry_cooldown_hours?: number | null;
+  min_add_price_move_pct?: number | null;
 }
 
 export type RuleStrategyInterval = RuleStrategyCandleInterval;
@@ -220,12 +225,17 @@ export interface RuleStrategyConfig {
   symbols: string[];
   interval: RuleStrategyInterval;
   decide_interval_s?: number | null;
+  template_id?: string | null;
+  template_version?: number | null;
+  indicator_formula_version?: "trend_resonance_v2_1" | null;
   moving_average: MovingAverageRuleConfig;
   rsi: RsiRuleConfig;
   bollinger: BollingerRuleConfig;
   momentum_macd: MomentumMacdRuleConfig;
   advanced_rules: AdvancedRuleSetConfig;
   program?: RuleStrategyProgramV2 | null;
+  monitor?: Record<string, unknown> | null;
+  tranches?: Record<string, unknown> | null;
   execution: RuleStrategyExecutionConfig;
   risk: RuleStrategyRiskConfig;
 }

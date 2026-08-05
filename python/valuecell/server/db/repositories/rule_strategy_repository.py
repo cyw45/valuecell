@@ -1,18 +1,23 @@
 """Database repository for paper-only rule strategies and evaluation journals."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..connection import get_database_manager
 from ..models.rule_strategy import (
     RuleStrategy,
+    RuleStrategyAccount,
     RuleStrategyEvaluationJournal,
+    RuleStrategyEvent,
     RuleStrategyExecutionIntent,
+    RuleStrategyExecutionLease,
+    RuleStrategyMonitorSymbol,
+    RuleStrategyRiskState,
 )
 from ..models.sandbox_exchange_order import SandboxExchangeOrder
 
@@ -41,18 +46,17 @@ class RuleStrategyRepository:
             if self.db_session is None:
                 session.close()
 
-    def list(self, tenant_id: str) -> list[RuleStrategy]:
+    def list(
+        self, tenant_id: str, *, include_archived: bool = False
+    ) -> list[RuleStrategy]:
         session = self._get_session()
         try:
-            strategies = (
-                session.query(RuleStrategy)
-                .filter(
-                    RuleStrategy.tenant_id == tenant_id,
-                    RuleStrategy.status != "archived",
-                )
-                .order_by(RuleStrategy.created_at.desc())
-                .all()
+            query = session.query(RuleStrategy).filter(
+                RuleStrategy.tenant_id == tenant_id
             )
+            if not include_archived:
+                query = query.filter(RuleStrategy.status != "archived")
+            strategies = query.order_by(RuleStrategy.created_at.desc()).all()
             for strategy in strategies:
                 session.expunge(strategy)
             return strategies
@@ -92,54 +96,6 @@ class RuleStrategyRepository:
             if self.db_session is None:
                 session.close()
 
-    def start_exclusive(
-        self, strategy_id: str, tenant_id: str
-    ) -> tuple[Optional[RuleStrategy], bool]:
-        """Atomically start unless the tenant already has another runner."""
-        session = self._get_session()
-        try:
-            strategies = (
-                session.query(RuleStrategy)
-                .filter(RuleStrategy.tenant_id == tenant_id)
-                .order_by(RuleStrategy.id)
-                .with_for_update()
-                .all()
-            )
-            strategy = next(
-                (item for item in strategies if item.strategy_id == strategy_id), None
-            )
-            if strategy is None:
-                session.rollback()
-                return None, False
-            if any(
-                item.status == "running" and item.strategy_id != strategy_id
-                for item in strategies
-            ):
-                session.rollback()
-                return strategy, True
-            strategy.status = "running"
-            strategy.execution_generation = (strategy.execution_generation or 1) + 1
-            session.commit()
-            session.refresh(strategy)
-            session.expunge(strategy)
-            return strategy, False
-        except IntegrityError:
-            session.rollback()
-            current = (
-                session.query(RuleStrategy)
-                .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
-                .first()
-            )
-            if current is None:
-                return None, False
-            session.expunge(current)
-            return current, True
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            if self.db_session is None:
-                session.close()
 
     def delete_if_allowed(self, strategy_id: str, tenant_id: str) -> str:
         """Delete a stopped unaudited strategy in one locked transaction."""
@@ -369,6 +325,380 @@ class RuleStrategyRepository:
             for strategy in strategies:
                 session.expunge(strategy)
             return strategies
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def create_with_current_state(
+        self,
+        strategy: RuleStrategy,
+        *,
+        scope: str,
+        credential_id: str | None,
+        symbol_candidates: list[str],
+    ) -> RuleStrategy:
+        """Create a stopped strategy and every required current-state row atomically."""
+        session = self._get_session()
+        try:
+            capital = float(strategy.config["initial_capital_quote"])
+            account = RuleStrategyAccount(
+                tenant_id=strategy.tenant_id,
+                strategy_id=strategy.strategy_id,
+                scope=scope,
+                credential_id=credential_id,
+                allocation_quote=capital,
+                quote_balance=capital,
+                equity_quote=capital,
+            )
+            session.add_all([strategy, account])
+            session.flush()
+            isolated_scope = scope in {
+                "paper_virtual",
+                "dedicated_credential",
+                "dedicated_subaccount",
+            }
+            state = "normal" if isolated_scope else "only_reduce"
+            reason_code = (
+                None if state == "normal" else "shared_exchange_account_requires_dedicated_scope"
+            )
+            session.add(
+                RuleStrategyRiskState(
+                    account_id=account.id,
+                    tenant_id=strategy.tenant_id,
+                    strategy_id=strategy.strategy_id,
+                    state=state,
+                    daily_equity_baseline=capital,
+                    high_water_equity=capital,
+                    reason_code=reason_code,
+                    reason_detail=(
+                        None
+                        if reason_code is None
+                        else "共享交易所账户未证明隔离，已仅允许减仓或平仓。"
+                    ),
+                )
+            )
+            session.add_all(
+                [
+                    RuleStrategyMonitorSymbol(
+                        tenant_id=strategy.tenant_id,
+                        strategy_id=strategy.strategy_id,
+                        symbol=symbol,
+                        state="candidate",
+                    )
+                    for symbol in symbol_candidates
+                ]
+            )
+            session.commit()
+            session.refresh(strategy)
+            session.expunge(strategy)
+            return strategy
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def get_account_state(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+    ) -> tuple[RuleStrategyAccount, RuleStrategyRiskState] | None:
+        """Read current account and risk state without replaying a journal."""
+        session = self._get_session()
+        try:
+            account = session.query(RuleStrategyAccount).filter_by(
+                strategy_id=strategy_id, tenant_id=tenant_id
+            ).first()
+            if account is None:
+                return None
+            risk = session.query(RuleStrategyRiskState).filter_by(
+                account_id=account.id, tenant_id=tenant_id, strategy_id=strategy_id
+            ).first()
+            if risk is None:
+                return None
+            session.expunge(account)
+            session.expunge(risk)
+            return account, risk
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def monitors(
+        self, strategy_id: str, tenant_id: str
+    ) -> list[RuleStrategyMonitorSymbol]:
+        """Return monitor facts independently of historical diagnostics."""
+        session = self._get_session()
+        try:
+            rows = (
+                session.query(RuleStrategyMonitorSymbol)
+                .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+                .order_by(RuleStrategyMonitorSymbol.symbol.asc())
+                .all()
+            )
+            for row in rows:
+                session.expunge(row)
+            return rows
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def claim_execution_lease(
+        self,
+        strategy_id: str,
+        execution_generation: int,
+        owner_id: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 90,
+    ) -> bool:
+        """Fence a scheduler tick by strategy generation across worker processes."""
+        session = self._get_session()
+        timestamp = now or datetime.now(timezone.utc)
+        try:
+            lease = session.query(RuleStrategyExecutionLease).filter_by(
+                strategy_id=strategy_id,
+                execution_generation=execution_generation,
+            ).with_for_update().first()
+            expires_at = (
+                lease.expires_at.replace(tzinfo=timezone.utc)
+                if lease is not None and lease.expires_at.tzinfo is None
+                else lease.expires_at if lease is not None else None
+            )
+            if lease is not None and expires_at is not None and expires_at >= timestamp and lease.owner_id != owner_id:
+                session.rollback()
+                return False
+            if lease is None:
+                session.add(
+                    RuleStrategyExecutionLease(
+                        strategy_id=strategy_id,
+                        execution_generation=execution_generation,
+                        owner_id=owner_id,
+                        expires_at=timestamp + timedelta(seconds=lease_seconds),
+                    )
+                )
+            else:
+                lease.owner_id = owner_id
+                lease.expires_at = timestamp + timedelta(seconds=lease_seconds)
+            session.commit()
+            return True
+        except IntegrityError:
+            session.rollback()
+            return False
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def claim_monitor_lease(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        owner_id: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 60,
+    ) -> list[RuleStrategyMonitorSymbol]:
+        """Claim due candidate symbols for a single monitor-review worker."""
+        session = self._get_session()
+        timestamp = now or datetime.now(timezone.utc)
+        try:
+            rows = (
+                session.query(RuleStrategyMonitorSymbol)
+                .filter(
+                    RuleStrategyMonitorSymbol.strategy_id == strategy_id,
+                    RuleStrategyMonitorSymbol.tenant_id == tenant_id,
+                    RuleStrategyMonitorSymbol.state == "candidate",
+                    or_(
+                        RuleStrategyMonitorSymbol.next_check_at.is_(None),
+                        RuleStrategyMonitorSymbol.next_check_at <= timestamp,
+                    ),
+                    or_(
+                        RuleStrategyMonitorSymbol.lease_until.is_(None),
+                        RuleStrategyMonitorSymbol.lease_until < timestamp,
+                    ),
+                )
+                .with_for_update()
+                .all()
+            )
+            for row in rows:
+                row.lease_owner = owner_id
+                row.lease_until = timestamp + timedelta(seconds=lease_seconds)
+            session.commit()
+            for row in rows:
+                session.refresh(row)
+                session.expunge(row)
+            return rows
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def release_monitor_lease(
+        self, monitor_id: int, tenant_id: str, owner_id: str
+    ) -> None:
+        """Release only a lease that still belongs to the current worker."""
+        session = self._get_session()
+        try:
+            row = session.query(RuleStrategyMonitorSymbol).filter_by(
+                id=monitor_id, tenant_id=tenant_id, lease_owner=owner_id
+            ).with_for_update().first()
+            if row is None:
+                session.rollback()
+                return
+            row.lease_owner = None
+            row.lease_until = None
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def append_evaluation_with_state(
+        self,
+        journal: RuleStrategyEvaluationJournal,
+        account: RuleStrategyAccount,
+        risk: RuleStrategyRiskState,
+        event: RuleStrategyEvent,
+    ) -> RuleStrategyEvaluationJournal:
+        """Commit the journal and current account/risk transition atomically."""
+        session = self._get_session()
+        try:
+            managed_account = session.merge(account)
+            managed_risk = session.merge(risk)
+            managed_account.version = (managed_account.version or 0) + 1
+            managed_risk.version = (managed_risk.version or 0) + 1
+            event.account_id = managed_account.id
+            session.add_all([journal, event])
+            session.commit()
+            session.refresh(journal)
+            session.expunge(journal)
+            return journal
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def summaries(self, tenant_id: str) -> list[dict[str, object]]:
+        """Return selection-ready current facts without replaying evaluation journals."""
+        session = self._get_session()
+        try:
+            rows = (
+                session.query(RuleStrategy, RuleStrategyAccount, RuleStrategyRiskState)
+                .join(
+                    RuleStrategyAccount,
+                    (RuleStrategyAccount.strategy_id == RuleStrategy.strategy_id)
+                    & (RuleStrategyAccount.tenant_id == RuleStrategy.tenant_id),
+                )
+                .join(
+                    RuleStrategyRiskState,
+                    RuleStrategyRiskState.account_id == RuleStrategyAccount.id,
+                )
+                .filter(
+                    RuleStrategy.tenant_id == tenant_id,
+                    RuleStrategy.status != "archived",
+                )
+                .order_by(RuleStrategy.created_at.desc())
+                .all()
+            )
+            counts: dict[str, dict[str, int]] = {}
+            for strategy_id, state in session.query(
+                RuleStrategyMonitorSymbol.strategy_id,
+                RuleStrategyMonitorSymbol.state,
+            ).filter(RuleStrategyMonitorSymbol.tenant_id == tenant_id).all():
+                by_state = counts.setdefault(strategy_id, {})
+                by_state[state] = by_state.get(state, 0) + 1
+            return [
+                {
+                    "strategy_id": strategy.strategy_id,
+                    "name": strategy.name,
+                    "status": strategy.status,
+                    "template_id": (strategy.config or {}).get("template_id"),
+                    "account": {
+                        "scope": account.scope,
+                        "equity_quote": account.equity_quote,
+                        "quote_balance": account.quote_balance,
+                        "realized_pnl_quote": account.realized_pnl_quote,
+                        "unrealized_pnl_quote": account.unrealized_pnl_quote,
+                    },
+                    "risk": {
+                        "state": risk.state,
+                        "reason_code": risk.reason_code,
+                        "reason_detail": risk.reason_detail,
+                    },
+                    "monitor_counts": {
+                        state: counts.get(strategy.strategy_id, {}).get(state, 0)
+                        for state in ("candidate", "admitted", "held", "removed")
+                    },
+                }
+                for strategy, account, risk in rows
+            ]
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def update_monitor_state(
+        self,
+        monitor_id: int,
+        tenant_id: str,
+        *,
+        state: str,
+        reason_code: str,
+        reason_detail: str,
+        evaluated_at: datetime,
+        next_check_at: datetime,
+        protected_held: bool,
+        consecutive_low_volume_days: int,
+    ) -> RuleStrategyMonitorSymbol | None:
+        """Persist one monitor review while retaining stable rejection evidence."""
+        session = self._get_session()
+        try:
+            row = session.query(RuleStrategyMonitorSymbol).filter_by(
+                id=monitor_id, tenant_id=tenant_id
+            ).with_for_update().first()
+            if row is None:
+                session.rollback()
+                return None
+            row.state = state
+            row.reason_code = reason_code
+            row.reason_detail = reason_detail
+            row.evaluated_at = evaluated_at
+            row.next_check_at = next_check_at
+            row.protected_held = protected_held
+            row.consecutive_low_volume_days = consecutive_low_volume_days
+            row.lease_owner = None
+            row.lease_until = None
+            session.commit()
+            session.refresh(row)
+            session.expunge(row)
+            return row
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            if self.db_session is None:
+                session.close()
+    def update_risk_state(self, risk: RuleStrategyRiskState) -> RuleStrategyRiskState:
+        """Persist a fail-closed risk transition and advance its version."""
+        session = self._get_session()
+        try:
+            managed = session.merge(risk)
+            managed.version = (managed.version or 0) + 1
+            session.commit()
+            session.refresh(managed)
+            session.expunge(managed)
+            return managed
+        except Exception:
+            session.rollback()
+            raise
         finally:
             if self.db_session is None:
                 session.close()

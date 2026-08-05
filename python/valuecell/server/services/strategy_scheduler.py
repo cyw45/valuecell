@@ -177,7 +177,7 @@ class StrategyScheduler:
 
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()
-
+        self._worker_id = f"strategy-scheduler-{uuid4().hex}"
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -242,6 +242,8 @@ class StrategyScheduler:
             job_args = [
                 strategy.strategy_id,
                 strategy.tenant_id,
+                getattr(strategy, "execution_generation", 1) or 1,
+                self._worker_id,
                 config.model_dump(mode="json"),
             ]
             existing_job = self._scheduler.get_job(strategy.strategy_id)
@@ -271,9 +273,40 @@ class StrategyScheduler:
         self,
         strategy_id: str,
         tenant_id: str,
-        config_dict: dict[str, Any],
+        execution_generation: int | dict[str, Any],
+        worker_id: str | dict[str, Any] | None = None,
+        config_dict: dict[str, Any] | None = None,
     ) -> None:
-        """Fetch OHLCV, evaluate rules, journal results, and safely route the chosen execution target."""
+        """Fetch, evaluate, and execute only while holding the durable lease."""
+        if config_dict is None and worker_id is None:
+            config_dict = execution_generation if isinstance(execution_generation, dict) else {}
+            execution_generation = 1
+            worker_id = self._worker_id
+        elif config_dict is None:
+            config_dict = worker_id if isinstance(worker_id, dict) else {}
+            worker_id = self._worker_id
+            execution_generation = 1
+        assert isinstance(config_dict, dict)
+        assert isinstance(worker_id, str)
+        assert isinstance(execution_generation, int)
+        lease_session = get_database_manager().get_session()
+        try:
+            if hasattr(lease_session, "query"):
+                strategy_row = RuleStrategyRepository(db_session=lease_session).get(
+                    strategy_id, tenant_id
+                )
+                if strategy_row is not None:
+                    execution_generation = strategy_row.execution_generation or execution_generation
+                    if not RuleStrategyRepository(db_session=lease_session).claim_execution_lease(
+                        strategy_id, execution_generation, worker_id
+                    ):
+                        logger.info(
+                            "StrategyScheduler skipped leased tick strategy_id={}",
+                            strategy_id,
+                        )
+                        return
+        finally:
+            lease_session.close()
         session = get_database_manager().get_session()
         try:
             if not TenantAccessService.access_for(session, tenant_id).active:
@@ -286,6 +319,20 @@ class StrategyScheduler:
             session.close()
         config = RuleStrategyConfig.model_validate(config_dict)
         symbols = config.symbols
+        monitor_session = get_database_manager().get_session()
+        try:
+            if hasattr(monitor_session, "query"):
+                monitor_rows = RuleStrategyRepository(db_session=monitor_session).monitors(
+                    strategy_id, tenant_id
+                )
+                if monitor_rows:
+                    symbols = [
+                        row.symbol
+                        for row in monitor_rows
+                        if row.state in {"admitted", "held"}
+                    ]
+        finally:
+            monitor_session.close()
         intervals = sorted(_required_intervals(config))
         lookbacks = _program_requirements(config) if config.program is not None else {
             interval: _required_lookback(config) for interval in intervals

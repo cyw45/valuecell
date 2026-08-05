@@ -7,6 +7,13 @@ from typing import Annotated, Literal, Union
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+RuleStrategyTemplateId = Literal["trend_resonance_v2_1"]
+RuleStrategyIndicatorFormulaVersion = Literal["trend_resonance_v2_1"]
+RuleStrategyLegAction = Literal["entry", "add", "reduce", "close"]
+RuleStrategyAction = Literal[
+    "entry", "add", "reduce", "close", "no_op", "buy", "sell"
+]
+
 class RuleStrategyModel(BaseModel):
     """Strict base contract that rejects unknown and non-finite inputs."""
 
@@ -152,7 +159,7 @@ class MomentumMacdRuleConfig(RuleStrategyModel):
 
 
 class RuleStrategyRiskConfig(RuleStrategyModel):
-    """Risk limits and one fixed quote amount for each new position."""
+    """Legacy limits plus optional V2.1 account-risk circuit-breaker settings."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -166,13 +173,130 @@ class RuleStrategyRiskConfig(RuleStrategyModel):
     max_additions: int = Field(default=0, ge=0, le=20)
     max_positions: int = Field(default=1, ge=1, le=1_000)
     leverage: float = Field(default=1.0, ge=1, le=100)
+    daily_loss_halt_pct: float | None = Field(default=None, gt=0, le=1)
+    max_drawdown_only_reduce_pct: float | None = Field(default=None, gt=0, le=1)
+    symbol_daily_drop_force_close_pct: float | None = Field(
+        default=None, gt=0, le=1
+    )
+    reentry_cooldown_hours: int | None = Field(default=None, ge=1, le=24 * 30)
+    min_add_price_move_pct: float | None = Field(default=None, gt=0, le=1)
+    brar_extreme_br_threshold: float | None = Field(default=None, gt=0, le=10_000)
+    brar_extreme_ar_threshold: float | None = Field(default=None, gt=0, le=10_000)
+    brar_extreme_cooldown_hours: int | None = Field(
+        default=None, ge=1, le=24 * 30
+    )
+    br_breakout_lower_bound: float | None = Field(default=None, ge=0, le=10_000)
+    br_breakout_upper_bound: float | None = Field(default=None, ge=0, le=10_000)
+    br_breakout_threshold: float | None = Field(default=None, gt=0, le=10_000)
+    br_breakout_lookback_bars: int | None = Field(default=None, ge=1, le=100)
+    br_breakout_cooldown_hours: int | None = Field(
+        default=None, ge=1, le=24 * 30
+    )
 
     @model_validator(mode="after")
-    def validate_additions(self) -> "RuleStrategyRiskConfig":
+    def validate_limits(self) -> "RuleStrategyRiskConfig":
         if self.add_to_winners and self.max_additions == 0:
             raise ValueError("max_additions must be positive when add_to_winners is enabled")
         if not self.add_to_winners and self.max_additions != 0:
             raise ValueError("max_additions requires add_to_winners")
+
+        brar_extreme = (
+            self.brar_extreme_br_threshold,
+            self.brar_extreme_ar_threshold,
+            self.brar_extreme_cooldown_hours,
+        )
+        if any(value is not None for value in brar_extreme) and not all(
+            value is not None for value in brar_extreme
+        ):
+            raise ValueError("all BRAR extreme circuit-breaker fields are required")
+
+        br_breakout = (
+            self.br_breakout_lower_bound,
+            self.br_breakout_upper_bound,
+            self.br_breakout_threshold,
+            self.br_breakout_lookback_bars,
+            self.br_breakout_cooldown_hours,
+        )
+        if any(value is not None for value in br_breakout) and not all(
+            value is not None for value in br_breakout
+        ):
+            raise ValueError("all BR breakout circuit-breaker fields are required")
+        if all(value is not None for value in br_breakout):
+            assert self.br_breakout_lower_bound is not None
+            assert self.br_breakout_upper_bound is not None
+            assert self.br_breakout_threshold is not None
+            if self.br_breakout_lower_bound > self.br_breakout_upper_bound:
+                raise ValueError("br_breakout_lower_bound must not exceed upper_bound")
+            if self.br_breakout_threshold <= self.br_breakout_upper_bound:
+                raise ValueError("br_breakout_threshold must exceed upper_bound")
+        return self
+
+
+class RuleStrategyMonitorConfig(RuleStrategyModel):
+    """Deterministic monitor-pool admission and removal thresholds."""
+
+    review_interval: Literal["1d"] = "1d"
+    minimum_listing_age_days: int = Field(default=60, ge=1, le=3_650)
+    minimum_average_quote_volume_30d: float = Field(
+        default=5_000_000.0, gt=0, le=1_000_000_000_000
+    )
+    minimum_price_quote: float = Field(default=1.0, gt=0, le=1_000_000_000)
+    removal_average_quote_volume_30d: float = Field(
+        default=2_000_000.0, gt=0, le=1_000_000_000_000
+    )
+    removal_consecutive_daily_checks: int = Field(default=7, ge=1, le=365)
+
+    @model_validator(mode="after")
+    def validate_removal_threshold(self) -> "RuleStrategyMonitorConfig":
+        if (
+            self.removal_average_quote_volume_30d
+            >= self.minimum_average_quote_volume_30d
+        ):
+            raise ValueError(
+                "removal volume threshold must be lower than admission threshold"
+            )
+        return self
+
+
+class RuleStrategyAddTrancheConfig(RuleStrategyModel):
+    """One price-confirmed addition expressed against the symbol target."""
+
+    trigger_return_pct: float = Field(gt=0, le=100)
+    fraction_of_symbol_target: float = Field(gt=0, le=1)
+
+
+class RuleStrategyTrancheConfig(RuleStrategyModel):
+    """Entry, addition, and profit-tier sizing independent of current equity."""
+
+    entry_fraction_of_symbol_target: float = Field(default=1.0, gt=0, le=1)
+    add_tranches: tuple[RuleStrategyAddTrancheConfig, ...] = Field(
+        default=(), max_length=20
+    )
+    profit_tier_return_pcts: tuple[float, ...] = Field(default=(), max_length=20)
+
+    @model_validator(mode="after")
+    def validate_tranche_order(self) -> "RuleStrategyTrancheConfig":
+        add_returns = [tranche.trigger_return_pct for tranche in self.add_tranches]
+        if any(
+            current <= previous
+            for previous, current in zip(add_returns, add_returns[1:])
+        ):
+            raise ValueError("add tranche trigger returns must be strictly increasing")
+        if (
+            self.entry_fraction_of_symbol_target
+            + sum(tranche.fraction_of_symbol_target for tranche in self.add_tranches)
+            > 1
+        ):
+            raise ValueError("entry and addition fractions cannot exceed the symbol target")
+        if any(
+            current <= previous
+            for previous, current in zip(
+                self.profit_tier_return_pcts, self.profit_tier_return_pcts[1:]
+            )
+        ):
+            raise ValueError("profit tier returns must be strictly increasing")
+        if any(value <= 0 or value > 100 for value in self.profit_tier_return_pcts):
+            raise ValueError("profit tier returns must be in (0, 100]")
         return self
 
 
@@ -482,11 +606,51 @@ class RuleStrategyExecutionConfig(RuleStrategyModel):
         return self
 
 
+class TrendResonanceV21Config(RuleStrategyModel):
+    """Formula parameters for an owned Trend Resonance V2.1 strategy clone."""
+
+    trend_interval: RuleInterval = "1d"
+    execution_interval: RuleInterval = "15m"
+    trend_short_ma_period: int = Field(default=20, ge=2, le=500)
+    trend_long_ma_period: int = Field(default=60, ge=2, le=500)
+    rsi_period: int = Field(default=14, ge=2, le=500)
+    entry_rsi_max: float = Field(default=15.0, ge=0, le=100)
+    exit_rsi_min: float = Field(default=82.0, ge=0, le=100)
+    bollinger_period: int = Field(default=20, ge=2, le=500)
+    bollinger_standard_deviations: float = Field(default=2.0, gt=0, le=10)
+    bollinger_middle_cross: Literal["above", "below"] = "above"
+    roc_period: int = Field(default=5, ge=1, le=500)
+    roc_entry_min_exclusive_pct: float = 0.0
+    roc_entry_max_inclusive_pct: float = 15.0
+    macd_fast_period: int = Field(default=12, ge=1, le=500)
+    macd_slow_period: int = Field(default=26, ge=2, le=500)
+    macd_signal_period: int = Field(default=9, ge=1, le=500)
+    brar_period: int = Field(default=26, ge=2, le=500)
+    close_on_trend_reversal: bool = True
+
+    @model_validator(mode="after")
+    def validate_formula_parameters(self) -> "TrendResonanceV21Config":
+        if self.trend_short_ma_period >= self.trend_long_ma_period:
+            raise ValueError("trend_short_ma_period must be smaller than trend_long_ma_period")
+        if self.entry_rsi_max >= self.exit_rsi_min:
+            raise ValueError("entry_rsi_max must be lower than exit_rsi_min")
+        if self.roc_entry_min_exclusive_pct >= self.roc_entry_max_inclusive_pct:
+            raise ValueError(
+                "roc_entry_min_exclusive_pct must be lower than roc_entry_max_inclusive_pct"
+            )
+        if self.macd_fast_period >= self.macd_slow_period:
+            raise ValueError("macd_fast_period must be smaller than macd_slow_period")
+        return self
+
+
 class RuleStrategyConfig(RuleStrategyModel):
     """Rule evaluation configuration with a paper or explicitly bound OKX Demo target."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
+    template_id: str | None = Field(default=None, min_length=1, max_length=100)
+    template_version: int | None = Field(default=None, ge=1, le=10_000)
+    indicator_formula_version: RuleStrategyIndicatorFormulaVersion | None = None
     mode: Literal["paper"] = "paper"
     initial_capital_quote: float = Field(default=10_000.0, gt=0, le=100_000_000)
     symbols: list[str] = Field(
@@ -501,11 +665,42 @@ class RuleStrategyConfig(RuleStrategyModel):
     momentum_macd: MomentumMacdRuleConfig = Field(default_factory=MomentumMacdRuleConfig)
     advanced_rules: AdvancedRuleSetConfig = Field(default_factory=AdvancedRuleSetConfig)
     program: RuleStrategyProgramV2 | None = None
+    trend_resonance: TrendResonanceV21Config | None = None
+    monitor: RuleStrategyMonitorConfig | None = None
+    tranches: RuleStrategyTrancheConfig | None = None
     risk: RuleStrategyRiskConfig = Field(default_factory=RuleStrategyRiskConfig)
     execution: RuleStrategyExecutionConfig = Field(default_factory=RuleStrategyExecutionConfig)
 
     @model_validator(mode="after")
-    def normalize_symbols(self) -> RuleStrategyConfig:
+    def normalize_symbols(self) -> "RuleStrategyConfig":
+        if (self.template_id is None) != (self.template_version is None):
+            raise ValueError("template_id and template_version must be supplied together")
+        if self.template_id == "trend_resonance_v2_1":
+            if self.template_version != 2:
+                raise ValueError("trend_resonance_v2_1 requires template_version 2")
+            if self.indicator_formula_version != "trend_resonance_v2_1":
+                raise ValueError(
+                    "trend_resonance_v2_1 requires its matching indicator formula version"
+                )
+            if self.trend_resonance is None:
+                raise ValueError("trend_resonance settings are required for the V2.1 template")
+            if self.monitor is None:
+                raise ValueError("monitor settings are required for the V2.1 template")
+            if self.tranches is None:
+                raise ValueError("tranche settings are required for the V2.1 template")
+        if self.indicator_formula_version == "trend_resonance_v2_1":
+            macd = self.advanced_rules.macd
+            if macd.enabled and (
+                macd.fast_window != 12
+                or macd.slow_window != 26
+                or macd.signal_window != 9
+            ):
+                raise ValueError(
+                    "trend_resonance_v2_1 MACD requires 12, 26, and 9 windows"
+                )
+            brar = self.advanced_rules.brar
+            if brar.enabled and brar.period != 26:
+                raise ValueError("trend_resonance_v2_1 BRAR requires period 26")
         if self.execution.environment == "okx_demo" and self.risk.leverage != 1:
             raise ValueError("OKX Demo spot execution requires leverage 1")
         if self.execution.environment == "okx_demo" and (
@@ -586,6 +781,8 @@ class RuleStrategyIndicatorValues(BaseModel):
     previous_macd_signal: float | None = None
     brar_ar: float | None = None
     brar_br: float | None = None
+    roc: float | None = None
+    macd_histogram: float | None = None
 
 
 class RuleStrategySizing(BaseModel):
@@ -626,7 +823,7 @@ class RuleStrategyEvaluationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["paper"] = "paper"
-    action: Literal["buy", "sell", "no_op"]
+    action: RuleStrategyAction
     reason_code: str
     reason: str
     conditions: list[RuleStrategyConditionCheck]

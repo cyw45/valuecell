@@ -241,8 +241,16 @@ export function ruleStrategyConfigToFormValues(
 
 export function strategyFormValuesToConfig(
   values: StrategyFormValues,
+  baseConfig?: RuleStrategyConfig,
 ): RuleStrategyConfig {
   return {
+    ...(baseConfig?.template_id
+      ? {
+          template_id: baseConfig.template_id,
+          template_version: baseConfig.template_version,
+          indicator_formula_version: baseConfig.indicator_formula_version,
+        }
+      : {}),
     mode: "paper",
     initial_capital_quote: values.initialCapital,
     confirmation_mode: values.confirmationMode,
@@ -274,6 +282,8 @@ export function strategyFormValuesToConfig(
     },
     advanced_rules: structuredClone(values.advancedRules),
     program: values.program ? structuredClone(values.program) : null,
+    ...(baseConfig?.monitor ? { monitor: structuredClone(baseConfig.monitor) } : {}),
+    ...(baseConfig?.tranches ? { tranches: structuredClone(baseConfig.tranches) } : {}),
     execution: {
       environment: values.executionEnvironment,
       ...(values.executionEnvironment === "okx_demo"
@@ -284,6 +294,7 @@ export function strategyFormValuesToConfig(
       max_total_quote_amount: values.maxDemoTotalQuoteAmount,
     },
     risk: {
+      ...baseConfig?.risk,
       order_quote_amount: values.orderQuoteAmount,
       take_profit_pct: values.takeProfitEnabled
         ? values.takeProfit / 100
@@ -298,7 +309,7 @@ export function strategyFormValuesToConfig(
       max_additions: values.maxAdditions,
       max_positions: values.maximumPositions,
       leverage: values.leverage,
-    },
+    }
   };
 }
 

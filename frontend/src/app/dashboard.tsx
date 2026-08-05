@@ -1,5 +1,4 @@
 import {
-  ArrowUpRight,
   AlertTriangle,
   BarChart3,
   CandlestickChart,
@@ -11,7 +10,6 @@ import {
   Moon,
   RadioTower,
   RefreshCw,
-  Settings2,
   Sun,
   TrendingDown,
   TrendingUp,
@@ -20,7 +18,6 @@ import {
 import { useTheme } from "next-themes";
 import {
   type ReactNode,
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -31,7 +28,9 @@ import {
   useRuleStrategy,
   useRuleStrategyDemoExecution,
   useRuleStrategyEvaluations,
+  useRuleStrategyMonitorState,
   useRuleStrategyPnlCurve,
+  useRuleStrategyRiskState,
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
 import {
@@ -43,7 +42,6 @@ import {
   shouldShowCandlestickLoading,
   shouldShowDashboardPageLoading,
 } from "@/app/dashboard-loading";
-import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import {
   Alert,
   AlertDescription,
@@ -51,7 +49,13 @@ import {
 } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -250,9 +254,16 @@ function KpiCard({
 export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const [strategyId, , strategiesQuery] = useActiveRuleStrategyId();
+  const [strategyId, setStrategyId, strategiesQuery] = useActiveRuleStrategyId();
   const { data: ruleStrategy, isError: ruleStrategyError } =
     useRuleStrategy(strategyId);
+  const monitorStateQuery = useRuleStrategyMonitorState(strategyId || undefined);
+  const riskStateQuery = useRuleStrategyRiskState(strategyId || undefined);
+  const monitorRows = monitorStateQuery.data ?? [];
+  const monitorCounts = monitorRows.reduce<Record<string, number>>((counts, row) => {
+    counts[row.state] = (counts[row.state] ?? 0) + 1;
+    return counts;
+  }, {});
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
   const {
@@ -480,18 +491,6 @@ export default function DashboardPage() {
     evaluation: latestEvaluation,
   });
 
-  const scrollToStrategyConfiguration = useCallback(() => {
-    document.getElementById("strategy-configuration")?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
-  }, []);
-
-  useEffect(() => {
-    if (window.location.hash !== "#strategy-configuration") return;
-    const frameId = window.requestAnimationFrame(scrollToStrategyConfiguration);
-    return () => window.cancelAnimationFrame(frameId);
-  }, [scrollToStrategyConfiguration]);
 
   if (pageLoading) {
     return (
@@ -556,6 +555,18 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 self-start md:self-auto">
+            <Select value={strategyId ?? undefined} onValueChange={setStrategyId}>
+              <SelectTrigger aria-label="选择工作台策略" className="h-9 min-w-48 text-xs">
+                <SelectValue placeholder="选择策略" />
+              </SelectTrigger>
+              <SelectContent>
+                {(strategiesQuery.data ?? []).map((strategy) => (
+                  <SelectItem key={strategy.strategy_id} value={strategy.strategy_id}>
+                    {strategy.name} · {strategy.status === "running" ? "运行中" : "已停止"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -568,19 +579,41 @@ export default function DashboardPage() {
                   {isDark ? <Sun /> : <Moon />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>
-                {isDark ? "切换为浅色主题" : "切换为深色主题"}
-              </TooltipContent>
+              <TooltipContent>{isDark ? "切换为浅色主题" : "切换为深色主题"}</TooltipContent>
             </Tooltip>
-            <Button
-              className="bg-sky-600 text-white hover:bg-sky-500"
-              onClick={scrollToStrategyConfiguration}
-              type="button"
-            >
-              配置策略 <ArrowUpRight />
-            </Button>
           </div>
         </header>
+        <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]" aria-label="策略监控与风险">
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <CardHeader className="border-border/70 border-b pb-3">
+              <CardTitle className="text-base">监控池</CardTitle>
+              <CardDescription>只扫描已准入或持仓保留标的</CardDescription>
+            </CardHeader>
+            <CardContent className="p-4">
+              <div className="flex flex-wrap gap-2 text-xs">
+                {(["candidate", "admitted", "held", "removed"] as const).map((state) => (
+                  <Badge key={state} variant={state === "admitted" || state === "held" ? "default" : "outline"}>
+                    {state} {monitorCounts[state] ?? 0}
+                  </Badge>
+                ))}
+              </div>
+              <div className="mt-3 max-h-28 space-y-2 overflow-auto text-xs">
+                {monitorRows.map((row) => <div className="flex items-center justify-between gap-3" key={row.symbol}><span className="font-mono">{row.symbol}</span><span className="text-muted-foreground">{row.reason_detail ?? row.reason_code ?? row.state}</span></div>)}
+              </div>
+            </CardContent>
+          </Card>
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <CardHeader className="border-border/70 border-b pb-3">
+              <CardTitle className="text-base">账户风险</CardTitle>
+              <CardDescription>下单前读取的持久化风险状态</CardDescription>
+            </CardHeader>
+            <CardContent className="p-4 text-sm">
+              <div className="flex items-center justify-between"><span className="text-muted-foreground">状态</span><Badge variant={riskStateQuery.data?.state === "normal" ? "default" : "destructive"}>{riskStateQuery.data?.state ?? "读取中"}</Badge></div>
+              <p className="mt-3 text-muted-foreground text-xs">回撤 {((riskStateQuery.data?.current_drawdown_pct ?? 0) * 100).toFixed(2)}%</p>
+              <p className="mt-1 text-muted-foreground text-xs">{riskStateQuery.data?.reason_detail ?? "暂无风险阻断原因"}</p>
+            </CardContent>
+          </Card>
+        </section>
 
         <section
           className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
@@ -894,14 +927,6 @@ export default function DashboardPage() {
                   首页同步展示正在使用的筛选与风控配置
                 </p>
               </div>
-              <Button
-                onClick={scrollToStrategyConfiguration}
-                size="sm"
-                type="button"
-                variant="ghost"
-              >
-                <Settings2 /> 编辑
-              </Button>
             </div>
             <CardContent className="grid gap-px bg-border/60 p-px sm:grid-cols-2 lg:grid-cols-4">
               <div className="bg-card px-3 py-3">
@@ -1471,13 +1496,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <section
-          aria-label="策略配置"
-          className="scroll-mt-4"
-          id="strategy-configuration"
-        >
-          <RuleStrategyConfiguration embedded />
-        </section>
       </div>
     </div>
   );

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -21,12 +20,15 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyMarketSnapshot,
     RuleStrategyTextImportProposal,
 )
+from valuecell.server.api.schemas.rule_strategy_validation import (
+    RuleStrategyValidationCreateRequest,
+)
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyDeleteConflictError,
     RuleStrategyNotFoundError,
     RuleStrategyNotRunningError,
-    RuleStrategyRunConflictError,
     RuleStrategyRunningUpdateError,
+    RuleStrategyStartAdmissionError,
     RuleStrategyService,
     RuleStrategyUnsupportedEvaluationError,
 )
@@ -56,6 +58,21 @@ from valuecell.server.services.saas_access_service import (
 from valuecell.server.services.rule_strategy_export_service import (
     XLSX_MEDIA_TYPE,
     RuleStrategyExportService,
+)
+from valuecell.server.services.rule_strategy_templates import (
+    get_rule_strategy_template,
+    list_rule_strategy_templates,
+)
+from valuecell.server.services.rule_strategy_validation_service import (
+    RuleStrategyValidationCoverageError,
+    RuleStrategyValidationDataMaterializer,
+    RuleStrategyValidationNotCompletedError,
+    RuleStrategyValidationNotFoundError,
+    RuleStrategyValidationService,
+    RuleStrategyValidationWindowError,
+)
+from valuecell.server.services.rule_strategy_validation_export_service import (
+    RuleStrategyValidationExportService,
 )
 
 
@@ -109,14 +126,31 @@ class RuleStrategyTextImportJobRequest(RuleStrategyTextImportRequest):
     request_id: UUID
 
 
+
+class RuleStrategyTemplateInstantiateRequest(BaseModel):
+    """Explicit inputs for cloning a code-owned template into a tenant strategy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    initial_capital_quote: float = Field(gt=0, le=100_000_000)
+    symbol_candidates: list[str] = Field(min_length=1, max_length=100)
+    execution_scope: Literal[
+        "paper_virtual", "dedicated_credential", "dedicated_subaccount"
+    ] = "paper_virtual"
+    credential_id: str | None = Field(default=None, min_length=1, max_length=36)
+
 def create_rule_strategy_router(
     service: RuleStrategyService | None = None,
+    validation_materializer: RuleStrategyValidationDataMaterializer | None = None,
 ) -> APIRouter:
     """Create the deterministic strategy API router with isolated Demo execution validation."""
 
     router = APIRouter(prefix="/rule-strategies", tags=["rule-strategies"])
     rule_service = service or RuleStrategyService()
     advisory_service = RuleStrategyAdvisoryService()
+    validation_service = RuleStrategyValidationService()
+    validation_export_service = RuleStrategyValidationExportService(validation_service)
     text_import_jobs = get_rule_strategy_text_import_job_service()
     export_service = RuleStrategyExportService(rule_service)
 
@@ -226,12 +260,149 @@ def create_rule_strategy_router(
 
     @router.get("", response_model=SuccessResponse[list[dict[str, Any]]])
     async def list_rule_strategies(
+        include_archived: bool = Query(default=False),
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[list[dict[str, Any]]]:
         require_strategy_read(principal)
         return SuccessResponse.create(
-            data=rule_service.list(principal.tenant_id),
-            msg="Paper rule strategies retrieved",
+            data=rule_service.list(
+                principal.tenant_id, include_archived=include_archived
+            ),
+            msg="Rule strategies retrieved",
+        )
+
+    @router.get("/summary", response_model=SuccessResponse[list[dict[str, Any]]])
+    async def get_rule_strategy_summary(
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[list[dict[str, Any]]]:
+        require_strategy_read(principal)
+        summary_reader = getattr(rule_service.repository, "summaries", None)
+        data = summary_reader(principal.tenant_id) if summary_reader is not None else []
+        return SuccessResponse.create(data=data, msg="Rule strategy summaries retrieved")
+
+    @router.post(
+        "/{strategy_id}/validations",
+        response_model=SuccessResponse[dict[str, Any]],
+        status_code=202,
+    )
+    async def create_rule_strategy_validation(
+        strategy_id: str,
+        request: RuleStrategyValidationCreateRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_manage(principal)
+        if validation_materializer is None:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "validation_materialized_source_required",
+                    "detail": "服务器尚未配置可证明完整覆盖的数据物化器。",
+                },
+            )
+        try:
+            detail = validation_service.submit_materialized(
+                strategy_id,
+                principal.tenant_id,
+                request,
+                validation_materializer,
+            )
+        except RuleStrategyValidationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuleStrategyValidationWindowError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuleStrategyValidationCoverageError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "detail": str(exc), "report": exc.report},
+            ) from exc
+        return SuccessResponse.create(
+            data=detail.model_dump(mode="json"), msg="Strategy validation queued"
+        )
+
+    @router.get(
+        "/{strategy_id}/validations",
+        response_model=SuccessResponse[list[dict[str, Any]]],
+    )
+    async def list_rule_strategy_validations(
+        strategy_id: str,
+        limit: int = Query(default=100, ge=1, le=1_000),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[list[dict[str, Any]]]:
+        require_strategy_read(principal)
+        try:
+            runs = validation_service.list(strategy_id, principal.tenant_id, limit=limit)
+        except RuleStrategyValidationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(
+            data=[run.model_dump(mode="json") for run in runs],
+            msg="Strategy validation runs retrieved",
+        )
+
+    @router.get(
+        "/{strategy_id}/validations/{run_id}",
+        response_model=SuccessResponse[dict[str, Any]],
+    )
+    async def get_rule_strategy_validation(
+        strategy_id: str,
+        run_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_read(principal)
+        try:
+            detail = validation_service.get(run_id, principal.tenant_id)
+        except RuleStrategyValidationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if detail.strategy_id != strategy_id:
+            raise HTTPException(status_code=404, detail="Validation run was not found")
+        return SuccessResponse.create(
+            data=detail.model_dump(mode="json"), msg="Strategy validation retrieved"
+        )
+
+    @router.post(
+        "/{strategy_id}/validations/{run_id}/cancel",
+        response_model=SuccessResponse[dict[str, Any]],
+    )
+    async def cancel_rule_strategy_validation(
+        strategy_id: str,
+        run_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_manage(principal)
+        try:
+            detail = validation_service.cancel(run_id, principal.tenant_id)
+        except RuleStrategyValidationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if detail.strategy_id != strategy_id:
+            raise HTTPException(status_code=404, detail="Validation run was not found")
+        return SuccessResponse.create(
+            data=detail.model_dump(mode="json"), msg="Strategy validation cancellation requested"
+        )
+
+    @router.get(
+        "/{strategy_id}/validations/{run_id}/export",
+        responses={200: {"content": {XLSX_MEDIA_TYPE: {}}}},
+    )
+    async def export_rule_strategy_validation(
+        strategy_id: str,
+        run_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> Response:
+        require_strategy_read(principal)
+        try:
+            detail = validation_service.get(run_id, principal.tenant_id)
+            if detail.strategy_id != strategy_id:
+                raise RuleStrategyValidationNotFoundError("Validation run was not found")
+            workbook, filename = validation_export_service.build(
+                run_id, principal.tenant_id
+            )
+        except RuleStrategyValidationNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuleStrategyValidationNotCompletedError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return Response(
+            content=workbook,
+            media_type=XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     @router.get("/{strategy_id}", response_model=SuccessResponse[dict[str, Any]])
@@ -246,6 +417,68 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy retrieved")
 
+
+    @router.get(
+        "/{strategy_id}/monitor-state",
+        response_model=SuccessResponse[list[dict[str, Any]]],
+    )
+    async def get_rule_strategy_monitor_state(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[list[dict[str, Any]]]:
+        require_strategy_read(principal)
+        try:
+            rule_service.get(strategy_id, principal.tenant_id)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        rows = rule_service.repository.monitors(strategy_id, principal.tenant_id)
+        return SuccessResponse.create(
+            data=[
+                {
+                    "symbol": row.symbol,
+                    "state": row.state,
+                    "reason_code": row.reason_code,
+                    "reason_detail": row.reason_detail,
+                    "evaluated_at": row.evaluated_at,
+                    "next_check_at": row.next_check_at,
+                    "protected_held": row.protected_held,
+                }
+                for row in rows
+            ],
+            msg="Strategy monitor state retrieved",
+        )
+
+    @router.get(
+        "/{strategy_id}/risk-state",
+        response_model=SuccessResponse[dict[str, Any]],
+    )
+    async def get_rule_strategy_risk_state(
+        strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_read(principal)
+        try:
+            rule_service.get(strategy_id, principal.tenant_id)
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        current_state = rule_service.repository.get_account_state(
+            strategy_id, principal.tenant_id
+        )
+        if current_state is None:
+            raise HTTPException(status_code=404, detail="Strategy risk state was not found")
+        _account, risk = current_state
+        return SuccessResponse.create(
+            data={
+                "state": risk.state,
+                "daily_equity_baseline": risk.daily_equity_baseline,
+                "high_water_equity": risk.high_water_equity,
+                "current_drawdown_pct": risk.current_drawdown_pct,
+                "cooldown_until": risk.cooldown_until,
+                "reason_code": risk.reason_code,
+                "reason_detail": risk.reason_detail,
+            },
+            msg="Strategy risk state retrieved",
+        )
     @router.patch("/{strategy_id}", response_model=SuccessResponse[dict[str, Any]])
     async def update_rule_strategy(
         strategy_id: str,
@@ -350,8 +583,11 @@ def create_rule_strategy_router(
             data = rule_service.start(strategy_id, principal.tenant_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except RuleStrategyRunConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except RuleStrategyStartAdmissionError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.reason_code, "detail": exc.detail},
+            ) from exc
         return SuccessResponse.create(data=data, msg="Paper rule strategy started")
 
     @router.post("/{strategy_id}/stop", response_model=SuccessResponse[dict[str, Any]])
@@ -568,5 +804,96 @@ def create_rule_strategy_router(
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg=f"Paper {log_type} log retrieved")
+
+    return router
+
+
+def create_rule_strategy_template_router(
+    service: RuleStrategyService | None = None,
+) -> APIRouter:
+    """Expose immutable code-owned templates outside the strategy CRUD prefix."""
+    router = APIRouter(prefix="/rule-strategy-templates", tags=["rule-strategy-templates"])
+    rule_service = service or RuleStrategyService()
+
+    def require_template_read(principal: CurrentPrincipal) -> None:
+        require_active_tenant(principal)
+        require_tenant_permission(principal, "tenant.read")
+
+    def require_template_manage(principal: CurrentPrincipal) -> None:
+        require_active_tenant(principal)
+        require_tenant_permission(principal, "strategy.manage")
+
+    @router.get("", response_model=SuccessResponse[list[dict[str, Any]]])
+    async def list_templates(
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[list[dict[str, Any]]]:
+        require_template_read(principal)
+        return SuccessResponse.create(
+            data=[
+                {
+                    "template_id": template.template_id,
+                    "template_version": template.template_version,
+                    "display_name": template.display_name,
+                    "execution_mode": template.execution_mode,
+                    "config": template.config.model_dump(mode="json"),
+                }
+                for template in list_rule_strategy_templates()
+            ],
+            msg="Rule strategy templates retrieved",
+        )
+
+    @router.post(
+        "/{template_id}/instantiate",
+        response_model=SuccessResponse[dict[str, Any]],
+        status_code=201,
+    )
+    async def instantiate_template(
+        template_id: str,
+        request: RuleStrategyTemplateInstantiateRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db=Depends(get_db),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_template_manage(principal)
+        if get_rule_strategy_template(template_id) is None:
+            raise HTTPException(status_code=404, detail="Unknown rule strategy template")
+        if request.execution_scope != "paper_virtual":
+            connection_id = request.credential_id or ""
+            credential = db.query(TenantCredential).filter_by(
+                id=connection_id,
+                tenant_id=principal.tenant_id,
+                revoked=False,
+            ).first()
+            metadata = credential.metadata_json if credential is not None else {}
+            eligible_scope = metadata.get("strategy_account_scope") or metadata.get(
+                "account_scope"
+            )
+            if (
+                credential is None
+                or credential.kind != "exchange"
+                or credential.provider != "okx"
+                or metadata.get("sandbox") is not True
+                or metadata.get("market_type") != "spot"
+                or eligible_scope != request.execution_scope
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "dedicated_strategy_account_required",
+                        "reason_code": "shared_exchange_account_requires_dedicated_scope",
+                    },
+                )
+        try:
+            data = rule_service.instantiate_template(
+                principal.tenant_id,
+                template_id=template_id,
+                name=request.name,
+                initial_capital_quote=request.initial_capital_quote,
+                symbol_candidates=request.symbol_candidates,
+                scope=request.execution_scope,
+                credential_id=request.credential_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Rule strategy template instantiated")
 
     return router

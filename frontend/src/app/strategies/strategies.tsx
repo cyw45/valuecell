@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 import { toast } from "sonner";
 import { useGetCryptoSymbols } from "@/api/crypto-market";
 import {
@@ -947,14 +947,8 @@ export function RuleStrategyConfiguration({
     stopStrategy.isPending ||
     parseStrategyText.isPending;
   const storedStrategy = creatingDraft ? undefined : strategyQuery.data;
-  const runningStrategy = strategiesQuery.data?.find(
-    (strategy) => strategy.status === "running",
-  );
   const managementActions = strategyManagementActions({
     selectedStatus: storedStrategy?.status,
-    anotherRunning: Boolean(
-      runningStrategy && runningStrategy.strategy_id !== strategyId,
-    ),
   });
   const currentSignature = JSON.stringify({ values, name, description });
   const isDirty = creatingDraft
@@ -983,7 +977,7 @@ export function RuleStrategyConfiguration({
     const request = {
       name: name.trim() || t("saas.operations.strategy.defaultName"),
       description: description.trim() || undefined,
-      config: strategyFormValuesToConfig(values),
+      config: strategyFormValuesToConfig(values, storedStrategy?.config),
     };
     try {
       const response =
@@ -1293,11 +1287,9 @@ export function RuleStrategyConfiguration({
                     : (storedStrategy?.name ?? "请选择策略")}
                 </p>
                 <p className="text-muted-foreground text-xs">
-                  {runningStrategy && runningStrategy.strategy_id !== strategyId
-                    ? `“${runningStrategy.name}”正在运行；启动当前策略前必须先停止它。`
-                    : storedStrategy?.status === "running"
-                      ? "当前策略运行中，配置只读。"
-                      : "已停止的策略可以编辑、保存、启动或删除。"}
+                  {storedStrategy?.status === "running"
+                    ? "当前策略运行中，配置只读。"
+                    : "已停止的策略可以编辑、保存、启动或删除。"}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2757,6 +2749,40 @@ export function RuleStrategyConfiguration({
   );
 }
 
-export default function Strategies() {
-  return <RuleStrategyConfiguration />;
+function StrategyManagementList() {
+  const { tenantId } = useSaaSSession();
+  const [activeStrategyId, setActiveStrategyId] = useActiveRuleStrategyId();
+  const strategiesQuery = useRuleStrategies(tenantId, true);
+  const strategies = strategiesQuery.data ?? [];
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:p-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="terminal-label">STRATEGY VALIDATION</p>
+          <h1 className="mt-2 font-semibold text-2xl tracking-tight">策略管理</h1>
+          <p className="mt-1 text-muted-foreground text-sm">每个策略拥有独立账户、监控池与风险状态。</p>
+        </div>
+        <div className="flex gap-2">
+          <Button asChild variant="outline"><Link to="/strategies/new"><Plus /> 新建策略</Link></Button>
+          <Button asChild className="bg-sky-600 text-white hover:bg-sky-500"><Link to="/dashboard">打开工作台</Link></Button>
+        </div>
+      </div>
+      <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+        <CardHeader className="border-border/70 border-b">
+          <CardTitle className="text-base">策略列表</CardTitle>
+          <CardDescription>选择策略后，账户、权益、监控和风险面板同步切换。</CardDescription>
+        </CardHeader>
+        <CardContent className="p-0">
+          {strategiesQuery.isPending ? <p className="p-5 text-muted-foreground text-sm">正在加载策略…</p> : strategies.length === 0 ? <p className="p-5 text-muted-foreground text-sm">尚未创建策略。</p> : <div className="divide-y divide-border/70">{strategies.map((strategy) => { const selected = strategy.strategy_id === activeStrategyId; return <div key={strategy.strategy_id} className={cn("flex flex-wrap items-center justify-between gap-3 px-4 py-4", selected && "bg-sky-500/5")}><button className="min-w-0 text-left" onClick={() => setActiveStrategyId(strategy.strategy_id)} type="button"><span className="block truncate font-medium">{strategy.name}</span><span className="mt-1 block text-muted-foreground text-xs">{strategy.status === "running" ? "运行中" : "已停止"}</span></button><div className="flex items-center gap-2"><Badge variant={strategy.status === "running" ? "default" : "outline"}>{strategy.status}</Badge><Button asChild size="sm" variant="ghost"><Link to={`/strategies/${strategy.strategy_id}/edit`}>编辑</Link></Button><Button asChild size="sm" variant="ghost"><Link to="/dashboard">选择工作台</Link></Button></div></div>; })}</div>}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+ export default function Strategies() {
+  const location = useLocation();
+  const isEditorRoute = location.pathname === "/strategies/new" || location.pathname.endsWith("/edit");
+  return isEditorRoute ? <RuleStrategyConfiguration /> : <StrategyManagementList />;
 }

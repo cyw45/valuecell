@@ -1,14 +1,13 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from valuecell.server.db.migrations import ensure_single_running_rule_strategy_index
 from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyEvaluationJournal,
+    RuleStrategyExecutionLease,
 )
 from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
 
@@ -25,6 +24,7 @@ def _session():
         tables=[
             RuleStrategy.__table__,
             RuleStrategyEvaluationJournal.__table__,
+            RuleStrategyExecutionLease.__table__,
         ],
     )
     with engine.begin() as connection:
@@ -53,39 +53,22 @@ def _strategy(strategy_id: str, status: str = "stopped") -> RuleStrategy:
     )
 
 
-def test_repository_starts_only_one_strategy_per_tenant():
-    session = _session()
-    repository = RuleStrategyRepository(db_session=session)
-    repository.create(_strategy("first"))
-    repository.create(_strategy("second"))
-
-    started, conflict = repository.start_exclusive("first", "tenant-a")
-    rejected, second_conflict = repository.start_exclusive("second", "tenant-a")
-
-    assert started is not None and started.status == "running"
-    assert conflict is False
-    assert rejected is not None and rejected.status == "stopped"
-    assert second_conflict is True
-
-
-def test_unique_index_rejects_a_second_running_strategy_per_tenant():
+def test_repository_allows_independent_running_strategies_per_tenant():
     session = _session()
     repository = RuleStrategyRepository(db_session=session)
     repository.create(_strategy("first", status="running"))
-    repository.create(_strategy("second"))
-    ensure_single_running_rule_strategy_index(session)
+    repository.create(_strategy("second", status="running"))
 
-    second = repository.get("second", "tenant-a")
-    assert second is not None
-    second.status = "running"
-    session.add(second)
-    try:
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-    else:
-        raise AssertionError("second running strategy must violate the tenant index")
+    running = repository.list_running()
+    assert {item.strategy_id for item in running} == {"first", "second"}
 
+
+def test_repository_generation_lease_allows_only_one_worker():
+    session = _session()
+    repository = RuleStrategyRepository(db_session=session)
+    repository.create(_strategy("lease", status="running"))
+    assert repository.claim_execution_lease("lease", 1, "worker-a") is True
+    assert repository.claim_execution_lease("lease", 1, "worker-b") is False
 
 def test_repository_delete_cascades_journals_for_stopped_strategy():
     session = _session()

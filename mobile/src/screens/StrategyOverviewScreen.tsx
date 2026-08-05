@@ -135,10 +135,20 @@ export default function StrategyOverviewScreen() {
     enabled: Boolean(activeId && isDemo),
     retry: false,
   });
+  const monitorState = useQuery({
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "monitor-state"],
+    queryFn: () => api.strategyMonitorState(activeId),
+    enabled: Boolean(activeId),
+  });
+  const riskState = useQuery({
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "risk-state"],
+    queryFn: () => api.strategyRiskState(activeId),
+    enabled: Boolean(activeId),
+  });
 
   const refresh = () => {
     if (isDemo) {
-      void Promise.all([strategies.refetch(), evaluations.refetch(), demo.refetch()]);
+      void Promise.all([strategies.refetch(), evaluations.refetch(), demo.refetch(), monitorState.refetch(), riskState.refetch()]);
       return;
     }
     void Promise.all([
@@ -148,6 +158,8 @@ export default function StrategyOverviewScreen() {
       evaluations.refetch(),
       trades.refetch(),
       funding.refetch(),
+      monitorState.refetch(),
+      riskState.refetch(),
     ]);
   };
   const selectStrategy = (strategyId: string) => {
@@ -239,6 +251,15 @@ export default function StrategyOverviewScreen() {
           value={activeConditionState ? conditionStateLabel(activeConditionState) : latestEvaluation ? "未返回条件" : evaluations.isLoading ? "同步中" : "尚无评估"}
         />
       </View>
+
+      <SectionCard description="服务端持久化的候选池与账户级阻断原因。" title="监控池与风险">
+        <View style={styles.stateRows}>
+          <Text style={styles.stateText}>候选 {monitorState.data?.filter((item) => item.state === "candidate").length ?? 0} · 准入 {monitorState.data?.filter((item) => item.state === "admitted").length ?? 0} · 持仓保留 {monitorState.data?.filter((item) => item.state === "held").length ?? 0} · 移除 {monitorState.data?.filter((item) => item.state === "removed").length ?? 0}</Text>
+          <Text style={styles.stateText}>风险状态：{riskState.data?.state ?? "同步中"}</Text>
+          <Text style={styles.muted}>{riskState.data?.reason_detail ?? "暂无持久化风险原因"}</Text>
+          {monitorState.data?.slice(0, 4).map((item) => <Text key={item.symbol} style={styles.muted}>{item.symbol} · {item.state} · {item.reason_detail ?? item.reason_code ?? "暂无原因"}</Text>)}
+        </View>
+      </SectionCard>
 
       <SectionCard description="点按交易对可直接打开该策略对应的行情视图。" title="观察标的">
         <View style={styles.symbols}>
@@ -393,6 +414,8 @@ const styles = StyleSheet.create({
   loading: { alignItems: "center", flexDirection: "row", gap: spacing.sm, minHeight: 48 },
   loadingText: { color: palette.textMuted, flex: 1, fontSize: 14, lineHeight: 20 },
   dataRows: { gap: spacing.xs },
+  stateRows: { gap: spacing.xs },
+  stateText: { color: palette.text, fontSize: 13, fontWeight: "800", lineHeight: 20 },
   row: { color: palette.text, fontSize: 14, lineHeight: 22 },
   rowCopy: { flex: 1, gap: 2 },
   muted: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },

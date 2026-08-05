@@ -411,6 +411,20 @@ class MobileApiClient {
       { method: "POST" },
     );
 
+  strategyMonitorState = (
+    strategyId: string,
+  ): Promise<Types.RuleStrategyMonitorState[]> =>
+    this.authenticatedRequest<Types.RuleStrategyMonitorState[]>(
+      `/rule-strategies/${pathSegment(strategyId)}/monitor-state`,
+    );
+
+  strategyRiskState = (
+    strategyId: string,
+  ): Promise<Types.RuleStrategyRiskState> =>
+    this.authenticatedRequest<Types.RuleStrategyRiskState>(
+      `/rule-strategies/${pathSegment(strategyId)}/risk-state`,
+    );
+
   parseStrategyText = (
     strategyText: string,
   ): Promise<Types.RuleStrategyTextImportProposal> =>

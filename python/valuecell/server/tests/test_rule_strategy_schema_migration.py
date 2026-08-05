@@ -54,7 +54,7 @@ def test_execution_attribution_migration_uses_idempotent_concurrent_postgres_ddl
     assert "CREATE TABLE IF NOT EXISTS rule_strategy_execution_intents" in statements
     for column in (
         "tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id)",
-        "credential_id VARCHAR(36) NOT NULL REFERENCES tenant_credentials(id) ON DELETE RESTRICT",
+        "credential_id VARCHAR(36) REFERENCES tenant_credentials(id) ON DELETE RESTRICT",
         "idempotency_key VARCHAR(128) NOT NULL",
         "symbol VARCHAR(32) NOT NULL",
         "side VARCHAR(8) NOT NULL",
@@ -102,6 +102,44 @@ def test_execution_attribution_migration_is_idempotent_on_sqlite():
         "terminal_at", "updated_at", "request_payload",
     } <= intent_columns
 
+
+
+def test_strategy_product_state_migration_backfills_account_risk_and_monitor_rows():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(Tenant(id="tenant-state", name="State tenant"))
+    session.add(
+        RuleStrategy(
+            strategy_id="rule-state",
+            tenant_id="tenant-state",
+            name="State strategy",
+            status="stopped",
+            paper_mode=True,
+            config={
+                "initial_capital_quote": 1_000.0,
+                "symbols": ["BTC-USDT"],
+                "execution": {"environment": "paper"},
+            },
+        )
+    )
+    session.commit()
+
+    assert migrations.migrate_strategy_product_state(session) is True
+    assert migrations.migrate_strategy_product_state(session) is False
+
+    account = session.execute(
+        __import__("sqlalchemy").text(
+            "SELECT scope, allocation_quote, quote_balance FROM rule_strategy_accounts"
+        )
+    ).one()
+    assert account == ("paper_virtual", 1_000.0, 1_000.0)
+    assert session.execute(
+        __import__("sqlalchemy").text("SELECT state FROM rule_strategy_risk_states")
+    ).scalar_one() == "normal"
+    assert session.execute(
+        __import__("sqlalchemy").text("SELECT state FROM rule_strategy_monitor_symbols")
+    ).scalar_one() == "candidate"
 
 def test_execution_attribution_models_define_intent_contract_and_attribution():
     order = SandboxExchangeOrder.__table__

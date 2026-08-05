@@ -28,6 +28,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyIndicatorValues,
     RuleStrategySizing,
 )
+from valuecell.server.services.rule_strategy_indicators import brar_v2_1
 
 Signal = Literal["buy", "sell", "neutral", "unavailable"]
 
@@ -117,6 +118,7 @@ class RuleEngine:
                 reason = block.detail
 
         funding = self._funding(request, action, sizing)
+        action = self._explicit_leg_action(request, action)
         return RuleStrategyEvaluationResult(
             action=action,
             reason_code=reason_code,
@@ -200,6 +202,7 @@ class RuleEngine:
             block = next((item for item in entry_risk if item.state == "blocked"), None)
             if block is not None:
                 action, reason_code, reason = "no_op", block.code, block.detail
+        action = self._explicit_leg_action(request, action)
         return RuleStrategyEvaluationResult(
             action=action,
             reason_code=reason_code,
@@ -504,6 +507,7 @@ class RuleEngine:
                 reason_code = block.code
                 reason = block.detail
         funding = self._funding(request, action, sizing)
+        action = self._explicit_leg_action(request, action)
         return RuleStrategyEvaluationResult(
             action=action,
             reason_code=reason_code,
@@ -514,6 +518,19 @@ class RuleEngine:
             funding=funding,
             entry_confirmation=entry_confirmation,
         )
+
+    @staticmethod
+    def _explicit_leg_action(
+        request: RuleStrategyEvaluationRequest, action: str
+    ) -> str:
+        """Use V2 legs only for versioned templates; preserve custom legacy actions."""
+        if request.config.indicator_formula_version != "trend_resonance_v2_1":
+            return action
+        if action == "buy":
+            return "add" if request.market.position.quantity > 0 else "entry"
+        if action == "sell":
+            return "close"
+        return action
 
     @staticmethod
     def _candles_for(request: RuleStrategyEvaluationRequest, interval: str):
@@ -660,6 +677,25 @@ class RuleEngine:
         if not rule.enabled:
             return [], [], {}
         candles = self._candles_for(request, rule.interval)
+        if request.config.indicator_formula_version == "trend_resonance_v2_1":
+            indicator = brar_v2_1(candles)
+            if indicator is None:
+                assessment = self._unavailable(
+                    "brar_entry", "indicator", 26, len(candles)
+                )
+                return [assessment], [assessment] if rule.exit_enabled else [], {}
+            value = indicator.ar if rule.component == "ar" else indicator.br
+            return self._threshold_assessments(
+                "brar",
+                value,
+                rule,
+                {
+                    "brar_ar": indicator.ar,
+                    "brar_br": indicator.br,
+                    "interval": rule.interval,
+                    "formula_version": "trend_resonance_v2_1",
+                },
+            )
         required = rule.period + 1
         if len(candles) < required:
             assessment = self._unavailable(

@@ -367,3 +367,47 @@ export function useRuleStrategyAccount(strategyId?: string) {
     enabled: Boolean(strategyId && tenantId),
   });
 }
+
+export interface RuleStrategyMonitorState {
+  symbol: string;
+  state: "candidate" | "admitted" | "held" | "removed";
+  reason_code: string | null;
+  reason_detail: string | null;
+  evaluated_at: string | null;
+  next_check_at: string | null;
+  protected_held: boolean;
+}
+
+export interface RuleStrategyRiskState {
+  state: "normal" | "warn" | "only_reduce" | "halted";
+  daily_equity_baseline: number;
+  high_water_equity: number;
+  current_drawdown_pct: number;
+  cooldown_until: string | null;
+  reason_code: string | null;
+  reason_detail: string | null;
+}
+
+export function useRuleStrategyMonitorState(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
+  return useQuery({
+    queryKey: [...ruleStrategyKey(tenantId, strategyId ?? ""), "monitor-state"],
+    queryFn: () => apiClient.get<ApiResponse<RuleStrategyMonitorState[]>>(
+      `/rule-strategies/${strategyId}/monitor-state`, { requiresAuth: true }
+    ),
+    select: (response) => response.data,
+    enabled: Boolean(strategyId && tenantId),
+  });
+}
+
+export function useRuleStrategyRiskState(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
+  return useQuery({
+    queryKey: [...ruleStrategyKey(tenantId, strategyId ?? ""), "risk-state"],
+    queryFn: () => apiClient.get<ApiResponse<RuleStrategyRiskState>>(
+      `/rule-strategies/${strategyId}/risk-state`, { requiresAuth: true }
+    ),
+    select: (response) => response.data,
+    enabled: Boolean(strategyId && tenantId),
+  });
+}
