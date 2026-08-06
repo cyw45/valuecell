@@ -456,4 +456,5 @@ export interface RuleStrategyPnlPoint {
   ts: string;
   cumulative_pnl: number;
   action: string;
+  equity_quote?: number;
 }

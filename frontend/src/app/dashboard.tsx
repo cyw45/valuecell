@@ -38,6 +38,8 @@ import {
   conditionDisplayName,
   formatConditionValues,
 } from "@/app/dashboard-funnel";
+import { buildLiveEquityCurve } from "@/app/dashboard-equity-curve";
+import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
 import {
   shouldShowCandlestickLoading,
   shouldShowDashboardPageLoading,
@@ -128,6 +130,45 @@ const MARKET_INTERVAL_SECONDS: Record<
 
 function toDashboardSymbol(symbol: string) {
   return symbol.replace("-", "/");
+}
+
+const MONITOR_STATE_LABELS: Record<string, string> = {
+  candidate: "待准入",
+  admitted: "已准入",
+  held: "持仓保留",
+  removed: "已移除",
+};
+const RISK_STATE_LABELS: Record<string, string> = {
+  normal: "正常",
+  only_reduce: "仅允许减仓",
+  blocked: "已阻断",
+  cooldown: "冷静期",
+  warn: "预警",
+  halted: "已暂停",
+};
+const REASON_CODE_LABELS: Record<string, string> = {
+  shared_exchange_account_requires_dedicated_scope:
+    "共享交易所账户未证明隔离，仅允许减仓或平仓。",
+  program_entry_confirmed: "已确认策略入场条件。",
+  program_entry_not_confirmed: "尚未确认策略入场条件。",
+  program_exit_confirmed: "已确认策略离场条件。",
+  program_exit_not_confirmed: "尚未确认策略离场条件。",
+  insufficient_candle_history: "可用 K 线历史不足。",
+  advanced_entry_confirmed: "已确认多周期入场规则。",
+  advanced_entry_not_confirmed: "尚未确认多周期入场规则。",
+  advanced_exit_confirmed: "已确认多周期离场规则。",
+  no_exit_signal: "尚未确认离场信号。",
+};
+
+function displayReason(
+  reasonCode?: string | null,
+  reasonDetail?: string | null,
+) {
+  if (reasonDetail && /[\u4e00-\u9fff]/.test(reasonDetail)) return reasonDetail;
+  if (reasonCode && REASON_CODE_LABELS[reasonCode]) {
+    return REASON_CODE_LABELS[reasonCode];
+  }
+  return reasonDetail ? "系统暂未提供中文说明" : "暂无说明";
 }
 
 function TerminalValue({
@@ -254,9 +295,9 @@ function KpiCard({
 export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  const [strategyId, setStrategyId, strategiesQuery] = useActiveRuleStrategyId();
-  const { data: ruleStrategy, isError: ruleStrategyError } =
-    useRuleStrategy(strategyId);
+  const [strategyId, , strategiesQuery] = useActiveRuleStrategyId();
+  const strategyQuery = useRuleStrategy(strategyId);
+  const { data: ruleStrategy, isError: ruleStrategyError } = strategyQuery;
   const monitorStateQuery = useRuleStrategyMonitorState(strategyId || undefined);
   const riskStateQuery = useRuleStrategyRiskState(strategyId || undefined);
   const monitorRows = monitorStateQuery.data ?? [];
@@ -266,11 +307,15 @@ export default function DashboardPage() {
   }, {});
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
+  const demoExecutionQuery = useRuleStrategyDemoExecution(
+    strategyId || undefined,
+    isOkxDemo,
+  );
   const {
     data: demoExecution,
     isError: demoExecutionError,
     isFetching: demoExecutionLoading,
-  } = useRuleStrategyDemoExecution(strategyId || undefined, isOkxDemo);
+  } = demoExecutionQuery;
   const demoBalance = demoExecution?.account.data;
   const demoPositions = demoExecution?.positions.data.positions ?? [];
   const demoOrders = demoExecution?.orders ?? [];
@@ -278,20 +323,21 @@ export default function DashboardPage() {
     ? demoExecutionCheckedAtLabel(demoExecution)
     : undefined;
   const demoCheckedAtTime = demoCheckedAt
-    ? new Date(demoCheckedAt).toLocaleTimeString()
+    ? new Date(demoCheckedAt).toLocaleTimeString("zh-CN")
     : "等待策略账户同步";
   const demoUnvaluedAssetCount = demoExecution
     ? demoExecutionUnvaluedAssetCount(demoExecution)
     : 0;
-  const { data: pnlCurve } = useRuleStrategyPnlCurve(
+  const pnlCurveQuery = useRuleStrategyPnlCurve(
     isOkxDemo ? undefined : strategyId || undefined,
   );
-  const { data: trades = [] } = useRuleStrategyTrades(
+  const pnlCurve = pnlCurveQuery.data ?? [];
+  const tradesQuery = useRuleStrategyTrades(
     isOkxDemo ? undefined : strategyId || undefined,
   );
-  const { data: evaluations = [] } = useRuleStrategyEvaluations(
-    strategyId || undefined,
-  );
+  const trades = tradesQuery.data ?? [];
+  const evaluationsQuery = useRuleStrategyEvaluations(strategyId || undefined);
+  const evaluations = evaluationsQuery.data ?? [];
   const trackedSymbols = ruleStrategy?.config.symbols ?? [];
   const activeSymbols = isOkxDemo
     ? demoPositions.map((position) => position.symbol.replace("/", "-"))
@@ -308,7 +354,34 @@ export default function DashboardPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
+  const [equityNowMs, setEquityNowMs] = useState(() => Date.now());
   const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setRequestNowMs(now);
+      setEquityNowMs(now);
+      void Promise.all([
+        strategyQuery.refetch(),
+        monitorStateQuery.refetch(),
+        riskStateQuery.refetch(),
+        pnlCurveQuery.refetch(),
+        tradesQuery.refetch(),
+        evaluationsQuery.refetch(),
+        ...(isOkxDemo ? [demoExecutionQuery.refetch()] : []),
+      ]);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [
+    demoExecutionQuery,
+    evaluationsQuery,
+    isOkxDemo,
+    monitorStateQuery,
+    pnlCurveQuery,
+    riskStateQuery,
+    strategyQuery,
+    tradesQuery,
+  ]);
   const selectedIsAvailable = marketSymbols.includes(selectedSymbol);
   const effectiveSymbol =
     selectedIsAvailable || marketSymbols.length === 0
@@ -400,6 +473,18 @@ export default function DashboardPage() {
     ? (demoBalance?.total_usdt_value ?? 0)
     : (account?.equity_quote ?? 0);
   const displayCash = isOkxDemo ? demoUsdt : (account?.quote_balance ?? 0);
+  const liveEquityCurve = useMemo(
+    () =>
+      account
+        ? buildLiveEquityCurve({
+            initialCapital: account.initial_capital_quote,
+            currentEquity: displayEquity,
+            serverPoints: pnlCurve,
+            nowMs: equityNowMs,
+          })
+        : [],
+    [account, displayEquity, equityNowMs, pnlCurve],
+  );
   const holdingRows = useMemo(
     () =>
       isOkxDemo
@@ -555,18 +640,6 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex items-center gap-2 self-start md:self-auto">
-            <Select value={strategyId ?? undefined} onValueChange={setStrategyId}>
-              <SelectTrigger aria-label="选择工作台策略" className="h-9 min-w-48 text-xs">
-                <SelectValue placeholder="选择策略" />
-              </SelectTrigger>
-              <SelectContent>
-                {(strategiesQuery.data ?? []).map((strategy) => (
-                  <SelectItem key={strategy.strategy_id} value={strategy.strategy_id}>
-                    {strategy.name} · {strategy.status === "running" ? "运行中" : "已停止"}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -579,38 +652,83 @@ export default function DashboardPage() {
                   {isDark ? <Sun /> : <Moon />}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isDark ? "切换为浅色主题" : "切换为深色主题"}</TooltipContent>
+              <TooltipContent>
+                {isDark ? "切换为浅色主题" : "切换为深色主题"}
+              </TooltipContent>
             </Tooltip>
           </div>
         </header>
-        <section className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]" aria-label="策略监控与风险">
+        <RuleStrategyConfiguration embedded />
+        <section
+          className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]"
+          aria-label="策略监控与风险"
+        >
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <CardHeader className="border-border/70 border-b pb-3">
+            <CardHeader className="min-h-20 justify-center gap-1 border-border/70 border-b px-4 py-3">
               <CardTitle className="text-base">监控池</CardTitle>
-              <CardDescription>只扫描已准入或持仓保留标的</CardDescription>
+              <CardDescription>只扫描已准入或持仓保留的币种</CardDescription>
             </CardHeader>
             <CardContent className="p-4">
               <div className="flex flex-wrap gap-2 text-xs">
-                {(["candidate", "admitted", "held", "removed"] as const).map((state) => (
-                  <Badge key={state} variant={state === "admitted" || state === "held" ? "default" : "outline"}>
-                    {state} {monitorCounts[state] ?? 0}
-                  </Badge>
-                ))}
+                {(["candidate", "admitted", "held", "removed"] as const).map(
+                  (state) => (
+                    <Badge
+                      key={state}
+                      variant={
+                        state === "admitted" || state === "held"
+                          ? "default"
+                          : "outline"
+                      }
+                    >
+                      {MONITOR_STATE_LABELS[state]} {monitorCounts[state] ?? 0}
+                    </Badge>
+                  ),
+                )}
               </div>
               <div className="mt-3 max-h-28 space-y-2 overflow-auto text-xs">
-                {monitorRows.map((row) => <div className="flex items-center justify-between gap-3" key={row.symbol}><span className="font-mono">{row.symbol}</span><span className="text-muted-foreground">{row.reason_detail ?? row.reason_code ?? row.state}</span></div>)}
+                {monitorRows.map((row) => (
+                  <div
+                    className="flex items-center justify-between gap-3"
+                    key={row.symbol}
+                  >
+                    <span className="font-mono">{row.symbol}</span>
+                    <span className="text-muted-foreground">
+                      {displayReason(row.reason_code, row.reason_detail)}
+                    </span>
+                  </div>
+                ))}
               </div>
             </CardContent>
           </Card>
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <CardHeader className="border-border/70 border-b pb-3">
+            <CardHeader className="min-h-20 justify-center gap-1 border-border/70 border-b px-4 py-3">
               <CardTitle className="text-base">账户风险</CardTitle>
-              <CardDescription>下单前读取的持久化风险状态</CardDescription>
+              <CardDescription>下单前读取并持续刷新的风险状态</CardDescription>
             </CardHeader>
             <CardContent className="p-4 text-sm">
-              <div className="flex items-center justify-between"><span className="text-muted-foreground">状态</span><Badge variant={riskStateQuery.data?.state === "normal" ? "default" : "destructive"}>{riskStateQuery.data?.state ?? "读取中"}</Badge></div>
-              <p className="mt-3 text-muted-foreground text-xs">回撤 {((riskStateQuery.data?.current_drawdown_pct ?? 0) * 100).toFixed(2)}%</p>
-              <p className="mt-1 text-muted-foreground text-xs">{riskStateQuery.data?.reason_detail ?? "暂无风险阻断原因"}</p>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">状态</span>
+                <Badge
+                  variant={
+                    riskStateQuery.data?.state === "normal"
+                      ? "default"
+                      : "destructive"
+                  }
+                >
+                  {riskStateQuery.data?.state
+                    ? (RISK_STATE_LABELS[riskStateQuery.data.state] ?? "未知状态")
+                    : "读取中"}
+                </Badge>
+              </div>
+              <p className="mt-3 text-muted-foreground text-xs">
+                回撤 {((riskStateQuery.data?.current_drawdown_pct ?? 0) * 100).toFixed(2)}%
+              </p>
+              <p className="mt-1 text-muted-foreground text-xs">
+                {displayReason(
+                  riskStateQuery.data?.reason_code,
+                  riskStateQuery.data?.reason_detail,
+                )}
+              </p>
             </CardContent>
           </Card>
         </section>
@@ -841,7 +959,7 @@ export default function DashboardPage() {
                     </div>
                     <p className="mt-2 font-medium text-sm">{step.label}</p>
                     <p className="mt-1 text-muted-foreground text-xs leading-5">
-                      {step.detail}
+                      {displayReason(undefined, step.detail)}
                     </p>
                   </div>
                 );
@@ -901,7 +1019,7 @@ export default function DashboardPage() {
                           </Badge>
                         </div>
                         <p className="mt-1 text-muted-foreground text-xs">
-                          {condition.detail}
+                          {displayReason(undefined, condition.detail)}
                         </p>
                         <p
                           className="mt-1 break-words font-mono text-[11px] text-sky-600 dark:text-sky-300"
@@ -1395,7 +1513,7 @@ export default function DashboardPage() {
                           {signal.action === "buy" ? "买入信号" : "卖出信号"}
                         </span>
                         <span className="block max-w-48 truncate text-muted-foreground text-xs">
-                          {signal.reason}
+                          {displayReason(signal.reason_code, signal.reason)}
                         </span>
                       </span>
                       <Badge
@@ -1423,8 +1541,19 @@ export default function DashboardPage() {
               <p className="mt-0.5 text-muted-foreground text-xs">
                 {isOkxDemo
                   ? "OKX Demo 共享账户盈亏不可用；不会以纸面账本替代。"
-                  : "基于服务器记录的初始资金、组合权益与累计盈亏"}
+                  : "基于初始资金、当前组合权益与累计盈亏，持续展示最新估值"}
               </p>
+              {!isOkxDemo ? (
+                <p className="mt-1 text-muted-foreground text-xs">
+                  每 15 秒刷新 · 最新时间
+                  {" "}
+                  {new Intl.DateTimeFormat("zh-CN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  }).format(new Date(equityNowMs))}
+                </p>
+              ) : null}
             </div>
             {isOkxDemo ? (
               <span className="font-semibold text-muted-foreground text-sm">
@@ -1479,19 +1608,13 @@ export default function DashboardPage() {
                   正在读取纸面策略账户与收益曲线。
                 </p>
               </div>
-            ) : pnlCurve?.length ? (
+            ) : (
               <PnlLineChart
-                data={pnlCurve}
+                data={liveEquityCurve}
                 height={240}
                 mode="equity"
                 theme={isDark ? "dark" : "light"}
               />
-            ) : (
-              <div className="grid h-60 place-items-center text-center">
-                <p className="text-muted-foreground text-sm">
-                  暂无服务器记录的策略权益曲线。
-                </p>
-              </div>
             )}
           </CardContent>
         </Card>

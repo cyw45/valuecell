@@ -2759,7 +2759,7 @@ function StrategyManagementList() {
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="terminal-label">STRATEGY VALIDATION</p>
+          <p className="terminal-label">策略验证</p>
           <h1 className="mt-2 font-semibold text-2xl tracking-tight">策略管理</h1>
           <p className="mt-1 text-muted-foreground text-sm">每个策略拥有独立账户、监控池与风险状态。</p>
         </div>
