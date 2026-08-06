@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
@@ -8,7 +8,9 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyEvaluationJournal,
     RuleStrategyExecutionLease,
+    RuleStrategyMonitorSymbol,
 )
+from valuecell.server.db.models.tenant import Tenant
 from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
 
 
@@ -22,9 +24,11 @@ def _session():
     Base.metadata.create_all(
         engine,
         tables=[
+            Tenant.__table__,
             RuleStrategy.__table__,
             RuleStrategyEvaluationJournal.__table__,
             RuleStrategyExecutionLease.__table__,
+            RuleStrategyMonitorSymbol.__table__,
         ],
     )
     with engine.begin() as connection:
@@ -69,6 +73,129 @@ def test_repository_generation_lease_allows_only_one_worker():
     repository.create(_strategy("lease", status="running"))
     assert repository.claim_execution_lease("lease", 1, "worker-a") is True
     assert repository.claim_execution_lease("lease", 1, "worker-b") is False
+
+
+def test_repository_monitor_lease_keeps_clock_and_duration_injectable():
+    session = _session()
+    repository = RuleStrategyRepository(db_session=session)
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.commit()
+    repository.create(_strategy("monitor", status="running"))
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    session.add(
+        RuleStrategyMonitorSymbol(
+            strategy_id="monitor",
+            tenant_id="tenant-a",
+            symbol="BTC-USDT",
+            state="candidate",
+            next_check_at=now - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+
+    rows = repository.claim_monitor_lease(
+        "monitor",
+        "tenant-a",
+        "worker-a",
+        now=now,
+        lease_seconds=90,
+    )
+
+    assert [row.symbol for row in rows] == ["BTC-USDT"]
+    assert rows[0].lease_owner == "worker-a"
+    lease_until = rows[0].lease_until.replace(tzinfo=timezone.utc)
+    assert lease_until == now + timedelta(seconds=90)
+
+
+def test_repository_force_monitor_review_keeps_active_lease_protection():
+    session = _session()
+    repository = RuleStrategyRepository(db_session=session)
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.commit()
+    repository.create(_strategy("forced-monitor", status="running"))
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    session.add(
+        RuleStrategyMonitorSymbol(
+            strategy_id="forced-monitor",
+            tenant_id="tenant-a",
+            symbol="BTC-USDT",
+            state="admitted",
+            next_check_at=now + timedelta(days=1),
+            lease_owner="worker-a",
+            lease_until=now + timedelta(seconds=60),
+        )
+    )
+    session.commit()
+
+    blocked = repository.claim_monitor_lease(
+        "forced-monitor", "tenant-a", "worker-b", now=now, force=True
+    )
+    claimed = repository.claim_monitor_lease(
+        "forced-monitor",
+        "tenant-a",
+        "worker-b",
+        now=now + timedelta(seconds=61),
+        force=True,
+    )
+
+    assert blocked == []
+    assert [row.symbol for row in claimed] == ["BTC-USDT"]
+    assert claimed[0].lease_owner == "worker-b"
+
+
+def test_repository_rejects_stale_monitor_worker_writeback():
+    session = _session()
+    repository = RuleStrategyRepository(db_session=session)
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.commit()
+    repository.create(_strategy("fenced-monitor", status="running"))
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    session.add(
+        RuleStrategyMonitorSymbol(
+            strategy_id="fenced-monitor",
+            tenant_id="tenant-a",
+            symbol="BTC-USDT",
+            state="candidate",
+            next_check_at=now - timedelta(seconds=1),
+        )
+    )
+    session.commit()
+    first = repository.claim_monitor_lease(
+        "fenced-monitor", "tenant-a", "worker-a", now=now, lease_seconds=30
+    )[0]
+    repository.claim_monitor_lease(
+        "fenced-monitor",
+        "tenant-a",
+        "worker-b",
+        now=now + timedelta(seconds=31),
+        lease_seconds=60,
+    )
+
+    stale = repository.update_monitor_state(
+        first.id,
+        "tenant-a",
+        lease_owner="worker-a",
+        state="admitted",
+        reason_code="stale",
+        reason_detail="stale worker",
+        evaluated_at=now,
+        next_check_at=now + timedelta(days=1),
+        protected_held=False,
+        consecutive_low_volume_days=0,
+        metadata_provider="test",
+        listing_first_tradable_at=now - timedelta(days=365),
+        listing_age_days=365,
+        average_quote_volume_30d=10_000_000.0,
+        price_quote=100.0,
+        price_observed_at=now,
+    )
+
+    current = session.get(RuleStrategyMonitorSymbol, first.id)
+    session.refresh(current)
+    assert stale is None
+    assert current.state == "candidate"
+    assert current.lease_owner == "worker-b"
+
 
 def test_repository_delete_cascades_journals_for_stopped_strategy():
     session = _session()

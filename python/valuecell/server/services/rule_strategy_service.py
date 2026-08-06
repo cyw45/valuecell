@@ -220,13 +220,18 @@ class RuleStrategyService:
                     quantity = position.get("quantity")
                     if isinstance(quantity, (int, float)):
                         positions[symbol.upper().replace("/", "-")] = float(quantity)
-        RuleStrategyMonitorAdmissionWorker(self.repository).review(
+        updated = RuleStrategyMonitorAdmissionWorker(self.repository).review(
             strategy_id,
             tenant_id,
             metadata,
             positions,
             force=force,
         )
+        if force and len(updated) != len(monitors):
+            raise RuleStrategyStartAdmissionError(
+                "monitor_refresh_incomplete",
+                "策略监控标的未能全部完成实时准入复核，请稍后重试。",
+            )
 
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         """Start one strategy after a fresh persisted admission review."""

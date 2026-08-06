@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
+from uuid import uuid4
 
 from valuecell.server.db.models.rule_strategy import RuleStrategyMonitorSymbol
 from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
@@ -132,10 +133,11 @@ class RuleStrategyMonitorAdmissionWorker:
     ) -> list[RuleStrategyMonitorSymbol]:
         timestamp = now or datetime.now(timezone.utc)
         positions = positions_by_symbol or {}
+        lease_owner = f"monitor-worker-{strategy_id}-{uuid4()}"
         claimed = self.repository.claim_monitor_lease(
             strategy_id,
             tenant_id,
-            f"monitor-worker-{strategy_id}",
+            lease_owner,
             now=timestamp,
             force=force,
         )
@@ -151,6 +153,7 @@ class RuleStrategyMonitorAdmissionWorker:
             saved = self.repository.update_monitor_state(
                 row.id,
                 tenant_id,
+                lease_owner=lease_owner,
                 state=decision.state,
                 reason_code=decision.reason_code,
                 reason_detail=decision.reason_detail,

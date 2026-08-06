@@ -289,17 +289,15 @@ def create_app() -> FastAPI:
                 from ..db.repositories.rule_strategy_repository import (
                     RuleStrategyRepository,
                 )
+                from ..services.rule_strategy_monitor_scheduler import (
+                    review_running_strategy_monitors,
+                )
                 from ..services.rule_strategy_service import RuleStrategyService
 
                 try:
                     repository = RuleStrategyRepository()
                     service = RuleStrategyService(repository=repository)
-                    for strategy in repository.list_running():
-                        service._refresh_monitor_admission(
-                            strategy.strategy_id,
-                            strategy.tenant_id,
-                            force=False,
-                        )
+                    review_running_strategy_monitors(repository, service)
                 except Exception as exc:
                     logger.warning("Strategy monitor review deferred: {}", exc)
 
@@ -326,10 +324,9 @@ def create_app() -> FastAPI:
                 coalesce=True,
                 max_instances=1,
             )
-            # Attempt immediately, but database outages must not disable the
-            # recurring job or prevent the API and market snapshot from starting.
+            # Database-only reconciliation is safe before readiness. Exchange-backed
+            # monitor reviews stay in the scheduler so upstream latency cannot block API startup.
             _sync_job()
-            _review_running_monitors()
             logger.info("Strategy scheduler started")
         except Exception as exc:
             logger.warning("Strategy scheduler initialization deferred: {}", exc)

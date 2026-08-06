@@ -497,6 +497,9 @@ class RuleStrategyRepository:
         strategy_id: str,
         tenant_id: str,
         owner_id: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = 60,
         force: bool = False,
     ) -> list[RuleStrategyMonitorSymbol]:
         """Claim reviewable symbols, optionally bypassing only their due time."""
@@ -649,6 +652,7 @@ class RuleStrategyRepository:
         monitor_id: int,
         tenant_id: str,
         *,
+        lease_owner: str,
         state: str,
         reason_code: str,
         reason_detail: str,
@@ -666,9 +670,16 @@ class RuleStrategyRepository:
         """Persist one monitor review while retaining stable rejection evidence."""
         session = self._get_session()
         try:
-            row = session.query(RuleStrategyMonitorSymbol).filter_by(
-                id=monitor_id, tenant_id=tenant_id
-            ).with_for_update().first()
+            row = (
+                session.query(RuleStrategyMonitorSymbol)
+                .filter_by(
+                    id=monitor_id,
+                    tenant_id=tenant_id,
+                    lease_owner=lease_owner,
+                )
+                .with_for_update()
+                .first()
+            )
             if row is None:
                 session.rollback()
                 return None

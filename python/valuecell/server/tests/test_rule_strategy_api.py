@@ -13,6 +13,7 @@ from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyRunningUpdateError,
     RuleStrategyService,
+    RuleStrategyStartAdmissionError,
 )
 
 
@@ -91,6 +92,11 @@ class InMemoryRuleStrategyRepository:
         for name, value in values.items():
             setattr(self.monitor, name, value)
         return self.monitor
+
+
+class LeaseContendedRuleStrategyRepository(InMemoryRuleStrategyRepository):
+    def claim_monitor_lease(self, *args, **kwargs):
+        return []
 
 
 class StaticMonitorMarketService:
@@ -505,6 +511,26 @@ def test_rule_strategy_service_rejects_running_updates_but_updates_stopped_strat
         )
     assert repository.strategy.name == "Updated while stopped"
     assert repository.strategy.config == persisted_before
+
+
+def test_rule_strategy_start_rejects_incomplete_forced_monitor_refresh():
+    repository = LeaseContendedRuleStrategyRepository()
+    service = RuleStrategyService(
+        repository=repository, market_service=StaticMonitorMarketService()
+    )
+    service.create(
+        FIXED_PRINCIPAL.tenant_id,
+        "Lease contended",
+        None,
+        RuleStrategyConfig.model_validate(_config()),
+    )
+    repository.monitor.state = "admitted"
+
+    with pytest.raises(RuleStrategyStartAdmissionError) as exc_info:
+        service.start(STRATEGY_ID, FIXED_PRINCIPAL.tenant_id)
+
+    assert exc_info.value.reason_code == "monitor_refresh_incomplete"
+    assert repository.strategy.status == "stopped"
 
 
 def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evaluation():
