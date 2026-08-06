@@ -39,6 +39,7 @@ import {
   formatConditionValues,
 } from "@/app/dashboard-funnel";
 import { buildLiveEquityCurve } from "@/app/dashboard-equity-curve";
+import { dashboardRefreshTargets } from "@/app/dashboard-refresh";
 import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
 import {
   shouldShowCandlestickLoading,
@@ -320,6 +321,7 @@ export default function DashboardPage() {
   }, {});
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
+  const strategyExecutionModeIsDemo = ruleStrategy ? isOkxDemo : undefined;
   const demoExecutionQuery = useRuleStrategyDemoExecution(
     strategyId || undefined,
     isOkxDemo,
@@ -342,11 +344,11 @@ export default function DashboardPage() {
     ? demoExecutionUnvaluedAssetCount(demoExecution)
     : 0;
   const pnlCurveQuery = useRuleStrategyPnlCurve(
-    isOkxDemo ? undefined : strategyId || undefined,
+    strategyExecutionModeIsDemo === false ? strategyId || undefined : undefined,
   );
   const pnlCurve = pnlCurveQuery.data ?? [];
   const tradesQuery = useRuleStrategyTrades(
-    isOkxDemo ? undefined : strategyId || undefined,
+    strategyExecutionModeIsDemo === false ? strategyId || undefined : undefined,
   );
   const trades = tradesQuery.data ?? [];
   const evaluationsQuery = useRuleStrategyEvaluations(strategyId || undefined);
@@ -377,24 +379,38 @@ export default function DashboardPage() {
       const now = Date.now();
       setRequestNowMs(now);
       setEquityNowMs(now);
-      void Promise.all([
-        strategyQuery.refetch(),
-        monitorStateQuery.refetch(),
-        riskStateQuery.refetch(),
-        pnlCurveQuery.refetch(),
-        tradesQuery.refetch(),
-        evaluationsQuery.refetch(),
-        ...(isOkxDemo ? [demoExecutionQuery.refetch()] : []),
-      ]);
+      const refreshTargets = dashboardRefreshTargets(
+        strategyId || undefined,
+        strategyExecutionModeIsDemo,
+      );
+      const refreshes: Array<() => Promise<unknown>> = [];
+      if (refreshTargets.length > 0) {
+        refreshes.push(
+          () => strategyQuery.refetch(),
+          () => monitorStateQuery.refetch(),
+          () => riskStateQuery.refetch(),
+          () => evaluationsQuery.refetch(),
+        );
+        if (refreshTargets.includes("demo-execution")) {
+          refreshes.push(() => demoExecutionQuery.refetch());
+        } else if (refreshTargets.includes("pnl-curve")) {
+          refreshes.push(
+            () => pnlCurveQuery.refetch(),
+            () => tradesQuery.refetch(),
+          );
+        }
+      }
+      void Promise.all(refreshes.map((refetch) => refetch()));
     }, 15_000);
     return () => window.clearInterval(timer);
   }, [
     demoExecutionQuery,
     evaluationsQuery,
-    isOkxDemo,
     monitorStateQuery,
     pnlCurveQuery,
     riskStateQuery,
+    strategyExecutionModeIsDemo,
+    strategyId,
     strategyQuery,
     tradesQuery,
   ]);
