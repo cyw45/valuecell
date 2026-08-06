@@ -24,6 +24,9 @@ class FakeResult:
     def fetchall(self):
         return self._rows
 
+    def first(self):
+        return self._rows[0] if self._rows else None
+
 
 class FakeSession:
     def __init__(self):
@@ -37,6 +40,14 @@ class FakeSession:
 
     def commit(self):
         self.commits += 1
+
+
+class AppliedValidationMigrationSession(FakeSession):
+    def execute(self, statement, params=None):
+        self.statements.append(str(statement))
+        if "SELECT version FROM schema_migrations" in str(statement):
+            return FakeResult([("applied",)])
+        return FakeResult()
 
 
 def test_execution_attribution_migration_uses_idempotent_concurrent_postgres_ddl():
@@ -104,6 +115,15 @@ def test_execution_attribution_migration_is_idempotent_on_sqlite():
 
 
 
+def test_strategy_product_monitor_backfill_binds_postgresql_parameter_types():
+    statement = migrations._strategy_monitor_symbol_backfill_statement()
+
+    assert statement._bindparams["tenant_id"].type.length == 36
+    assert statement._bindparams["strategy_id"].type.length == 100
+    assert statement._bindparams["symbol"].type.length == 32
+    assert statement._bindparams["protected_held"].type.python_type is bool
+
+
 def test_strategy_product_state_migration_backfills_account_risk_and_monitor_rows():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
@@ -140,6 +160,30 @@ def test_strategy_product_state_migration_backfills_account_risk_and_monitor_row
     assert session.execute(
         __import__("sqlalchemy").text("SELECT state FROM rule_strategy_monitor_symbols")
     ).scalar_one() == "candidate"
+
+def test_rule_strategy_validation_migration_creates_tables_idempotently():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+
+    assert migrations.migrate_rule_strategy_validation(session) is True
+    assert migrations.migrate_rule_strategy_validation(session) is False
+
+    tables = set(inspect(engine).get_table_names())
+    assert {
+        "rule_strategy_validation_runs",
+        "rule_strategy_validation_datasets",
+        "rule_strategy_validation_points",
+        "rule_strategy_validation_fills",
+    } <= tables
+
+
+def test_rule_strategy_validation_migration_locks_before_marker_read():
+    session = AppliedValidationMigrationSession()
+
+    assert migrations.migrate_rule_strategy_validation(session) is False
+    assert "SELECT pg_advisory_xact_lock" in session.statements[0]
+
 
 def test_execution_attribution_models_define_intent_contract_and_attribution():
     order = SandboxExchangeOrder.__table__

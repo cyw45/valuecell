@@ -208,7 +208,7 @@ class RuleStrategyValidationPoint(Base):
     __table_args__ = (
         CheckConstraint("sequence >= 0", name="ck_rule_strategy_validation_point_sequence"),
         CheckConstraint(
-            "window IN ('in_sample', 'out_of_sample')",
+            "\"window\" IN ('in_sample', 'out_of_sample')",
             name="ck_rule_strategy_validation_point_window",
         ),
         CheckConstraint("equity_quote >= 0", name="ck_rule_strategy_validation_point_equity"),
@@ -272,7 +272,7 @@ class RuleStrategyValidationFill(Base):
     __table_args__ = (
         CheckConstraint("sequence >= 0", name="ck_rule_strategy_validation_fill_sequence"),
         CheckConstraint(
-            "window IN ('in_sample', 'out_of_sample')",
+            "\"window\" IN ('in_sample', 'out_of_sample')",
             name="ck_rule_strategy_validation_fill_window",
         ),
         CheckConstraint(

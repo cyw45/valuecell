@@ -8,12 +8,18 @@ from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pytest
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.schema import CreateTable
 
 from valuecell.server.api.schemas.rule_strategy_validation import (
     RuleStrategyValidationCandle,
     RuleStrategyValidationDatasetInput,
     RuleStrategyValidationPointView,
     RuleStrategyValidationRunDetail,
+)
+from valuecell.server.db.models.rule_strategy_validation import (
+    RuleStrategyValidationFill,
+    RuleStrategyValidationPoint,
 )
 from valuecell.server.services.rule_strategy_validation_export_service import (
     RuleStrategyValidationExportService,
@@ -53,6 +59,13 @@ def _complete_daily_dataset(window, *, missing_index: int | None = None):
         interval="1d",
         bars=bars,
     )
+
+
+def test_validation_window_constraints_compile_for_postgresql():
+    for model in (RuleStrategyValidationPoint, RuleStrategyValidationFill):
+        ddl = str(CreateTable(model.__table__).compile(dialect=postgresql.dialect()))
+
+        assert 'CHECK ("window" IN (' in ddl
 
 
 def test_validation_window_is_contiguous_and_requires_closed_utc_day():
