@@ -310,7 +310,7 @@ def create_app() -> FastAPI:
             )
             _scheduler._scheduler.add_job(
                 _review_running_monitors,
-                trigger=IntervalTrigger(days=1),
+                trigger=IntervalTrigger(seconds=86400),
                 id="_scheduler_review_strategy_monitors",
                 replace_existing=True,
                 coalesce=True,
