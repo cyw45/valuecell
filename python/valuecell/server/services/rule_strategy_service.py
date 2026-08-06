@@ -29,6 +29,11 @@ from valuecell.server.services.rule_engine import RuleEngine
 from valuecell.server.services.rule_strategy_templates import (
     get_rule_strategy_template,
 )
+from valuecell.server.services.crypto_market_service import get_crypto_market_service
+from valuecell.server.services.rule_strategy_monitor_service import (
+    RuleStrategyMonitorAdmissionWorker,
+    StrategyMarketMetadata,
+)
 
 
 class RuleStrategyNotFoundError(Exception):
@@ -67,10 +72,11 @@ class RuleStrategyService:
         self,
         repository: RuleStrategyRepository | None = None,
         engine: RuleEngine | None = None,
+        market_service: Any | None = None,
     ) -> None:
         self.repository = repository or RuleStrategyRepository()
         self.engine = engine or RuleEngine()
-
+        self.market_service = market_service or get_crypto_market_service()
     def create(
         self,
         tenant_id: str,
@@ -183,33 +189,68 @@ class RuleStrategyService:
             ),
         )
 
+    def _refresh_monitor_admission(
+        self, strategy_id: str, tenant_id: str, *, force: bool = True
+    ) -> None:
+        """Persist fresh exchange facts before a stopped strategy can be started."""
+        monitors = self.repository.monitors(strategy_id, tenant_id)
+        facts = self.market_service.get_monitor_metadata(
+            [monitor.symbol for monitor in monitors]
+        )
+        metadata = {
+            symbol: (
+                None
+                if fact is None
+                else StrategyMarketMetadata(
+                    listing_age_days=fact.listing_age_days,
+                    average_quote_volume_30d=fact.average_quote_volume_30d,
+                    price_quote=fact.price_quote,
+                    provider=fact.provider,
+                    listing_first_tradable_at=fact.listing_first_tradable_at,
+                    price_observed_at=fact.price_observed_at,
+                )
+            )
+            for symbol, fact in facts.items()
+        }
+        state = self.repository.get_account_state(strategy_id, tenant_id)
+        positions: dict[str, float] = {}
+        if state is not None:
+            for symbol, position in (state[0].positions or {}).items():
+                if isinstance(position, dict):
+                    quantity = position.get("quantity")
+                    if isinstance(quantity, (int, float)):
+                        positions[symbol.upper().replace("/", "-")] = float(quantity)
+        RuleStrategyMonitorAdmissionWorker(self.repository).review(
+            strategy_id,
+            tenant_id,
+            metadata,
+            positions,
+            force=force,
+        )
+
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
-        """Start one strategy after current account and monitor admission checks."""
+        """Start one strategy after a fresh persisted admission review."""
         self._require_strategy(strategy_id, tenant_id)
-        state_reader = getattr(self.repository, "get_account_state", None)
-        monitor_reader = getattr(self.repository, "monitors", None)
-        if state_reader is not None and monitor_reader is not None:
-            current_state = state_reader(strategy_id, tenant_id)
-            if current_state is not None:
-                _account, risk = current_state
-                if risk.state == "halted":
-                    raise RuleStrategyStartAdmissionError(
-                        risk.reason_code or "risk_state_halted",
-                        risk.reason_detail or "策略账户风险状态已停止执行。",
-                    )
-                if (
-                    risk.reason_code == "shared_exchange_account_requires_dedicated_scope"
-                ):
-                    raise RuleStrategyStartAdmissionError(
-                        risk.reason_code,
-                        risk.reason_detail or "共享交易所账户未证明隔离。",
-                    )
-                monitors = monitor_reader(strategy_id, tenant_id)
-                if not any(item.state in {"admitted", "held"} for item in monitors):
-                    raise RuleStrategyStartAdmissionError(
-                        "no_admitted_monitor_symbols",
-                        "策略至少需要一个已准入或持仓保留的监控标的。",
-                    )
+        self._refresh_monitor_admission(strategy_id, tenant_id)
+        current_state = self.repository.get_account_state(strategy_id, tenant_id)
+        if current_state is not None:
+            _account, risk = current_state
+            if risk.state == "halted":
+                raise RuleStrategyStartAdmissionError(
+                    risk.reason_code or "risk_state_halted",
+                    risk.reason_detail or "策略账户风险状态已停止执行。",
+                )
+            if risk.reason_code == "shared_exchange_account_requires_dedicated_scope":
+                raise RuleStrategyStartAdmissionError(
+                    risk.reason_code,
+                    risk.reason_detail or "共享交易所账户未证明隔离。",
+                )
+        monitors = self.repository.monitors(strategy_id, tenant_id)
+        if not any(item.state in {"admitted", "held"} for item in monitors):
+            raise RuleStrategyStartAdmissionError(
+                "no_admitted_monitor_symbols",
+                "策略至少需要一个已准入或持仓保留的监控标的。",
+            )
 
         def apply(current: RuleStrategy) -> None:
             current.status = "running"

@@ -246,3 +246,22 @@ def test_app_lifespan_wires_required_migration_before_best_effort_migrations():
     assert required_call < best_effort_block
     assert required_call < app_source.index("await _scheduler.start()")
     assert "migrate_rule_strategy_execution_attribution(session)" in app_source
+
+
+
+def test_monitor_metadata_migration_installs_provider_fact_columns():
+    session = FakeSession()
+
+    assert migrations.migrate_strategy_monitor_metadata(session) is True
+
+    statements = "\n".join(session.statements)
+    assert "SELECT pg_advisory_xact_lock" in statements
+    for column in (
+        "metadata_provider VARCHAR(32)",
+        "listing_first_tradable_at TIMESTAMP WITH TIME ZONE",
+        "listing_age_days INTEGER",
+        "average_quote_volume_30d FLOAT",
+        "price_quote FLOAT",
+        "price_observed_at TIMESTAMP WITH TIME ZONE",
+    ):
+        assert column in statements

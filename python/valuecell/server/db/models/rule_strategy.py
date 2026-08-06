@@ -177,6 +177,12 @@ class RuleStrategyMonitorSymbol(Base):
     consecutive_low_volume_days = Column(Integer, nullable=False, default=0)
     lease_owner = Column(String(100), nullable=True)
     lease_until = Column(DateTime(timezone=True), nullable=True)
+    metadata_provider = Column(String(32), nullable=True)
+    listing_first_tradable_at = Column(DateTime(timezone=True), nullable=True)
+    listing_age_days = Column(Integer, nullable=True)
+    average_quote_volume_30d = Column(Float, nullable=True)
+    price_quote = Column(Float, nullable=True)
+    price_observed_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "strategy_id", "symbol", name="uq_rule_strategy_monitor_symbol"),

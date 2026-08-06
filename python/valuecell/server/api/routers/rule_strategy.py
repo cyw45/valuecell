@@ -442,6 +442,12 @@ def create_rule_strategy_router(
                     "evaluated_at": row.evaluated_at,
                     "next_check_at": row.next_check_at,
                     "protected_held": row.protected_held,
+                    "metadata_provider": row.metadata_provider,
+                    "listing_first_tradable_at": row.listing_first_tradable_at,
+                    "listing_age_days": row.listing_age_days,
+                    "average_quote_volume_30d": row.average_quote_volume_30d,
+                    "price_quote": row.price_quote,
+                    "price_observed_at": row.price_observed_at,
                 }
                 for row in rows
             ],

@@ -1,0 +1,102 @@
+{
+  "strategy_name": "多币种趋势共振策略（Program V2 兼容版）",
+  "executable": true,
+  "config": {
+    "interval": "15m",
+    "program": {
+      "schema_version": 2,
+      "entry": {
+        "op": "all",
+        "args": [
+          {
+            "op": "compare",
+            "left": { "kind": "price", "interval": "1d", "source": "close" },
+            "comparator": "gt",
+            "right": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 20 }
+          },
+          {
+            "op": "compare",
+            "left": { "kind": "price", "interval": "1d", "source": "close" },
+            "comparator": "gt",
+            "right": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 60 }
+          },
+          {
+            "op": "compare",
+            "left": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 20 },
+            "comparator": "gt",
+            "right": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 60 }
+          },
+          {
+            "op": "compare",
+            "left": { "kind": "indicator", "name": "rsi", "interval": "15m", "period": 14 },
+            "comparator": "lte",
+            "right": { "kind": "constant", "value": 15 }
+          },
+          {
+            "op": "cross",
+            "left": { "kind": "price", "interval": "15m", "source": "close" },
+            "direction": "above",
+            "right": {
+              "kind": "indicator",
+              "name": "bollinger",
+              "interval": "15m",
+              "period": 20,
+              "component": "middle"
+            }
+          },
+          {
+            "op": "compare",
+            "left": { "kind": "volume", "interval": "15m" },
+            "comparator": "gt",
+            "right": {
+              "kind": "indicator",
+              "name": "volume_ma",
+              "interval": "15m",
+              "period": 20,
+              "multiplier": 1.2
+            }
+          }
+        ]
+      },
+      "exit": {
+        "op": "all",
+        "args": [
+          {
+            "op": "compare",
+            "left": { "kind": "price", "interval": "1d", "source": "close" },
+            "comparator": "lt",
+            "right": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 60 }
+          },
+          {
+            "op": "compare",
+            "left": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 20 },
+            "comparator": "lt",
+            "right": { "kind": "indicator", "name": "ma", "interval": "1d", "period": 60 }
+          }
+        ]
+      }
+    },
+    "risk": {
+      "order_quote_amount": 300,
+      "take_profit_pct": null,
+      "stop_loss_pct": 0.08,
+      "trailing_take_profit_pct": null,
+      "max_total_position_pct": 0.7,
+      "max_symbol_position_pct": 0.15,
+      "add_to_winners": false,
+      "max_additions": 0,
+      "max_positions": 6,
+      "leverage": 1
+    }
+  },
+  "summary": "日线多头趋势下，15 分钟 RSI 超卖、收盘价上穿布林中轨且成交量放大时，以固定金额开仓；日线转空或固定止损时全额平仓。",
+  "unresolved_items": [],
+  "corrections": [
+    "已删除 program v2 不支持的 BRAR、ROC 和实时价格条件。",
+    "已删除状态、冷却、排序、相关性、分批仓位和订单执行规则。",
+    "已删除不能等价表示的条件加仓、ATR 追踪止损和部分减仓规则。",
+    "已删除文本导入不能回填的初始资金、运行模式、交易标的和决策频率。",
+    "单笔金额固定为 300 USDT，来自原策略 10,000 USDT 示例下的首次建仓金额。"
+  ],
+  "rejection_reasons": []
+}

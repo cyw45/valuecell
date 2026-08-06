@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncio
 import math
@@ -100,6 +100,36 @@ def test_public_candle_requests_send_stable_json_headers(monkeypatch):
     assert headers["user-agent"] == "valuecell-market-data/1.0"
     assert headers["accept"] == "application/json"
     assert len(candles) == 1
+
+
+def test_monitor_metadata_uses_completed_raw_quote_volume(monkeypatch):
+    service = CryptoMarketService()
+    observed_at = datetime(2026, 8, 6, 12, tzinfo=timezone.utc)
+    day_ms = 86_400_000
+    start_ms = int((observed_at.replace(hour=0) - timedelta(days=30)).timestamp() * 1_000)
+    history = [
+        [start_ms + index * day_ms, "0", "0", "0", "0", "0", "0", str(1_000 + index)]
+        for index in range(30)
+    ]
+
+    def fetch(_provider, path, query):
+        if path.endswith("klines") and query["startTime"] == 0:
+            return [[int(datetime(2020, 1, 1, tzinfo=timezone.utc).timestamp() * 1_000)]]
+        if path.endswith("klines"):
+            return history
+        return {"price": "101.25"}
+
+    monkeypatch.setattr(service, "_fetch_monitor_provider_json", fetch)
+
+    facts = service._fetch_provider_monitor_metadata(
+        "BTC-USDT", observed_at, "binance"
+    )
+
+    assert facts is not None
+    assert facts.provider == "binance"
+    assert facts.average_quote_volume_30d == pytest.approx(1_014.5)
+    assert facts.price_quote == 101.25
+    assert facts.listing_age_days > 60
 
 
 def test_symbol_specific_provider_error_does_not_trip_global_circuit_breaker(monkeypatch):

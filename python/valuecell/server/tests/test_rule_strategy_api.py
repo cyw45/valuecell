@@ -30,6 +30,12 @@ class InMemoryRuleStrategyRepository:
     def __init__(self) -> None:
         self.strategy = None
         self.evaluations = []
+        self.monitor = SimpleNamespace(
+            id=1,
+            symbol="BTC-USDT",
+            state="candidate",
+            consecutive_low_volume_days=0,
+        )
 
     def create(self, strategy):
         strategy.strategy_id = STRATEGY_ID
@@ -71,6 +77,38 @@ class InMemoryRuleStrategyRepository:
         if journal is not None:
             journal.result = {**journal.result, "execution": execution}
         return journal
+
+    def get_account_state(self, strategy_id: str, tenant_id: str):
+        return None
+
+    def monitors(self, strategy_id: str, tenant_id: str):
+        return [self.monitor]
+
+    def claim_monitor_lease(self, *args, **kwargs):
+        return [self.monitor]
+
+    def update_monitor_state(self, monitor_id: int, tenant_id: str, **values):
+        for name, value in values.items():
+            setattr(self.monitor, name, value)
+        return self.monitor
+
+
+class StaticMonitorMarketService:
+    """Keeps router tests deterministic without bypassing monitor admission."""
+
+    def get_monitor_metadata(self, symbols: list[str]):
+        observed_at = datetime(2026, 8, 6, tzinfo=timezone.utc)
+        return {
+            symbol: SimpleNamespace(
+                listing_age_days=365,
+                average_quote_volume_30d=10_000_000.0,
+                price_quote=100.0,
+                provider="test",
+                listing_first_tradable_at=datetime(2025, 8, 6, tzinfo=timezone.utc),
+                price_observed_at=observed_at,
+            )
+            for symbol in symbols
+        }
 
 
 def _config() -> dict:
@@ -127,7 +165,8 @@ def _client(repository: InMemoryRuleStrategyRepository | None = None) -> TestCli
     app.include_router(
         create_rule_strategy_router(
             service=RuleStrategyService(
-                repository=repository or InMemoryRuleStrategyRepository()
+                repository=repository or InMemoryRuleStrategyRepository(),
+                market_service=StaticMonitorMarketService(),
             )
         )
     )
@@ -431,7 +470,9 @@ def test_rule_strategy_api_rejects_all_running_updates_without_persisting(update
 
 def test_rule_strategy_service_rejects_running_updates_but_updates_stopped_strategy():
     repository = InMemoryRuleStrategyRepository()
-    service = RuleStrategyService(repository=repository)
+    service = RuleStrategyService(
+        repository=repository, market_service=StaticMonitorMarketService()
+    )
     config = RuleStrategyConfig.model_validate(_config())
     service.create(FIXED_PRINCIPAL.tenant_id, "Original", "Original description", config)
 
@@ -695,7 +736,9 @@ def test_evaluations_api_reads_back_durable_demo_execution_mapping(
     order_status, submission, fill
 ):
     repository = InMemoryRuleStrategyRepository()
-    service = RuleStrategyService(repository=repository)
+    service = RuleStrategyService(
+        repository=repository, market_service=StaticMonitorMarketService()
+    )
     app = FastAPI()
     app.include_router(create_rule_strategy_router(service=service))
     app.dependency_overrides[get_current_principal] = lambda: FIXED_PRINCIPAL

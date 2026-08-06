@@ -543,3 +543,79 @@ def migrate_rule_strategy_validation(session: Session) -> bool:
         version=RULE_STRATEGY_VALIDATION_MIGRATION_VERSION,
     )
     return True
+
+
+STRATEGY_MONITOR_METADATA_MIGRATION_VERSION = "20260806_strategy_monitor_metadata_v1"
+STRATEGY_MONITOR_METADATA_MIGRATION_LOCK_KEY = 7720250722
+
+
+def migrate_strategy_monitor_metadata(session: Session) -> bool:
+    """Install durable provider facts required by monitor admission."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "strategy monitor metadata migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": STRATEGY_MONITOR_METADATA_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": STRATEGY_MONITOR_METADATA_MIGRATION_VERSION},
+    ).first():
+        return False
+    additions = {
+        "metadata_provider": "VARCHAR(32)",
+        "listing_first_tradable_at": (
+            "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+        ),
+        "listing_age_days": "INTEGER",
+        "average_quote_volume_30d": "FLOAT",
+        "price_quote": "FLOAT",
+        "price_observed_at": (
+            "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+        ),
+    }
+    if dialect == "postgresql":
+        for name, definition in additions.items():
+            session.execute(
+                text(
+                    "ALTER TABLE rule_strategy_monitor_symbols "
+                    f"ADD COLUMN IF NOT EXISTS {name} {definition}"
+                )
+            )
+    else:
+        columns = {
+            row[1]
+            for row in session.execute(
+                text("PRAGMA table_info(rule_strategy_monitor_symbols)")
+            ).fetchall()
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                session.execute(
+                    text(
+                        "ALTER TABLE rule_strategy_monitor_symbols "
+                        f"ADD COLUMN {name} {definition}"
+                    )
+                )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": STRATEGY_MONITOR_METADATA_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=STRATEGY_MONITOR_METADATA_MIGRATION_VERSION,
+    )
+    return True

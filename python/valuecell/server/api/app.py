@@ -159,6 +159,7 @@ def _run_required_execution_attribution_migration() -> None:
     from ..db.migrations import (
         migrate_rule_strategy_execution_attribution,
         migrate_rule_strategy_validation,
+        migrate_strategy_monitor_metadata,
         migrate_strategy_product_state,
     )
 
@@ -167,6 +168,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_rule_strategy_execution_attribution(session)
         migrate_strategy_product_state(session)
         migrate_rule_strategy_validation(session)
+        migrate_strategy_monitor_metadata(session)
     finally:
         session.close()
 
@@ -283,12 +285,38 @@ def create_app() -> FastAPI:
                         exc,
                     )
 
+            def _review_running_monitors() -> None:
+                from ..db.repositories.rule_strategy_repository import (
+                    RuleStrategyRepository,
+                )
+                from ..services.rule_strategy_service import RuleStrategyService
+
+                try:
+                    repository = RuleStrategyRepository()
+                    service = RuleStrategyService(repository=repository)
+                    for strategy in repository.list_running():
+                        service._refresh_monitor_admission(
+                            strategy.strategy_id,
+                            strategy.tenant_id,
+                            force=False,
+                        )
+                except Exception as exc:
+                    logger.warning("Strategy monitor review deferred: {}", exc)
+
             _scheduler._scheduler.add_job(
                 _sync_job,
                 trigger=IntervalTrigger(seconds=60),
                 id="_scheduler_sync_running",
                 replace_existing=True,
                 coalesce=True,
+            )
+            _scheduler._scheduler.add_job(
+                _review_running_monitors,
+                trigger=IntervalTrigger(days=1),
+                id="_scheduler_review_strategy_monitors",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
             )
             _scheduler._scheduler.add_job(
                 reconcile_active_tenant_intents,
@@ -301,6 +329,7 @@ def create_app() -> FastAPI:
             # Attempt immediately, but database outages must not disable the
             # recurring job or prevent the API and market snapshot from starting.
             _sync_job()
+            _review_running_monitors()
             logger.info("Strategy scheduler started")
         except Exception as exc:
             logger.warning("Strategy scheduler initialization deferred: {}", exc)

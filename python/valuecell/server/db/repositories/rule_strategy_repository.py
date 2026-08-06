@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import desc, or_
+from sqlalchemy import desc, or_, true
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -497,11 +497,9 @@ class RuleStrategyRepository:
         strategy_id: str,
         tenant_id: str,
         owner_id: str,
-        *,
-        now: datetime | None = None,
-        lease_seconds: int = 60,
+        force: bool = False,
     ) -> list[RuleStrategyMonitorSymbol]:
-        """Claim due candidate symbols for a single monitor-review worker."""
+        """Claim reviewable symbols, optionally bypassing only their due time."""
         session = self._get_session()
         timestamp = now or datetime.now(timezone.utc)
         try:
@@ -510,8 +508,9 @@ class RuleStrategyRepository:
                 .filter(
                     RuleStrategyMonitorSymbol.strategy_id == strategy_id,
                     RuleStrategyMonitorSymbol.tenant_id == tenant_id,
-                    RuleStrategyMonitorSymbol.state == "candidate",
-                    or_(
+                    true()
+                    if force
+                    else or_(
                         RuleStrategyMonitorSymbol.next_check_at.is_(None),
                         RuleStrategyMonitorSymbol.next_check_at <= timestamp,
                     ),
@@ -657,6 +656,12 @@ class RuleStrategyRepository:
         next_check_at: datetime,
         protected_held: bool,
         consecutive_low_volume_days: int,
+        metadata_provider: str | None,
+        listing_first_tradable_at: datetime | None,
+        listing_age_days: int | None,
+        average_quote_volume_30d: float | None,
+        price_quote: float | None,
+        price_observed_at: datetime | None,
     ) -> RuleStrategyMonitorSymbol | None:
         """Persist one monitor review while retaining stable rejection evidence."""
         session = self._get_session()
@@ -674,6 +679,12 @@ class RuleStrategyRepository:
             row.next_check_at = next_check_at
             row.protected_held = protected_held
             row.consecutive_low_volume_days = consecutive_low_volume_days
+            row.metadata_provider = metadata_provider
+            row.listing_first_tradable_at = listing_first_tradable_at
+            row.listing_age_days = listing_age_days
+            row.average_quote_volume_30d = average_quote_volume_30d
+            row.price_quote = price_quote
+            row.price_observed_at = price_observed_at
             row.lease_owner = None
             row.lease_until = None
             session.commit()

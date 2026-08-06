@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ActivityIndicator,
   Pressable,
@@ -9,11 +9,13 @@ import {
   Text,
   View,
 } from "react-native";
+import { ChevronRight, Download, LineChart, Pause, Pencil, Play, RefreshCw, Trash2 } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
-import { ChevronRight, LineChart, RefreshCw } from "lucide-react-native";
 import { api } from "../api";
+import { accessGate, canMutate } from "../access";
 import { StrategyExportPanel } from "../components/StrategyExportPanel";
 import {
+  ConfirmSheet,
   BottomSheetSelector,
   EquityCurveChart,
   MetricCard,
@@ -50,6 +52,21 @@ import {
   selectActiveStrategyId,
 } from "./workbench";
 
+const MONITOR_LABELS: Record<string, string> = {
+  candidate: "待准入",
+  admitted: "已准入",
+  held: "持仓保留",
+  removed: "已移除",
+};
+const RISK_LABELS: Record<string, string> = {
+  normal: "正常",
+  warn: "预警",
+  only_reduce: "仅允许减仓",
+  blocked: "已阻断",
+  halted: "已暂停",
+};
+const displayMonitorState = (state: string) => MONITOR_LABELS[state] ?? "未知状态";
+const displayRiskState = (state?: string | null) => (state ? RISK_LABELS[state] ?? "未知状态" : "同步中");
 
 type StrategyOverviewRoute = RouteProp<WorkbenchStackParamList, "StrategyOverview">;
 
@@ -72,10 +89,35 @@ export default function StrategyOverviewScreen() {
   const { session } = useSession();
   const [selectedId, setSelectedId] = useState("");
   const [selectorVisible, setSelectorVisible] = useState(false);
+  const queryClient = useQueryClient();
+  const [equityRange, setEquityRange] = useState<"1d" | "5d" | "1w" | "1m" | "1y" | "all">("1m");
+  const [exportStrategyId, setExportStrategyId] = useState<string | null>(null);
+  const [pendingOperation, setPendingOperation] = useState<{
+    action: "start" | "stop" | "archive";
+    strategyId: string;
+  } | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
+  const access = useQuery({
+    queryKey: ["mobile", session?.tenantId, "access"],
+    queryFn: api.access,
+    enabled: Boolean(session),
+  });
+  const lifecycle = useMutation({
+    mutationFn: async ({ action, strategyId }: { action: "start" | "stop" | "archive"; strategyId: string }) => {
+      if (action === "start") return api.startStrategy(strategyId);
+      if (action === "stop") return api.stopStrategy(strategyId);
+      return api.archiveStrategy(strategyId);
+    },
+    onSuccess: async (saved) => {
+      await queryClient.invalidateQueries({ queryKey: ["mobile", session?.tenantId, "strategies"] });
+      await queryClient.invalidateQueries({ queryKey: ["mobile", session?.tenantId, "strategy", saved.strategy_id] });
+    },
+  });
   const strategies = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategies"],
     queryFn: () => api.strategies(false),
     enabled: Boolean(session),
+    refetchInterval: 15_000,
   });
 
   useEffect(() => {
@@ -108,24 +150,29 @@ export default function StrategyOverviewScreen() {
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "account"],
     queryFn: () => api.strategyAccount(activeId),
     enabled: Boolean(activeId && !isDemo),
+    refetchInterval: 15_000,
   });
   const pnl = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "pnl"],
     queryFn: () => api.strategyPnlCurve(activeId),
     enabled: Boolean(activeId && !isDemo),
+    refetchInterval: 15_000,
   });
   const evaluations = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "evaluations", 20],
     queryFn: () => api.strategyEvaluations(activeId, 20),
     enabled: Boolean(activeId),
+    refetchInterval: 15_000,
   });
   const trades = useQuery({
+    refetchInterval: 15_000,
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "trades", 10],
     queryFn: () => api.strategyLog(activeId, "trades", 10),
     enabled: Boolean(activeId && !isDemo),
   });
   const funding = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "funding", 10],
+    refetchInterval: 15_000,
     queryFn: () => api.strategyLog(activeId, "funding", 10),
     enabled: Boolean(activeId && !isDemo),
   });
@@ -134,14 +181,17 @@ export default function StrategyOverviewScreen() {
     queryFn: () => api.strategyDemoExecution(activeId),
     enabled: Boolean(activeId && isDemo),
     retry: false,
+    refetchInterval: 15_000,
   });
   const monitorState = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "monitor-state"],
     queryFn: () => api.strategyMonitorState(activeId),
     enabled: Boolean(activeId),
+    refetchInterval: 15_000,
   });
   const riskState = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "risk-state"],
+    refetchInterval: 15_000,
     queryFn: () => api.strategyRiskState(activeId),
     enabled: Boolean(activeId),
   });
@@ -166,6 +216,44 @@ export default function StrategyOverviewScreen() {
     setSelectedId(strategyId);
     setSelectorVisible(false);
     if (session) void saveActiveStrategyId(session.userId, session.tenantId, strategyId);
+  };
+  const managementGate = accessGate(access.data, "strategy.manage");
+  const canManage = canMutate(access.data, "strategy.manage");
+  const operationStrategy = pendingOperation
+    ? (strategies.data ?? []).find(
+        (item) => item.strategy_id === pendingOperation.strategyId,
+      )
+    : undefined;
+  const filteredPnlPoints = useMemo(() => {
+    const points = pnl.data ?? [];
+    if (equityRange === "all" || points.length < 2) return points;
+    const durations = {
+      "1d": 24 * 60 * 60 * 1_000,
+      "5d": 5 * 24 * 60 * 60 * 1_000,
+      "1w": 7 * 24 * 60 * 60 * 1_000,
+      "1m": 31 * 24 * 60 * 60 * 1_000,
+      "1y": 365 * 24 * 60 * 60 * 1_000,
+    } as const;
+    const latestTs = Date.parse(points[points.length - 1]?.ts ?? "");
+    if (!Number.isFinite(latestTs)) return points;
+    const initial = points.find((point) => point.action === "initial");
+    const ranged = points.filter(
+      (point) => Date.parse(point.ts) >= latestTs - durations[equityRange],
+    );
+    return initial && ranged[0] !== initial ? [initial, ...ranged] : ranged;
+  }, [equityRange, pnl.data]);
+  const confirmOperation = async () => {
+    if (!pendingOperation || !operationStrategy) return;
+    try {
+      await lifecycle.mutateAsync(pendingOperation);
+      if (pendingOperation.action === "archive" && activeId === operationStrategy.strategy_id) {
+        selectStrategy("");
+      }
+      setPendingOperation(null);
+      setOperationError(null);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "服务未完成本次策略操作。");
+    }
   };
 
   if (strategies.isLoading) {
@@ -252,14 +340,6 @@ export default function StrategyOverviewScreen() {
         />
       </View>
 
-      <SectionCard description="服务端持久化的候选池与账户级阻断原因。" title="监控池与风险">
-        <View style={styles.stateRows}>
-          <Text style={styles.stateText}>候选 {monitorState.data?.filter((item) => item.state === "candidate").length ?? 0} · 准入 {monitorState.data?.filter((item) => item.state === "admitted").length ?? 0} · 持仓保留 {monitorState.data?.filter((item) => item.state === "held").length ?? 0} · 移除 {monitorState.data?.filter((item) => item.state === "removed").length ?? 0}</Text>
-          <Text style={styles.stateText}>风险状态：{riskState.data?.state ?? "同步中"}</Text>
-          <Text style={styles.muted}>{riskState.data?.reason_detail ?? "暂无持久化风险原因"}</Text>
-          {monitorState.data?.slice(0, 4).map((item) => <Text key={item.symbol} style={styles.muted}>{item.symbol} · {item.state} · {item.reason_detail ?? item.reason_code ?? "暂无原因"}</Text>)}
-        </View>
-      </SectionCard>
 
       <SectionCard description="点按交易对可直接打开该策略对应的行情视图。" title="观察标的">
         <View style={styles.symbols}>
@@ -354,11 +434,26 @@ export default function StrategyOverviewScreen() {
 
           <SectionCard
             actionLabel="查看 PnL"
-            description="权益、初始本金与累计 PnL 均来自服务端账本；单指横向拖动回看，双指横向开合缩放。"
+            description="权益、初始本金与累计 PnL 均来自服务端账本；可拖动和双指缩放时间轴。"
             onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })}
             title="策略权益曲线"
           >
-            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnl.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取服务端权益曲线。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} points={pnl.data ?? []} />}
+            <ScrollView contentContainerStyle={styles.rangeTabs} horizontal showsHorizontalScrollIndicator={false}>
+              {(["1d", "5d", "1w", "1m", "1y", "all"] as const).map((value) => (
+                <Pressable
+                  accessibilityLabel={`查看${({ "1d": "日", "5d": "5日", "1w": "周", "1m": "月", "1y": "年", all: "全部" } as const)[value]}权益曲线`}
+                  accessibilityRole="button"
+                  key={value}
+                  onPress={() => setEquityRange(value)}
+                  style={({ pressed }) => [styles.rangeTab, equityRange === value && styles.rangeTabActive, pressed && styles.pressed]}
+                >
+                  <Text style={[styles.rangeTabText, equityRange === value && styles.rangeTabTextActive]}>
+                    {({ "1d": "日", "5d": "5日", "1w": "周", "1m": "月", "1y": "年", all: "全部" } as const)[value]}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnl.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取服务端权益曲线。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} points={filteredPnlPoints} />}
           </SectionCard>
 
           <SectionCard actionLabel="全部成交" onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId })} title="最近成交">
@@ -371,7 +466,52 @@ export default function StrategyOverviewScreen() {
         </>
       )}
 
-      <StrategyExportPanel strategyId={activeId} />
+      <SectionCard description="服务端持久化的候选池与账户级阻断原因。" title="监控池与风险">
+        <View style={styles.stateRows}>
+          <Text style={styles.stateText}>待准入 {monitorState.data?.filter((item) => item.state === "candidate").length ?? 0} · 已准入 {monitorState.data?.filter((item) => item.state === "admitted").length ?? 0} · 持仓保留 {monitorState.data?.filter((item) => item.state === "held").length ?? 0} · 已移除 {monitorState.data?.filter((item) => item.state === "removed").length ?? 0}</Text>
+          <Text style={styles.stateText}>风险状态：{displayRiskState(riskState.data?.state)}</Text>
+          <Text style={styles.muted}>{riskState.data?.reason_detail?.match(/[\u4e00-\u9fff]/) ? riskState.data.reason_detail : "暂无持久化风险原因"}</Text>
+          {monitorState.data?.slice(0, 4).map((item) => <Text key={item.symbol} style={styles.muted}>{item.symbol} · {displayMonitorState(item.state)} · {item.reason_detail?.match(/[\u4e00-\u9fff]/) ? item.reason_detail : "暂无中文说明"}</Text>)}
+        </View>
+      </SectionCard>
+      <SectionCard
+        actionLabel="新增策略"
+        description="选择策略后，资金、执行、交易、分析、权益和监控信息会同步切换。"
+        onAction={() => navigation.navigate("策略", { screen: "StrategyEditor" })}
+        title="策略管理"
+      >
+        {!managementGate.mutationAllowed && access.data ? <Text style={styles.muted}>{managementGate.message ?? "当前角色仅具备策略查看权限。"}</Text> : null}
+        {operationError ? <Text style={styles.operationError}>{operationError}</Text> : null}
+        <View style={styles.managerCards}>
+          {(strategies.data ?? []).map((item) => {
+            const selected = item.strategy_id === activeId;
+            const running = item.status === "running";
+            return (
+              <View key={item.strategy_id} style={[styles.managerCard, selected && styles.managerCardSelected]}>
+                <Pressable
+                  accessibilityLabel={`选择策略 ${item.name}`}
+                  accessibilityRole="button"
+                  onPress={() => selectStrategy(item.strategy_id)}
+                  style={({ pressed }) => [styles.managerSelect, pressed && styles.pressed]}
+                >
+                  <View style={styles.rowCopy}>
+                    <Text numberOfLines={1} style={styles.positionSymbol}>{item.name}</Text>
+                    <Text numberOfLines={1} style={styles.muted}>{item.config.symbols.join(" · ")} · {item.config.interval} 周期</Text>
+                  </View>
+                  <Text style={[styles.managerStatus, running ? styles.managerRunning : styles.managerStopped]}>{strategyStatusLabel(item.status, item.archived_at)}</Text>
+                </Pressable>
+                <View style={styles.managerActions}>
+                  <Pressable accessibilityLabel={`编辑策略 ${item.name}`} accessibilityRole="button" onPress={() => navigation.navigate("策略", { screen: "StrategyEditor", params: { strategyId: item.strategy_id } })} style={({ pressed }) => [styles.managerAction, pressed && styles.pressed]}><Pencil color={palette.primary} size={16} /><Text style={styles.managerActionText}>编辑</Text></Pressable>
+                  {canManage ? <Pressable accessibilityLabel={`${running ? "停止" : "启动"}策略 ${item.name}`} accessibilityRole="button" disabled={lifecycle.isPending} onPress={() => setPendingOperation({ action: running ? "stop" : "start", strategyId: item.strategy_id })} style={({ pressed }) => [styles.managerAction, running && styles.managerStopAction, lifecycle.isPending && styles.disabled, pressed && !lifecycle.isPending && styles.pressed]}>{running ? <Pause color={palette.warning} size={16} /> : <Play color={palette.primary} size={16} />}<Text style={styles.managerActionText}>{running ? "停止" : "启动"}</Text></Pressable> : null}
+                  <Pressable accessibilityLabel={`导出策略 ${item.name} 历史`} accessibilityRole="button" onPress={() => setExportStrategyId(exportStrategyId === item.strategy_id ? null : item.strategy_id)} style={({ pressed }) => [styles.managerAction, pressed && styles.pressed]}><Download color={palette.primary} size={16} /><Text style={styles.managerActionText}>导出</Text></Pressable>
+                  {canManage && !running ? <Pressable accessibilityLabel={`删除策略 ${item.name}`} accessibilityRole="button" onPress={() => setPendingOperation({ action: "archive", strategyId: item.strategy_id })} style={({ pressed }) => [styles.managerAction, styles.managerDeleteAction, pressed && styles.pressed]}><Trash2 color={palette.negative} size={16} /><Text style={styles.managerDeleteText}>删除</Text></Pressable> : null}
+                </View>
+                {exportStrategyId === item.strategy_id ? <StrategyExportPanel strategyId={item.strategy_id} /> : null}
+              </View>
+            );
+          })}
+        </View>
+      </SectionCard>
 
       <PrimaryButton label="查看策略详情" leading={<LineChart color={palette.canvas} size={19} />} onPress={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })} />
       <Pressable accessibilityLabel="刷新策略工作台" accessibilityRole="button" onPress={refresh} style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
@@ -389,6 +529,16 @@ export default function StrategyOverviewScreen() {
         selectedValue={activeId}
         title="选择工作台策略"
         visible={selectorVisible}
+      />
+      <ConfirmSheet
+        confirmLabel={pendingOperation?.action === "archive" ? "确认删除" : pendingOperation?.action === "start" ? "确认启动" : "确认停止"}
+        confirming={lifecycle.isPending}
+        destructive={pendingOperation?.action === "archive"}
+        message={pendingOperation?.action === "archive" ? "已停止策略会从工作台列表移除；如有审计记录，服务端会安全归档。" : pendingOperation?.action === "start" ? "策略会按服务端配置恢复扫描。" : "停止后不会再创建新的策略执行。"}
+        onCancel={() => !lifecycle.isPending && setPendingOperation(null)}
+        onConfirm={() => void confirmOperation()}
+        title={pendingOperation ? `${pendingOperation.action === "archive" ? "删除" : pendingOperation.action === "start" ? "启动" : "停止"}“${operationStrategy?.name ?? "策略"}”？` : "确认策略操作"}
+        visible={Boolean(pendingOperation)}
       />
     </ScrollView>
   );
@@ -420,6 +570,26 @@ const styles = StyleSheet.create({
   rowCopy: { flex: 1, gap: 2 },
   muted: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },
   positionRow: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 52, paddingVertical: spacing.xs },
+  rangeTabs: { gap: spacing.xs, paddingBottom: spacing.xs },
+  rangeTab: { borderColor: palette.border, borderRadius: radius.pill, borderWidth: 1, minHeight: 34, paddingHorizontal: spacing.sm, justifyContent: "center" },
+  rangeTabActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
+  rangeTabText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
+  rangeTabTextActive: { color: palette.primary },
+  managerCards: { gap: spacing.sm },
+  managerCard: { backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, gap: spacing.sm, padding: spacing.sm },
+  managerCardSelected: { borderColor: palette.primary, backgroundColor: palette.primarySoft },
+  managerSelect: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
+  managerStatus: { fontSize: 12, fontWeight: "900" },
+  managerRunning: { color: palette.positive },
+  managerStopped: { color: palette.textMuted },
+  managerActions: { borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, paddingTop: spacing.sm },
+  managerAction: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: 4, minHeight: 36, paddingHorizontal: spacing.sm },
+  managerStopAction: { borderColor: palette.warning },
+  managerDeleteAction: { borderColor: palette.negative },
+  managerActionText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  managerDeleteText: { color: palette.negative, fontSize: 12, fontWeight: "800" },
+  operationError: { color: palette.negative, fontSize: 12, fontWeight: "800", lineHeight: 19 },
+  disabled: { opacity: 0.5 },
   positionSymbol: { color: palette.text, fontSize: 14, fontWeight: "800" },
   positionValue: { color: palette.text, fontSize: 13, fontWeight: "900" },
   orderRow: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 54, paddingVertical: spacing.xs },

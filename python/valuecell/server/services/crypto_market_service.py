@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import random
+from concurrent.futures import ThreadPoolExecutor
 import time
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from typing import ClassVar
 from pathlib import Path
@@ -43,6 +44,7 @@ DEFAULT_LOOKBACK = 240
 MAX_LOOKBACK = 5_000
 CACHE_TTL_S = 12.0
 FETCH_TIMEOUT_S = 8.0
+MONITOR_FETCH_TIMEOUT_S = 3.0
 MAX_GATE_CANDLES_PER_REQUEST = 1_000
 MAX_CONCURRENT_FETCHES = 6
 MA_WINDOWS: tuple[int, ...] = (5, 10, 20, 60)
@@ -141,6 +143,20 @@ class CandleFetchResult:
     exchange_symbol: str
     provider: str
     candles: list[CryptoCandleData]
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorMarketFacts:
+    """Fresh, provider-native facts used exclusively for monitor admission."""
+
+    symbol: str
+    provider: str
+    observed_at: datetime
+    listing_first_tradable_at: datetime
+    listing_age_days: int
+    average_quote_volume_30d: float
+    price_quote: float
+    price_observed_at: datetime
 
 
 @dataclass
@@ -1024,6 +1040,118 @@ class CryptoMarketService:
             )
         candles.sort(key=lambda item: item.ts)
         return candles
+
+    def get_monitor_metadata(
+        self, symbols: list[str]
+    ) -> dict[str, MonitorMarketFacts | None]:
+        observed_at = datetime.now(timezone.utc)
+        normalized_symbols = self._normalize_symbols(symbols)
+        with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES) as executor:
+            facts = executor.map(
+                lambda symbol: self._fetch_monitor_metadata(symbol, observed_at),
+                normalized_symbols,
+            )
+            return dict(zip(normalized_symbols, facts, strict=True))
+
+    def _fetch_monitor_metadata(
+        self, symbol: str, observed_at: datetime
+    ) -> MonitorMarketFacts | None:
+        for provider in ("binance", "mexc"):
+            facts = self._fetch_provider_monitor_metadata(symbol, observed_at, provider)
+            if facts is not None:
+                return facts
+        return None
+
+    def _fetch_provider_monitor_metadata(
+        self, symbol: str, observed_at: datetime, provider: str
+    ) -> MonitorMarketFacts | None:
+        """Prove listing age and quote volume from one raw exchange provider."""
+        compact_symbol = symbol.replace("-", "")
+        today = observed_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            first_rows = self._fetch_monitor_provider_json(
+                provider,
+                "/api/v3/klines",
+                {"symbol": compact_symbol, "interval": "1d", "startTime": 0, "limit": 1},
+            )
+            history_rows = self._fetch_monitor_provider_json(
+                provider,
+                "/api/v3/klines",
+                {
+                    "symbol": compact_symbol,
+                    "interval": "1d",
+                    "startTime": int((today - timedelta(days=31)).timestamp() * 1_000),
+                    "endTime": int(observed_at.timestamp() * 1_000),
+                    "limit": 32,
+                },
+            )
+            ticker = self._fetch_monitor_provider_json(
+                provider, "/api/v3/ticker/price", {"symbol": compact_symbol}
+            )
+            if not isinstance(first_rows, list) or len(first_rows) != 1:
+                raise ValueError("first-tradable candle was not returned")
+            if not isinstance(history_rows, list) or not isinstance(ticker, dict):
+                raise ValueError("market metadata response was malformed")
+            first_timestamp = int(first_rows[0][0])
+            complete_rows = [
+                row
+                for row in history_rows
+                if isinstance(row, list)
+                and len(row) >= 8
+                and int(row[0]) < int(today.timestamp() * 1_000)
+            ][-30:]
+            if len(complete_rows) != 30:
+                raise ValueError("fewer than 30 completed daily candles were returned")
+            timestamps = [int(row[0]) for row in complete_rows]
+            if any(
+                after - before != INTERVAL_SECONDS["1d"] * 1_000
+                for before, after in zip(timestamps, timestamps[1:])
+            ):
+                raise ValueError("completed daily candle history is not contiguous")
+            quote_volumes = [self._finite(row[7]) for row in complete_rows]
+            price_quote = self._finite(ticker.get("price"))
+            if (
+                price_quote is None
+                or price_quote <= 0
+                or any(volume is None or volume < 0 for volume in quote_volumes)
+            ):
+                raise ValueError("provider returned non-finite price or quote volume")
+            listing_first_tradable_at = datetime.fromtimestamp(
+                first_timestamp / 1_000, tz=timezone.utc
+            )
+            listing_age_days = (today - listing_first_tradable_at).days
+            if listing_age_days < 0:
+                raise ValueError("first-tradable timestamp is in the future")
+            return MonitorMarketFacts(
+                symbol=symbol,
+                provider=provider,
+                observed_at=observed_at,
+                listing_first_tradable_at=listing_first_tradable_at,
+                listing_age_days=listing_age_days,
+                average_quote_volume_30d=sum(quote_volumes) / len(quote_volumes),
+                price_quote=price_quote,
+                price_observed_at=observed_at,
+            )
+        except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Monitor metadata unavailable symbol={} provider={}: {}",
+                symbol,
+                provider,
+                exc,
+            )
+            return None
+
+    @staticmethod
+    def _fetch_monitor_provider_json(
+        provider: str, path: str, query: dict[str, str | int]
+    ) -> object:
+        hosts = {"binance": "https://api.binance.com", "mexc": "https://api.mexc.com"}
+        request = Request(
+            f"{hosts[provider]}{path}?{urlencode(query)}",
+            headers={"User-Agent": "valuecell-market-data/1.0", "Accept": "application/json"},
+        )
+        with urlopen(request, timeout=MONITOR_FETCH_TIMEOUT_S) as response:
+            return json.loads(response.read().decode("utf-8"))
 
     def _to_exchange_symbol(self, symbol: str) -> str:
         return symbol.replace("-", "/")

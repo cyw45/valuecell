@@ -17,7 +17,9 @@ class StrategyMarketMetadata:
     listing_age_days: int | None
     average_quote_volume_30d: float | None
     price_quote: float | None
-
+    provider: str | None = None
+    listing_first_tradable_at: datetime | None = None
+    price_observed_at: datetime | None = None
 
 @dataclass(frozen=True, slots=True)
 class MonitorDecision:
@@ -126,18 +128,24 @@ class RuleStrategyMonitorAdmissionWorker:
         positions_by_symbol: Mapping[str, float] | None = None,
         *,
         now: datetime | None = None,
+        force: bool = False,
     ) -> list[RuleStrategyMonitorSymbol]:
         timestamp = now or datetime.now(timezone.utc)
         positions = positions_by_symbol or {}
         claimed = self.repository.claim_monitor_lease(
-            strategy_id, tenant_id, f"monitor-worker-{strategy_id}", now=timestamp
+            strategy_id,
+            tenant_id,
+            f"monitor-worker-{strategy_id}",
+            now=timestamp,
+            force=force,
         )
         updated: list[RuleStrategyMonitorSymbol] = []
         for row in claimed:
             symbol = row.symbol.upper().replace("/", "-")
+            metadata = metadata_by_symbol.get(symbol)
             decision = decide_monitor_state(
                 row,
-                metadata_by_symbol.get(symbol),
+                metadata,
                 position_quantity=float(positions.get(symbol, 0.0)),
             )
             saved = self.repository.update_monitor_state(
@@ -150,6 +158,18 @@ class RuleStrategyMonitorAdmissionWorker:
                 next_check_at=timestamp + timedelta(days=1),
                 protected_held=decision.protected_held,
                 consecutive_low_volume_days=decision.consecutive_low_volume_days,
+                metadata_provider=None if metadata is None else metadata.provider,
+                listing_first_tradable_at=(
+                    None if metadata is None else metadata.listing_first_tradable_at
+                ),
+                listing_age_days=None if metadata is None else metadata.listing_age_days,
+                average_quote_volume_30d=(
+                    None if metadata is None else metadata.average_quote_volume_30d
+                ),
+                price_quote=None if metadata is None else metadata.price_quote,
+                price_observed_at=(
+                    None if metadata is None else metadata.price_observed_at
+                ),
             )
             if saved is not None:
                 updated.append(saved)
