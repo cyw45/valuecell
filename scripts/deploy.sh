@@ -127,9 +127,9 @@ log "scope backend=$BACKEND_CHANGED frontend=$FRONTEND_CHANGED"
 if (( !SKIP_TESTS )); then
   if (( BACKEND_CHANGED )); then
     log "running backend gates"
-    run uv run ruff check valuecell/server
-    run python -m compileall -q valuecell/server
-    run uv run pytest -q valuecell/server/tests/test_rule_strategy*.py
+    run uv run --project python ruff check python/valuecell/server
+    run python -m compileall -q python/valuecell/server
+    run uv run --project python pytest -q python/valuecell/server/tests/test_rule_strategy*.py
   fi
   if (( FRONTEND_CHANGED )); then
     log "running frontend gates"
@@ -176,5 +176,7 @@ if (( !DRY_RUN )); then
 fi
 
 git status --short --branch
-[[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || fatal "local and origin/main differ after deploy"
+if (( !DRY_RUN )); then
+  [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]] || fatal "local and origin/main differ after deploy"
+fi
 log "deployment completed at $AFTER_SHORT"
