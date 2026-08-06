@@ -193,6 +193,41 @@ export function useStopRuleStrategy(strategyId?: string) {
   return useRuleStrategyStatusMutation(strategyId, "stop");
 }
 
+export type RuleStrategyLifecycleAction = "start" | "stop" | "delete";
+
+export function useRuleStrategyLifecycleAction() {
+  const queryClient = useQueryClient();
+  const tenantId = useSaaSSession().tenantId;
+  return useMutation({
+    mutationFn: async ({
+      strategyId,
+      action,
+    }: {
+      strategyId: string;
+      action: RuleStrategyLifecycleAction;
+    }) => {
+      if (action === "delete") {
+        return apiClient.delete<
+          ApiResponse<{ strategy_id: string; archived: boolean }>
+        >(`/rule-strategies/${strategyId}`, { requiresAuth: true });
+      }
+      return apiClient.post<ApiResponse<RuleStrategy>>(
+        `/rule-strategies/${strategyId}/${action}`,
+        undefined,
+        { requiresAuth: true },
+      );
+    },
+    onSuccess: async (_, { strategyId, action }) => {
+      if (action === "delete") {
+        queryClient.removeQueries({
+          queryKey: ruleStrategyKey(tenantId, strategyId),
+        });
+      }
+      await invalidateRuleStrategy(queryClient, tenantId, strategyId);
+    },
+  });
+}
+
 export function useArchiveRuleStrategy(strategyId?: string) {
   const queryClient = useQueryClient();
   const tenantId = useSaaSSession().tenantId;

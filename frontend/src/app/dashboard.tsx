@@ -39,7 +39,7 @@ import {
   formatConditionValues,
 } from "@/app/dashboard-funnel";
 import { buildLiveEquityCurve } from "@/app/dashboard-equity-curve";
-import { RuleStrategyConfiguration } from "@/app/strategies/strategies";
+import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
 import {
   shouldShowCandlestickLoading,
   shouldShowDashboardPageLoading,
@@ -107,12 +107,23 @@ const MARKET_INTERVALS = [
   "1h",
   "4h",
   "1d",
+  "1w",
+  "1M",
 ] as const;
 const MARKET_HISTORY_RANGES = [
-  { value: "10d", label: "10D", days: 10 },
-  { value: "30d", label: "30D", days: 30 },
-  { value: "90d", label: "90D", days: 90 },
-  { value: "1y", label: "1Y", days: 365 },
+  { value: "1d", label: "日", days: 1 },
+  { value: "5d", label: "5日", days: 5 },
+  { value: "1w", label: "周", days: 7 },
+  { value: "1m", label: "月", days: 31 },
+  { value: "1y", label: "年", days: 365 },
+] as const;
+const EQUITY_RANGES = [
+  { value: "1d", label: "日" },
+  { value: "5d", label: "5日" },
+  { value: "1w", label: "周" },
+  { value: "1m", label: "月" },
+  { value: "1y", label: "年" },
+  { value: "all", label: "全部" },
 ] as const;
 const MARKET_INTERVAL_SECONDS: Record<
   (typeof MARKET_INTERVALS)[number],
@@ -126,6 +137,8 @@ const MARKET_INTERVAL_SECONDS: Record<
   "1h": 3_600,
   "4h": 14_400,
   "1d": 86_400,
+  "1w": 604_800,
+  "1M": 2_592_000,
 };
 
 function toDashboardSymbol(symbol: string) {
@@ -350,11 +363,14 @@ export default function DashboardPage() {
   const [marketInterval, setMarketInterval] =
     useState<(typeof MARKET_INTERVALS)[number]>("1h");
   const [historyRange, setHistoryRange] =
-    useState<(typeof MARKET_HISTORY_RANGES)[number]["value"]>("10d");
+    useState<(typeof MARKET_HISTORY_RANGES)[number]["value"]>("5d");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
   const [equityNowMs, setEquityNowMs] = useState(() => Date.now());
+  const [equityRange, setEquityRange] = useState<
+    (typeof EQUITY_RANGES)[number]["value"]
+  >("1m");
   const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -400,8 +416,6 @@ export default function DashboardPage() {
     [requestNowMs, toDate],
   );
   const invalidDateRange = fromTsMs > toTsMs;
-  const useSharedSnapshot =
-    marketInterval === "1h" && historyRange === "10d" && !fromDate && !toDate;
   const lookback = useMemo(
     () =>
       Math.min(
@@ -428,9 +442,9 @@ export default function DashboardPage() {
   } = useGetCryptoMarketIndicators({
     symbols: [effectiveSymbol],
     interval: marketInterval,
-    lookback: useSharedSnapshot ? 240 : lookback,
-    fromTsMs: useSharedSnapshot ? undefined : fromTsMs,
-    toTsMs: useSharedSnapshot ? undefined : toTsMs,
+    lookback,
+    fromTsMs,
+    toTsMs,
     enabled: !invalidDateRange,
   });
   const market = marketData?.symbols[0];
@@ -658,17 +672,17 @@ export default function DashboardPage() {
             </Tooltip>
           </div>
         </header>
-        <RuleStrategyConfiguration embedded />
+        <DashboardStrategyManagement />
         <section
-          className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]"
+          className="order-7 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]"
           aria-label="策略监控与风险"
         >
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <CardHeader className="min-h-20 justify-center gap-1 border-border/70 border-b px-4 py-3">
+            <CardHeader className="gap-1 border-border/70 border-b px-5 py-4">
               <CardTitle className="text-base">监控池</CardTitle>
               <CardDescription>只扫描已准入或持仓保留的币种</CardDescription>
             </CardHeader>
-            <CardContent className="p-4">
+            <CardContent className="p-5">
               <div className="flex flex-wrap gap-2 text-xs">
                 {(["candidate", "admitted", "held", "removed"] as const).map(
                   (state) => (
@@ -701,11 +715,11 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <CardHeader className="min-h-20 justify-center gap-1 border-border/70 border-b px-4 py-3">
+            <CardHeader className="gap-1 border-border/70 border-b px-5 py-4">
               <CardTitle className="text-base">账户风险</CardTitle>
               <CardDescription>下单前读取并持续刷新的风险状态</CardDescription>
             </CardHeader>
-            <CardContent className="p-4 text-sm">
+            <CardContent className="p-5 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground">状态</span>
                 <Badge
@@ -734,7 +748,7 @@ export default function DashboardPage() {
         </section>
 
         <section
-          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+          className="order-1 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
           aria-label="投资组合概览"
         >
           <KpiCard
@@ -795,7 +809,7 @@ export default function DashboardPage() {
 
         <section
           aria-label="关键阈值仪表"
-          className="grid gap-3 lg:grid-cols-2"
+          className="order-1 grid gap-3 lg:grid-cols-2"
         >
           <ThresholdGauge
             description={rsiDescription}
@@ -818,7 +832,7 @@ export default function DashboardPage() {
         </section>
 
         <section
-          className="terminal-strip grid gap-px overflow-hidden rounded-lg border border-sky-500/20 bg-border/50 lg:grid-cols-[1.2fr_1fr_1fr_1.1fr]"
+          className="terminal-strip order-2 grid gap-px overflow-hidden rounded-lg border border-sky-500/20 bg-border/50 lg:grid-cols-[1.2fr_1fr_1fr_1.1fr]"
           aria-label="策略终端状态"
         >
           <div className="bg-card/95 px-3 py-3">
@@ -884,7 +898,7 @@ export default function DashboardPage() {
         </section>
 
         <section
-          className="grid gap-4 xl:grid-cols-[1.35fr_0.65fr]"
+          className="order-4 grid gap-4 xl:grid-cols-[1.35fr_0.65fr]"
           aria-label="最新策略评估"
         >
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
@@ -1036,7 +1050,7 @@ export default function DashboardPage() {
           </Card>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <section className="order-5 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
             <div className="flex items-center justify-between border-border/70 border-b px-4 py-3">
               <div>
@@ -1140,9 +1154,9 @@ export default function DashboardPage() {
           </Card>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.72fr)_minmax(300px,0.78fr)]">
+        <section className="order-9 grid gap-4 xl:grid-cols-[minmax(0,1.72fr)_minmax(300px,0.78fr)]">
           <Card className="dashboard-panel overflow-hidden rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3">
+            <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="flex min-w-0 items-center gap-3">
                   <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-500/10 text-sky-500">
@@ -1311,7 +1325,7 @@ export default function DashboardPage() {
           </Card>
 
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <div className="flex items-center justify-between border-border/70 border-b px-4 py-3">
+            <div className="flex items-center justify-between border-border/70 border-b px-5 py-4">
               <div>
                 <h2 className="font-semibold">符合策略的持仓</h2>
                 <p className="mt-0.5 text-muted-foreground text-xs">
@@ -1380,9 +1394,9 @@ export default function DashboardPage() {
           </Card>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.72fr)_minmax(300px,0.78fr)]">
+        <section className="order-10 grid gap-4">
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3">
+            <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <h2 className="font-semibold">所选币种技术指标</h2>
@@ -1489,53 +1503,53 @@ export default function DashboardPage() {
             </CardContent>
           </Card>
 
-          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-            <div className="border-border/70 border-b px-4 py-3">
-              <h2 className="font-semibold">最近执行记录</h2>
-              <p className="mt-0.5 text-muted-foreground text-xs">
-                最近确认的买入与卖出决策
-              </p>
-            </div>
-            <CardContent className="p-0">
-              {recentSignals.length === 0 ? (
-                <p className="px-4 py-12 text-center text-muted-foreground text-sm">
-                  暂时没有完成的执行周期。
-                </p>
-              ) : (
-                <div className="divide-y divide-border/70">
-                  {recentSignals.map((signal) => (
-                    <div
-                      className="flex items-center justify-between gap-3 px-4 py-3"
-                      key={signal.evaluation_id}
-                    >
-                      <span>
-                        <span className="block font-medium text-sm">
-                          {signal.action === "buy" ? "买入信号" : "卖出信号"}
-                        </span>
-                        <span className="block max-w-48 truncate text-muted-foreground text-xs">
-                          {displayReason(signal.reason_code, signal.reason)}
-                        </span>
-                      </span>
-                      <Badge
-                        className={
-                          signal.action === "buy"
-                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
-                            : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                        }
-                        variant="outline"
-                      >
-                        {signal.action === "buy" ? "买入" : "卖出"}
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
         </section>
+        <Card className="dashboard-panel order-3 rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+          <div className="border-border/70 border-b px-5 py-4">
+            <h2 className="font-semibold">最近执行记录</h2>
+            <p className="mt-0.5 text-muted-foreground text-xs">
+              最近确认的买入与卖出决策
+            </p>
+          </div>
+          <CardContent className="p-0">
+            {recentSignals.length === 0 ? (
+              <p className="px-4 py-12 text-center text-muted-foreground text-sm">
+                暂时没有完成的执行周期。
+              </p>
+            ) : (
+              <div className="divide-y divide-border/70">
+                {recentSignals.map((signal) => (
+                  <div
+                    className="flex items-center justify-between gap-3 px-4 py-3"
+                    key={signal.evaluation_id}
+                  >
+                    <span>
+                      <span className="block font-medium text-sm">
+                        {signal.action === "buy" ? "买入信号" : "卖出信号"}
+                      </span>
+                      <span className="block max-w-48 truncate text-muted-foreground text-xs">
+                        {displayReason(signal.reason_code, signal.reason)}
+                      </span>
+                    </span>
+                    <Badge
+                      className={
+                        signal.action === "buy"
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300"
+                          : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                      }
+                      variant="outline"
+                    >
+                      {signal.action === "buy" ? "买入" : "卖出"}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-        <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-          <div className="flex flex-col gap-3 border-border/70 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <Card className="dashboard-panel order-6 rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+          <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="font-semibold">策略权益曲线</h2>
               <p className="mt-0.5 text-muted-foreground text-xs">
@@ -1555,45 +1569,67 @@ export default function DashboardPage() {
                 </p>
               ) : null}
             </div>
-            {isOkxDemo ? (
-              <span className="font-semibold text-muted-foreground text-sm">
-                不可用
-              </span>
-            ) : !account ? (
-              <span className="font-semibold text-muted-foreground text-sm">
-                等待账户同步
-              </span>
-            ) : (
-              <div className="grid grid-cols-3 gap-x-4 text-right tabular-nums">
-                <div>
-                  <p className="terminal-label">初始资金</p>
-                  <p className="mt-1 whitespace-nowrap font-semibold text-sm">
-                    {currency.format(account.initial_capital_quote)} USDT
-                  </p>
+            <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+              {!isOkxDemo ? (
+                <fieldset
+                  aria-label="权益曲线时间范围"
+                  className="flex items-center gap-1 rounded-md border border-border p-0.5"
+                >
+                  {EQUITY_RANGES.map((range) => (
+                    <Button
+                      key={range.value}
+                      onClick={() => setEquityRange(range.value)}
+                      size="sm"
+                      type="button"
+                      variant={
+                        equityRange === range.value ? "secondary" : "ghost"
+                      }
+                    >
+                      {range.label}
+                    </Button>
+                  ))}
+                </fieldset>
+              ) : null}
+              {isOkxDemo ? (
+                <span className="font-semibold text-muted-foreground text-sm">
+                  不可用
+                </span>
+              ) : !account ? (
+                <span className="font-semibold text-muted-foreground text-sm">
+                  等待账户同步
+                </span>
+              ) : (
+                <div className="grid grid-cols-3 gap-x-4 text-right tabular-nums">
+                  <div>
+                    <p className="terminal-label">初始资金</p>
+                    <p className="mt-1 whitespace-nowrap font-semibold text-sm">
+                      {currency.format(account.initial_capital_quote)} USDT
+                    </p>
+                  </div>
+                  <div>
+                    <p className="terminal-label">当前权益</p>
+                    <p className="mt-1 whitespace-nowrap font-semibold text-sm">
+                      {currency.format(account.equity_quote)} USDT
+                    </p>
+                  </div>
+                  <div>
+                    <p className="terminal-label">累计盈亏</p>
+                    <p
+                      className={cn(
+                        "mt-1 whitespace-nowrap font-semibold text-sm",
+                        pnl !== null && pnl >= 0
+                          ? "text-emerald-500"
+                          : "text-rose-500",
+                      )}
+                    >
+                      {pnl === null
+                        ? "—"
+                        : `${pnl >= 0 ? "+" : ""}${currency.format(pnl)}`} USDT
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="terminal-label">当前权益</p>
-                  <p className="mt-1 whitespace-nowrap font-semibold text-sm">
-                    {currency.format(account.equity_quote)} USDT
-                  </p>
-                </div>
-                <div>
-                  <p className="terminal-label">累计盈亏</p>
-                  <p
-                    className={cn(
-                      "mt-1 whitespace-nowrap font-semibold text-sm",
-                      pnl !== null && pnl >= 0
-                        ? "text-emerald-500"
-                        : "text-rose-500",
-                    )}
-                  >
-                    {pnl === null
-                      ? "—"
-                      : `${pnl >= 0 ? "+" : ""}${currency.format(pnl)}`} USDT
-                  </p>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
           <CardContent className="p-2 sm:p-4">
             {isOkxDemo ? (
@@ -1613,6 +1649,7 @@ export default function DashboardPage() {
                 data={liveEquityCurve}
                 height={240}
                 mode="equity"
+                range={equityRange}
                 theme={isDark ? "dark" : "light"}
               />
             )}

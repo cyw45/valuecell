@@ -27,10 +27,21 @@ echarts.use([
 
 type EquityCurvePoint = RuleStrategyPnlPoint & { equity_quote?: number };
 
+type EquityRange = "1d" | "5d" | "1w" | "1m" | "1y" | "all";
+
+const EQUITY_RANGE_DURATION_MS: Record<Exclude<EquityRange, "all">, number> = {
+  "1d": 24 * 60 * 60 * 1_000,
+  "5d": 5 * 24 * 60 * 60 * 1_000,
+  "1w": 7 * 24 * 60 * 60 * 1_000,
+  "1m": 31 * 24 * 60 * 60 * 1_000,
+  "1y": 365 * 24 * 60 * 60 * 1_000,
+};
+
 interface PnlLineChartProps {
   data: EquityCurvePoint[];
   height?: number;
   mode?: "pnl" | "equity";
+  range?: EquityRange;
   theme?: "light" | "dark";
 }
 
@@ -38,6 +49,7 @@ export function PnlLineChart({
   data,
   height = 200,
   mode = "pnl",
+  range = "all",
   theme = "light",
 }: PnlLineChartProps) {
   const { t, i18n } = useTranslation();
@@ -70,6 +82,22 @@ export function PnlLineChart({
     const currencyFormatter = new Intl.NumberFormat(locale, {
       maximumFractionDigits: 2,
     });
+    const latestTimestamp = Date.parse(data.at(-1)?.ts ?? "");
+    const rangeDurationMs =
+      range === "all" ? undefined : EQUITY_RANGE_DURATION_MS[range];
+    const firstVisibleIndex =
+      rangeDurationMs === undefined || !Number.isFinite(latestTimestamp)
+        ? 0
+        : Math.max(
+            0,
+            data.findIndex(
+              (point) => Date.parse(point.ts) >= latestTimestamp - rangeDurationMs,
+            ),
+          );
+    const zoomStart =
+      data.length < 2 || firstVisibleIndex === 0
+        ? 0
+        : (firstVisibleIndex / (data.length - 1)) * 100;
 
     return {
       animation: false,
@@ -134,6 +162,8 @@ export function PnlLineChart({
           zoomOnMouseWheel: true,
           moveOnMouseMove: true,
           moveOnMouseWheel: true,
+          start: zoomStart,
+          end: 100,
         },
         {
           type: "slider",
@@ -153,6 +183,8 @@ export function PnlLineChart({
           handleStyle: { color: lineColor, borderColor: lineColor },
           moveHandleSize: 28,
           showDetail: false,
+          start: zoomStart,
+          end: 100,
         },
       ],
       series: [
@@ -188,7 +220,7 @@ export function PnlLineChart({
         },
       ],
     };
-  }, [data, locale, mode, theme, t]);
+  }, [data, locale, mode, range, theme, t]);
 
   useChartResize(chartInstance);
 

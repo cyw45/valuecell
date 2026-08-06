@@ -35,6 +35,7 @@ import {
   useStopRuleStrategy,
   useUpdateRuleStrategy,
 } from "@/api/rule-strategy";
+import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
 import { useSandboxConnections } from "@/api/sandbox-exchange";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -2750,33 +2751,21 @@ export function RuleStrategyConfiguration({
 }
 
 function StrategyManagementList() {
-  const { tenantId } = useSaaSSession();
-  const [activeStrategyId, setActiveStrategyId] = useActiveRuleStrategyId();
-  const strategiesQuery = useRuleStrategies(tenantId, true);
-  const strategies = strategiesQuery.data ?? [];
-
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-4 lg:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-6 px-5 py-8 lg:px-8">
+      <header className="dashboard-header flex flex-col gap-3 rounded-lg border border-sky-400/15 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="terminal-label">策略验证</p>
           <h1 className="mt-2 font-semibold text-2xl tracking-tight">策略管理</h1>
-          <p className="mt-1 text-muted-foreground text-sm">每个策略拥有独立账户、监控池与风险状态。</p>
+          <p className="mt-1 text-muted-foreground text-sm">
+            在此选择策略，资金、执行、交易、分析、权益和监控信息会同步切换。
+          </p>
         </div>
-        <div className="flex gap-2">
-          <Button asChild variant="outline"><Link to="/strategies/new"><Plus /> 新建策略</Link></Button>
-          <Button asChild className="bg-sky-600 text-white hover:bg-sky-500"><Link to="/dashboard">打开工作台</Link></Button>
-        </div>
-      </div>
-      <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-        <CardHeader className="border-border/70 border-b">
-          <CardTitle className="text-base">策略列表</CardTitle>
-          <CardDescription>选择策略后，账户、权益、监控和风险面板同步切换。</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          {strategiesQuery.isPending ? <p className="p-5 text-muted-foreground text-sm">正在加载策略…</p> : strategies.length === 0 ? <p className="p-5 text-muted-foreground text-sm">尚未创建策略。</p> : <div className="divide-y divide-border/70">{strategies.map((strategy) => { const selected = strategy.strategy_id === activeStrategyId; return <div key={strategy.strategy_id} className={cn("flex flex-wrap items-center justify-between gap-3 px-4 py-4", selected && "bg-sky-500/5")}><button className="min-w-0 text-left" onClick={() => setActiveStrategyId(strategy.strategy_id)} type="button"><span className="block truncate font-medium">{strategy.name}</span><span className="mt-1 block text-muted-foreground text-xs">{strategy.status === "running" ? "运行中" : "已停止"}</span></button><div className="flex items-center gap-2"><Badge variant={strategy.status === "running" ? "default" : "outline"}>{strategy.status}</Badge><Button asChild size="sm" variant="ghost"><Link to={`/strategies/${strategy.strategy_id}/edit`}>编辑</Link></Button><Button asChild size="sm" variant="ghost"><Link to="/dashboard">选择工作台</Link></Button></div></div>; })}</div>}
-        </CardContent>
-      </Card>
+        <Button asChild size="sm" variant="outline">
+          <Link to="/dashboard">返回仪表盘</Link>
+        </Button>
+      </header>
+      <DashboardStrategyManagement />
     </div>
   );
 }
