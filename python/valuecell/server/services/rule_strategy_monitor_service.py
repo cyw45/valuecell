@@ -33,9 +33,7 @@ class MonitorDecision:
     protected_held: bool
 
 
-ADMISSION_REASON = "monitor_admission_criteria_met"
-REMOVAL_REASON = "monitor_volume_below_removal_threshold"
-METADATA_UNAVAILABLE_REASON = "market_metadata_unavailable"
+ADMISSION_REASON = "monitor_observation_enabled"
 
 
 def decide_monitor_state(
@@ -49,22 +47,13 @@ def decide_monitor_state(
     removal_average_quote_volume_30d: float = 2_000_000.0,
     removal_consecutive_daily_checks: int = 7,
 ) -> MonitorDecision:
-    """Apply V2.1 admission/removal rules without inferring missing provider facts."""
-    if metadata is None or any(
-        value is None
-        for value in (
-            metadata.listing_age_days,
-            metadata.average_quote_volume_30d,
-            metadata.price_quote,
-        )
-    ):
-        return MonitorDecision(
-            state="held" if position_quantity > 0 else "candidate",
-            reason_code=METADATA_UNAVAILABLE_REASON,
-            reason_detail="市场未提供上市年龄、30日成交额或价格，暂不准入。",
-            consecutive_low_volume_days=row.consecutive_low_volume_days,
-            protected_held=position_quantity > 0,
-        )
+    """Observe every configured symbol; metadata is informational only.
+
+    Listing age, historical volume, price, and low-volume removal thresholds
+    are deliberately not monitor-pool gates. A symbol can be observed before
+    enough history is available, while the evaluator may skip an individual
+    candle request when the market-data provider cannot serve it.
+    """
 
     if position_quantity > 0:
         return MonitorDecision(
@@ -75,42 +64,11 @@ def decide_monitor_state(
             protected_held=True,
         )
 
-    assert metadata.average_quote_volume_30d is not None
-    admitted = (
-        metadata.listing_age_days >= minimum_listing_age_days
-        and metadata.average_quote_volume_30d >= minimum_average_quote_volume_30d
-        and metadata.price_quote >= minimum_price_quote
-    )
-    if admitted:
-        return MonitorDecision(
-            state="admitted",
-            reason_code=ADMISSION_REASON,
-            reason_detail="上市时间、30日成交额和价格均达到准入标准。",
-            consecutive_low_volume_days=0,
-            protected_held=False,
-        )
-
-    low_volume_days = (
-        row.consecutive_low_volume_days + 1
-        if metadata.average_quote_volume_30d < removal_average_quote_volume_30d
-        else 0
-    )
-    if (
-        metadata.average_quote_volume_30d < removal_average_quote_volume_30d
-        and low_volume_days >= removal_consecutive_daily_checks
-    ):
-        return MonitorDecision(
-            state="removed",
-            reason_code=REMOVAL_REASON,
-            reason_detail="30日平均成交额连续七次低于 2,000,000 USDT。",
-            consecutive_low_volume_days=low_volume_days,
-            protected_held=False,
-        )
     return MonitorDecision(
-        state="candidate",
-        reason_code="monitor_admission_criteria_not_met",
-        reason_detail="当前市场数据尚未满足全部准入条件。",
-        consecutive_low_volume_days=low_volume_days,
+        state="admitted",
+        reason_code=ADMISSION_REASON,
+        reason_detail="配置标的直接进入观察池；上市时间、历史成交额和价格仅作参考记录。",
+        consecutive_low_volume_days=0,
         protected_held=False,
     )
 

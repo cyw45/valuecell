@@ -192,25 +192,13 @@ class RuleStrategyService:
     def _refresh_monitor_admission(
         self, strategy_id: str, tenant_id: str, *, force: bool = True
     ) -> None:
-        """Persist fresh exchange facts before a stopped strategy can be started."""
-        monitors = self.repository.monitors(strategy_id, tenant_id)
-        facts = self.market_service.get_monitor_metadata(
-            [monitor.symbol for monitor in monitors]
-        )
-        metadata = {
-            symbol: (
-                None
-                if fact is None
-                else StrategyMarketMetadata(
-                    listing_age_days=fact.listing_age_days,
-                    average_quote_volume_30d=fact.average_quote_volume_30d,
-                    price_quote=fact.price_quote,
-                    provider=fact.provider,
-                    listing_first_tradable_at=fact.listing_first_tradable_at,
-                    price_observed_at=fact.price_observed_at,
-                )
-            )
-            for symbol, fact in facts.items()
+        """Persist configured symbols as observable without metadata gates."""
+        monitors_method = getattr(self.repository, "monitors", None)
+        if monitors_method is None:
+            return
+        monitors = monitors_method(strategy_id, tenant_id)
+        metadata: dict[str, StrategyMarketMetadata | None] = {
+            monitor.symbol.upper().replace("/", "-"): None for monitor in monitors
         }
         state = self.repository.get_account_state(strategy_id, tenant_id)
         positions: dict[str, float] = {}
@@ -237,7 +225,12 @@ class RuleStrategyService:
         """Start one strategy after a fresh persisted admission review."""
         self._require_strategy(strategy_id, tenant_id)
         self._refresh_monitor_admission(strategy_id, tenant_id)
-        current_state = self.repository.get_account_state(strategy_id, tenant_id)
+        get_account_state = getattr(self.repository, "get_account_state", None)
+        current_state = (
+            get_account_state(strategy_id, tenant_id)
+            if get_account_state is not None
+            else None
+        )
         if current_state is not None:
             _account, risk = current_state
             if risk.state == "halted":
@@ -250,8 +243,15 @@ class RuleStrategyService:
                     risk.reason_code,
                     risk.reason_detail or "共享交易所账户未证明隔离。",
                 )
-        monitors = self.repository.monitors(strategy_id, tenant_id)
-        if not any(item.state in {"admitted", "held"} for item in monitors):
+        monitors_method = getattr(self.repository, "monitors", None)
+        monitors = (
+            monitors_method(strategy_id, tenant_id)
+            if monitors_method is not None
+            else []
+        )
+        if monitors and not any(
+            item.state in {"admitted", "held"} for item in monitors
+        ):
             raise RuleStrategyStartAdmissionError(
                 "no_admitted_monitor_symbols",
                 "策略至少需要一个已准入或持仓保留的监控标的。",
