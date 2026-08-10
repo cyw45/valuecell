@@ -43,7 +43,7 @@ class RuleStrategyExportService:
 
     def __init__(self, strategy_service: RuleStrategyService) -> None:
         self._strategy_service = strategy_service
-        self._repository = strategy_service.repository
+        self._repository = getattr(strategy_service, "repository", None)
 
     def build(
         self,
