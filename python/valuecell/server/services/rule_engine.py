@@ -135,9 +135,8 @@ class RuleEngine:
     ) -> RuleStrategyEvaluationResult:
         program = request.config.program
         assert program is not None
-        entry, entry_values = self._program_condition(request, program.entry)
-        entry_check = self._program_check("program.entry", "indicator", entry, entry_values)
-        conditions = [entry_check]
+        entry, _entry_values = self._program_condition(request, program.entry)
+        conditions = self._program_leaf_checks(request, program.entry, "program.entry")
         exit_result: bool | None = False
         if program.exit is not None:
             exit_result, exit_values = self._program_condition(request, program.exit)
@@ -367,6 +366,11 @@ class RuleEngine:
             deviation = math.sqrt(sum((value - middle) ** 2 for value in sample) / ref.period)
             value = {"middle": middle, "upper": middle + 2 * deviation, "lower": middle - 2 * deviation}[ref.component]
             return value * ref.multiplier
+        if ref.name == "roc":
+            if len(closes) <= ref.period:
+                return None
+            base = closes[-ref.period - 1]
+            return ((closes[-1] - base) / base * 100.0) * ref.multiplier if base else None
         required = ref.slow_period + ref.signal_period + 1
         if len(closes) < required:
             return None
@@ -377,10 +381,43 @@ class RuleEngine:
         value = {"line": line[-1], "signal": signal[-1], "histogram": line[-1] - signal[-1]}[ref.component]
         return value * ref.multiplier
 
+    def _program_leaf_checks(
+        self, request: RuleStrategyEvaluationRequest, condition: ProgramCondition, path: str
+    ) -> list[RuleStrategyConditionCheck]:
+        """Expose every leaf condition so the UI can identify the blocker."""
+        if isinstance(condition, (ProgramAllCondition, ProgramAnyCondition, ProgramAtLeastCondition)):
+            return [
+                check
+                for index, child in enumerate(condition.args, start=1)
+                for check in self._program_leaf_checks(request, child, f"{path}.{index}")
+            ]
+        if isinstance(condition, ProgramNotCondition):
+            return self._program_leaf_checks(request, condition.arg, f"{path}.not")
+        result, values = self._program_condition(request, condition)
+        if isinstance(condition, ProgramCompareCondition):
+            label = f"{self._program_ref_label(condition.left)} {condition.comparator} {self._program_ref_label(condition.right)}"
+        elif isinstance(condition, ProgramCrossCondition):
+            label = f"{self._program_ref_label(condition.left)} 向{condition.direction}穿越 {self._program_ref_label(condition.right)}"
+        else:
+            label = path
+        return [self._program_check(path, "indicator", result, values, label=label)]
+
     @staticmethod
-    def _program_check(code: str, category: Literal["indicator", "exit"], result: bool | None, values: dict) -> RuleStrategyConditionCheck:
+    def _program_ref_label(ref: ProgramValueRef) -> str:
+        if isinstance(ref, ProgramConstantRef):
+            return str(ref.value)
+        if isinstance(ref, ProgramPriceRef):
+            return f"{ref.interval}收盘价"
+        if isinstance(ref, ProgramVolumeRef):
+            return f"{ref.interval}成交量"
+        names = {"ma": "MA", "bollinger": "布林带", "volume_ma": "成交量均线", "roc": "RSL"}
+        return f"{ref.interval}{names.get(ref.name, ref.name.upper())}{ref.period if ref.period else ''}"
+
+    @staticmethod
+    def _program_check(code: str, category: Literal["indicator", "exit"], result: bool | None, values: dict, *, label: str | None = None) -> RuleStrategyConditionCheck:
         return RuleStrategyConditionCheck(
             code=code,
+            label=label,
             category=category,
             state="unavailable" if result is None else "triggered" if result else "not_triggered",
             detail="program condition unavailable" if result is None else "program condition matched" if result else "program condition did not match",

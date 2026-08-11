@@ -323,7 +323,7 @@ class ProgramIndicatorRef(RuleStrategyModel):
     kind: Literal["indicator"]
     name: Literal[
         "ma", "ema", "slope", "rsi", "atr", "adx", "volume_ma",
-        "bollinger", "macd",
+        "bollinger", "macd", "roc",
     ]
     interval: RuleInterval
     period: int = Field(default=14, ge=1, le=500)
@@ -757,6 +757,7 @@ class RuleStrategyConditionCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     code: str
+    label: str | None = None
     category: Literal["indicator", "exit", "risk"]
     state: Literal["triggered", "not_triggered", "blocked", "unavailable"]
     detail: str

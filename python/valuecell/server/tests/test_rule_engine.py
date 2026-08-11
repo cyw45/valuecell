@@ -639,7 +639,46 @@ def test_program_v2_combines_multi_timeframe_indicator_logic():
 
     assert result.action == "buy"
     assert result.reason_code == "program_entry_confirmed"
-    assert any(condition.code == "program.entry" for condition in result.conditions)
+    entry_conditions = [
+        condition for condition in result.conditions
+        if condition.code.startswith("program.entry.")
+    ]
+    assert [condition.code for condition in entry_conditions] == [
+        "program.entry.1",
+        "program.entry.2",
+        "program.entry.3",
+        "program.entry.4",
+    ]
+    assert entry_conditions[1].label == "4hSLOPE25 gt 0.0"
+    assert all(condition.state == "triggered" for condition in entry_conditions)
+
+
+def test_program_v2_supports_roc_with_rsl_label():
+    result = _evaluate(
+        [100.0, 105.0, 110.0],
+        config={
+            "program": {
+                "schema_version": 2,
+                "entry": {
+                    "op": "compare",
+                    "left": {
+                        "kind": "indicator",
+                        "name": "roc",
+                        "interval": "1h",
+                        "period": 2,
+                    },
+                    "comparator": "gte",
+                    "right": {"kind": "constant", "value": 10},
+                },
+            },
+        },
+    )
+
+    condition = _condition(result, "program.entry")
+    assert result.action == "buy"
+    assert condition.label == "1hRSL2 gte 10.0"
+    assert condition.values["left"] == pytest.approx(10.0)
+    assert condition.state == "triggered"
 
 
 def test_program_v2_trailing_take_profit_uses_persisted_highest_price():

@@ -151,7 +151,8 @@ export type RuleStrategyProgramValue =
         | "adx"
         | "volume_ma"
         | "bollinger"
-        | "macd";
+        | "macd"
+        | "roc";
       interval: RuleStrategyCandleInterval;
       period?: number;
       lookback?: number;
@@ -255,6 +256,7 @@ export interface RuleStrategy {
 
 export interface RuleStrategyCondition {
   code: string;
+  label?: string | null;
   category: "indicator" | "exit" | "risk";
   state: RuleConditionState;
   detail: string;

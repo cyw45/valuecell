@@ -922,7 +922,7 @@ export default function DashboardPage() {
               <div>
                 <h2 className="font-semibold">本轮执行漏斗</h2>
                 <p className="mt-0.5 text-muted-foreground text-xs">
-                  固定六步流程；优先展示后端记录的实际阶段状态
+                  观察池、数据可用性、5 项入场条件与风险检查
                 </p>
               </div>
               {firstBlocker ? (
@@ -1026,7 +1026,7 @@ export default function DashboardPage() {
                       >
                         <div className="flex items-center justify-between gap-3">
                           <span className="font-medium text-sm">
-                            {conditionDisplayName(condition.code)}
+                            {condition.label ?? conditionDisplayName(condition.code)}
                           </span>
                           <Badge
                             className={cn(

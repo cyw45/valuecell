@@ -189,6 +189,7 @@ export function buildDashboardFunnel({
 }
 
 const CONDITION_NAMES: Record<string, string> = {
+  roc: "RSL（14周期相对强弱）",
   moving_average: "均线条件",
   macd: "MACD 条件",
   bollinger: "布林带条件",
