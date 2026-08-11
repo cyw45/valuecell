@@ -11,6 +11,20 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
 )
 
 
+def test_strategy_client_order_id_fits_okx_limit():
+    key = strategy_scheduler._strategy_client_order_id(
+        "rule-a", 1234, "BTC-USDT", "buy"
+    )
+    assert key.startswith("vc-demo-")
+    assert len(key) <= 32
+
+
+def test_okx_parameter_rejection_is_deterministic_failure():
+    assert SandboxExchangeTradingService._is_deterministic_order_rejection(
+        'okx {"code":"1","data":[{"sCode":"51000","sMsg":"Parameter clOrdId error"}]}'
+    )
+
+
 @pytest.mark.asyncio
 async def test_okx_demo_signal_without_durable_evaluation_is_blocked_without_submit(monkeypatch):
     submitted = False

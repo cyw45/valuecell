@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -63,6 +64,14 @@ _INTERVAL_SECONDS: dict[str, int] = {
     "4h": 14400,
     "1d": 86400,
 }
+
+
+def _strategy_client_order_id(
+    strategy_id: str, candle_timestamp_ms: int, symbol: str, action: str
+) -> str:
+    """Build a deterministic client ID within OKX's clOrdId length limit."""
+    material = f"{strategy_id}:{candle_timestamp_ms}:{symbol.upper()}:{action}"
+    return "vc-demo-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
 def _program_requirements(config: RuleStrategyConfig) -> dict[str, int]:
@@ -870,13 +879,7 @@ class StrategyScheduler:
                     "sandbox": True,
                     "reason": "OKX Demo strategy total limit reached",
                 }
-            material = f"{strategy_id}:{candle_timestamp_ms}:{symbol.upper()}:{action}"
-            key = (
-                "vc-demo-"
-                + __import__("hashlib")
-                .sha256(material.encode("utf-8"))
-                .hexdigest()[:48]
-            )
+            key = _strategy_client_order_id(strategy_id, candle_timestamp_ms, symbol, action)
             intent = (
                 session.query(RuleStrategyExecutionIntent)
                 .filter_by(

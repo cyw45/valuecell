@@ -45,6 +45,11 @@ class SandboxExchangeTradingService:
 
     _PROVIDERS = frozenset({"binance", "okx"})
 
+    @staticmethod
+    def _is_deterministic_order_rejection(message: str) -> bool:
+        """Identify venue validation errors that cannot succeed on retry unchanged."""
+        return 'sCode":"51000"' in message or "Parameter clOrdId error" in message
+
     def __init__(self, db: Session) -> None:
         self.db = db
         self.credentials = TenantCredentialService(db)
@@ -369,14 +374,23 @@ class SandboxExchangeTradingService:
             self.db.commit()
             raise
         except Exception as exc:
-            # The request could have reached the exchange. Preserve that ambiguity
-            # and force reconciliation rather than issuing a duplicate create.
-            order.status = INTENT_SUBMISSION_UNKNOWN
-            order.error_code = "sandbox_submission_unknown"
-            if intent is not None:
-                intent.status = INTENT_SUBMISSION_UNKNOWN
-                intent.error_code = order.error_code
-                intent.error_message = str(exc)
+            if self._is_deterministic_order_rejection(str(exc)):
+                order.status = "failed"
+                order.error_code = "sandbox_order_rejected"
+                if intent is not None:
+                    intent.status = "failed"
+                    intent.error_code = order.error_code
+                    intent.error_message = str(exc)
+                    intent.terminal_at = datetime.now(timezone.utc)
+            else:
+                # The request could have reached the exchange. Preserve that
+                # ambiguity and force reconciliation rather than duplicating it.
+                order.status = INTENT_SUBMISSION_UNKNOWN
+                order.error_code = "sandbox_submission_unknown"
+                if intent is not None:
+                    intent.status = INTENT_SUBMISSION_UNKNOWN
+                    intent.error_code = order.error_code
+                    intent.error_message = str(exc)
         finally:
             await self._close(exchange)
         self.db.commit()
