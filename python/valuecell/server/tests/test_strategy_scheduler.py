@@ -318,7 +318,8 @@ async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministi
     assert len(calls) == 2
     assert calls[0][1] == "okx-demo-connection"
     assert calls[0][2] == calls[1][2]
-    assert calls[0][2].startswith("vc-demo-")
+    assert calls[0][2].startswith("vcdemo")
+    assert calls[0][2].isalnum()
 
 
 @pytest.mark.asyncio
@@ -401,6 +402,61 @@ async def test_okx_demo_execution_blocks_when_daily_limit_is_reached(monkeypatch
     )
     assert result["execution"] == "blocked"
     assert "daily limit" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_daily_limit_excludes_failed_intents(monkeypatch):
+    config = RuleStrategyConfig.model_validate(
+        {
+            "symbols": ["BTC-USDT"],
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "okx-demo-connection",
+                "max_order_quote_amount": 100,
+                "max_daily_quote_amount": 150,
+                "max_total_quote_amount": 500,
+            },
+        }
+    )
+    session = DurableSession(
+        config,
+        [
+            SimpleNamespace(
+                requested_quote="100",
+                request_payload={},
+                status="failed",
+                created_at=datetime.now(timezone.utc),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        strategy_scheduler,
+        "get_database_manager",
+        lambda: SimpleNamespace(get_session=lambda: session),
+    )
+
+    class FakeService:
+        def __init__(self, _session):
+            pass
+
+        async def submit_order(self, *_args, **_kwargs):
+            return {"id": "demo-order", "status": "open", "sandbox": True}
+
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", FakeService)
+
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a",
+        "rule-a",
+        config,
+        "BTC-USDT",
+        "buy",
+        Decimal("100"),
+        Decimal("50000"),
+        1234,
+        "eval-a",
+    )
+
+    assert result["execution"] == "okx_demo_submitted"
 
 
 @pytest.mark.asyncio

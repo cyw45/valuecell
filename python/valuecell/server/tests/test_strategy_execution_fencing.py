@@ -15,7 +15,8 @@ def test_strategy_client_order_id_fits_okx_limit():
     key = strategy_scheduler._strategy_client_order_id(
         "rule-a", 1234, "BTC-USDT", "buy"
     )
-    assert key.startswith("vc-demo-")
+    assert key.startswith("vcdemo")
+    assert key.isalnum()
     assert len(key) <= 32
 
 

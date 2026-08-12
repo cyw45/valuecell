@@ -71,7 +71,7 @@ def _strategy_client_order_id(
 ) -> str:
     """Build a deterministic client ID within OKX's clOrdId length limit."""
     material = f"{strategy_id}:{candle_timestamp_ms}:{symbol.upper()}:{action}"
-    return "vc-demo-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+    return "vcdemo" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
 def _program_requirements(config: RuleStrategyConfig) -> dict[str, int]:
@@ -857,7 +857,7 @@ class StrategyScheduler:
             daily_total = sum(
                 reserved_cost(row)
                 for row in intents
-                if row.status not in {"rejected", "stale"}
+                if row.status not in {"failed", "rejected", "stale"}
                 and (
                     getattr(row, "created_at", None) is None
                     or row.created_at.replace(tzinfo=timezone.utc) >= daily_cutoff
