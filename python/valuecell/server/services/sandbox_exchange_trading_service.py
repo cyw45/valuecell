@@ -510,7 +510,22 @@ class SandboxExchangeTradingService:
         query = self.db.query(SandboxExchangeOrder).filter_by(tenant_id=tenant_id)
         if credential_id:
             query = query.filter_by(credential_id=credential_id)
-        return [self._order_metadata(order) for order in query.order_by(SandboxExchangeOrder.created_at.desc()).all()]
+        orders = query.order_by(SandboxExchangeOrder.created_at.desc()).all()
+        intent_ids = [order.execution_intent_id for order in orders if order.execution_intent_id]
+        messages = {
+            intent.id: str(intent.error_message)[:1000]
+            for intent in self.db.query(RuleStrategyExecutionIntent).filter(
+                RuleStrategyExecutionIntent.tenant_id == tenant_id,
+                RuleStrategyExecutionIntent.id.in_(intent_ids),
+            ).all()
+            if intent.error_message
+        } if intent_ids else {}
+        result = []
+        for order in orders:
+            item = self._order_metadata(order)
+            item["error_message"] = messages.get(order.execution_intent_id)
+            result.append(item)
+        return result
 
     def _active_sandbox_credential(self, tenant_id: str, credential_id: str) -> TenantCredential:
         credential = self.db.query(TenantCredential).filter_by(id=credential_id, tenant_id=tenant_id, revoked=False).first()
@@ -584,6 +599,19 @@ class SandboxExchangeTradingService:
 
     @staticmethod
     def _order_metadata(order: SandboxExchangeOrder) -> dict[str, Any]:
+        response = order.response_metadata if isinstance(order.response_metadata, dict) else {}
+        filled = SandboxExchangeTradingService._optional_decimal(response.get("filled"))
+        cost = SandboxExchangeTradingService._optional_decimal(response.get("cost"))
+        average = SandboxExchangeTradingService._optional_decimal(response.get("average"))
+        if average is None and cost is not None and filled is not None and filled > 0:
+            average = cost / filled
+        remaining = SandboxExchangeTradingService._optional_decimal(response.get("remaining"))
+        filled_at = None
+        if response.get("lastTradeTimestamp") is not None:
+            try:
+                filled_at = datetime.fromtimestamp(float(Decimal(str(response["lastTradeTimestamp"])) / 1000), tz=timezone.utc).isoformat()
+            except (InvalidOperation, ValueError, TypeError, OverflowError):
+                pass
         return {
             "id": order.id,
             "credential_id": order.credential_id,
@@ -594,6 +622,11 @@ class SandboxExchangeTradingService:
             "type": order.order_type,
             "requested_quote": order.requested_quote,
             "requested_quantity": order.requested_quantity,
+            "filled_quantity": str(filled) if filled is not None else None,
+            "average_fill_price": str(average) if average is not None else None,
+            "filled_quote": str(cost) if cost is not None else None,
+            "remaining_quantity": str(remaining) if remaining is not None else None,
+            "filled_at": filled_at,
             "status": order.status,
             "exchange_order_id": order.exchange_order_id,
             "sandbox": order.sandbox,
@@ -611,7 +644,17 @@ class SandboxExchangeTradingService:
     def _safe_exchange_metadata(raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             return {}
-        return {key: raw[key] for key in ("id", "status", "symbol", "side", "type", "amount", "filled", "remaining", "price", "cost", "timestamp") if key in raw}
+        return {key: raw[key] for key in ("id", "status", "symbol", "side", "type", "amount", "filled", "remaining", "price", "average", "cost", "timestamp", "lastTradeTimestamp") if key in raw}
+
+    @staticmethod
+    def _optional_decimal(value: Any) -> Decimal | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            result = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return None
+        return result if result.is_finite() and result >= 0 else None
 
     @staticmethod
     def _decimal_or_zero(value: Any) -> Decimal:

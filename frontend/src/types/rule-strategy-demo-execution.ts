@@ -18,10 +18,57 @@ export interface RuleStrategyDemoExecutionPositions {
   data: SandboxPositions;
 }
 
+export type DemoPurchaseState =
+  | "not_bought"
+  | "pending"
+  | "partially_filled"
+  | "bought"
+  | "failed"
+  | "unknown";
+
 export interface RuleStrategyDemoExecutionPnl {
-  status: "unavailable";
-  value: null;
-  reason: string;
+  status: "available" | "partial" | "unavailable";
+  scope?: string | null;
+  reason_code?: string | null;
+  value?: number | string | null;
+  total?: number | string | null;
+  realized?: number | string | null;
+  unrealized?: number | string | null;
+  total_pnl?: number | string | null;
+  realized_pnl?: number | string | null;
+  unrealized_pnl?: number | string | null;
+  return_pct?: number | null;
+  reason?: string | null;
+  fees_included?: boolean;
+}
+
+export interface DemoTradeSummary {
+  purchase_state?: DemoPurchaseState | null;
+  order_count?: number;
+  filled_order_count?: number;
+  partially_filled_order_count?: number;
+  failed_order_count?: number;
+  latest_order?: SandboxOrder | null;
+  filled_buy_orders?: number;
+  filled_sell_orders?: number;
+  failed_orders?: number;
+  submission_unknown_orders?: number;
+  current_position_quantity?: string | number;
+}
+
+export interface DemoEquityCurvePoint {
+  ts?: string;
+  timestamp?: string;
+  equity_quote?: number | null;
+  equity?: number | null;
+  value?: number | string | null;
+  cumulative_pnl?: number | string | null;
+  total_pnl?: number | string | null;
+  pnl?: number | string | null;
+}
+
+export interface DemoEquityCurve {
+  points?: DemoEquityCurvePoint[] | null;
 }
 
 export interface RuleStrategyDemoExecution {
@@ -31,7 +78,9 @@ export interface RuleStrategyDemoExecution {
   account: RuleStrategyDemoExecutionAccount;
   positions: RuleStrategyDemoExecutionPositions;
   orders: SandboxOrder[];
+  trade_summary?: DemoTradeSummary | null;
   pnl: RuleStrategyDemoExecutionPnl;
+  equity_curve?: DemoEquityCurve | null;
   checked_at: string;
 }
 

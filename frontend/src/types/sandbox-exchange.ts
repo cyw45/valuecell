@@ -51,7 +51,8 @@ export interface SandboxPosition {
   frozen_quantity: number;
   mark_price: number | null;
   notional_usdt: number | null;
-  unrealized_pnl_usdt: null;
+  entry_price?: number | null;
+  unrealized_pnl_usdt: number | null;
 }
 
 export interface SandboxPositions {
@@ -80,10 +81,16 @@ export interface SandboxOrder {
   type: SandboxOrderType;
   requested_quote: string | number;
   requested_quantity?: string | number | null;
+  filled_quantity?: string | number | null;
+  average_fill_price?: string | number | null;
+  filled_quote?: string | number | null;
+  remaining_quantity?: string | number | null;
   status: string;
   exchange_order_id?: string | null;
   sandbox: true;
   error_code?: string | null;
+  error_message?: string | null;
+  filled_at?: string | null;
   created_at: string;
   updated_at: string;
 }

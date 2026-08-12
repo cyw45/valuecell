@@ -89,6 +89,7 @@ def fake_exchange_class():
                 "filled": 0.002,
                 "remaining": 0,
                 "cost": 100,
+                "lastTradeTimestamp": 1710000000000,
             }
 
         async def create_order(self, symbol: str, type_: str, side: str, amount: float, price, params: dict) -> dict:
@@ -260,6 +261,52 @@ def test_order_is_idempotent_and_sanitizes_exchange_payload(sandbox_client):
     ]
 
 
+def test_refreshed_order_exposes_fill_facts_without_overwriting_requested_facts(sandbox_client):
+    client, _, _ = sandbox_client
+    credential_id = create_connection(client)
+    request = {"credential_id": credential_id, "symbol": "BTC/USDT", "side": "buy", "type": "market", "quote_amount": "100", "idempotency_key": "fill-fields-0123456789", "sandbox": True}
+    created = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    refreshed = client.get(f"/saas/sandbox-exchanges/orders/{created.json()['data']['id']}/status")
+
+    assert refreshed.status_code == 200
+    order = refreshed.json()["data"]
+    assert order["requested_quote"] == "100"
+    assert order["requested_quantity"] == "0.002000"
+    assert order["filled_quantity"] == "0.002"
+    assert order["average_fill_price"] == "5.0E+4"
+    assert order["filled_quote"] == "100"
+    assert order["remaining_quantity"] == "0"
+    assert order["filled_at"] is not None
+
+
+def test_order_metadata_prefers_exchange_average_and_last_trade_timestamp():
+    order = SandboxExchangeOrder(
+        id="order-a", tenant_id="tenant-a", credential_id="conn-a", provider="okx",
+        client_order_id="client-a", symbol="BTC/USDT", side="buy", order_type="market",
+        requested_quote="100", requested_quantity="0.002", status="filled", sandbox=True,
+        response_metadata={"filled": 0.002, "remaining": 0, "cost": 99, "average": 49500, "timestamp": 1700000000000, "lastTradeTimestamp": 1710000000000},
+    )
+
+    result = trading_module.SandboxExchangeTradingService._order_metadata(order)
+
+    assert result["average_fill_price"] == "49500"
+    assert result["filled_at"] == "2024-03-09T16:00:00+00:00"
+
+
+def test_order_metadata_does_not_mislabel_order_timestamp_as_fill_time():
+    order = SandboxExchangeOrder(
+        id="order-b", tenant_id="tenant-a", credential_id="conn-a", provider="okx",
+        client_order_id="client-b", symbol="BTC/USDT", side="buy", order_type="market",
+        requested_quote="100", requested_quantity="0.002", status="filled", sandbox=True,
+        response_metadata={"filled": 0.002, "cost": 100, "timestamp": 1710000000000},
+    )
+
+    result = trading_module.SandboxExchangeTradingService._order_metadata(order)
+
+    assert result["filled_at"] is None
+
+
 @pytest.mark.parametrize(
     ("available_base", "expected_quantity"),
     [
@@ -324,6 +371,33 @@ def test_list_orders_refreshes_non_terminal_exchange_statuses(sandbox_client):
     )
     assert orders.status_code == 200
     assert orders.json()["data"][0]["status"] == "filled"
+
+
+def test_list_orders_exposes_same_tenant_intent_error_message(sandbox_client):
+    client, _, _ = sandbox_client
+    credential_id = create_connection(client)
+    with next(iter(client.app.dependency_overrides[get_db]())) as session:
+        intent = RuleStrategyExecutionIntent(
+            id="intent-failed", strategy_id="rule-failed", evaluation_id="eval-failed",
+            execution_generation=1, execution_source="rule_strategy", tenant_id="tenant-a",
+            credential_id=credential_id, idempotency_key="failed-client-order", symbol="BTC/USDT",
+            side="buy", order_type="market", requested_quote="100", status="failed",
+            error_code="sandbox_order_rejected", error_message="Order does not satisfy OKX Demo minimum size",
+        )
+        session.add(intent)
+        session.add(SandboxExchangeOrder(
+            id="order-failed", tenant_id="tenant-a", credential_id=credential_id, provider="binance",
+            client_order_id="failed-client-order", symbol="BTC/USDT", side="buy", order_type="market",
+            requested_quote="100", status="failed", sandbox=True, error_code="sandbox_order_rejected",
+            strategy_id="rule-failed", evaluation_id="eval-failed", execution_generation=1,
+            execution_source="rule_strategy", execution_intent_id="intent-failed",
+        ))
+        session.commit()
+
+    response = client.get(f"/saas/sandbox-exchanges/orders?credential_id={credential_id}")
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["error_message"] == "Order does not satisfy OKX Demo minimum size"
 
 
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):

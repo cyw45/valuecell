@@ -38,6 +38,14 @@ import {
   conditionDisplayName,
   formatConditionValues,
 } from "@/app/dashboard-funnel";
+import {
+  buildDemoEquityCurve,
+  demoOrderStatusLabel,
+  demoPnlPresentation,
+  demoPurchaseStatePresentation,
+  formatDemoTime,
+  formatOptionalAmount,
+} from "@/app/dashboard-demo-execution";
 import { buildLiveEquityCurve } from "@/app/dashboard-equity-curve";
 import { dashboardRefreshTargets } from "@/app/dashboard-refresh";
 import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
@@ -296,7 +304,7 @@ function KpiCard({
           </span>
         </div>
         <p
-          className="mt-3 truncate text-muted-foreground text-xs"
+          className="mt-3 whitespace-normal break-words text-muted-foreground text-xs"
           title={detail}
         >
           {detail}
@@ -334,6 +342,11 @@ export default function DashboardPage() {
   const demoBalance = demoExecution?.account.data;
   const demoPositions = demoExecution?.positions.data.positions ?? [];
   const demoOrders = demoExecution?.orders ?? [];
+  const demoPurchaseState = demoPurchaseStatePresentation(
+    demoExecution?.trade_summary?.purchase_state,
+  );
+  const demoPnl = demoPnlPresentation(demoExecution?.pnl);
+  const demoEquityCurve = buildDemoEquityCurve(demoExecution?.equity_curve);
   const demoCheckedAt = demoExecution
     ? demoExecutionCheckedAtLabel(demoExecution)
     : undefined;
@@ -522,11 +535,11 @@ export default function DashboardPage() {
             symbol: position.symbol.replace("/", "-"),
             position: {
               quantity: position.quantity,
-              entry_price: null,
-              mark_price: position.mark_price ?? 0,
+              entry_price: position.entry_price ?? null,
+              mark_price: position.mark_price,
             },
-            value: position.notional_usdt ?? 0,
-            profit: null,
+            value: position.notional_usdt,
+            profit: position.unrealized_pnl_usdt,
           }))
         : Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
             const value = position.quantity * position.mark_price;
@@ -668,6 +681,24 @@ export default function DashboardPage() {
                 ? `${ruleStrategy.name}，正在监测 ${trackedSymbols.length} 个市场`
                 : "BTC 市场数据已就绪。配置策略后即可开启模拟执行。"}
             </p>
+            {isOkxDemo ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="text-muted-foreground text-xs">真实交易状态</span>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    demoPurchaseState.tone === "positive" && "border-emerald-500/30 bg-emerald-500/10 text-emerald-600",
+                    demoPurchaseState.tone === "warning" && "border-amber-500/30 bg-amber-500/10 text-amber-700",
+                    demoPurchaseState.tone === "negative" && "border-rose-500/30 bg-rose-500/10 text-rose-600",
+                  )}
+                >
+                  {demoPurchaseState.label}
+                </Badge>
+                <span className="text-muted-foreground text-xs">
+                  订单 {demoExecution?.trade_summary?.order_count ?? demoOrders.length} 笔 · 已成交 {demoExecution?.trade_summary?.filled_order_count ?? "—"} · 部分成交 {demoExecution?.trade_summary?.partially_filled_order_count ?? "—"} · 失败 {demoExecution?.trade_summary?.failed_order_count ?? "—"}
+                </span>
+              </div>
+            ) : null}
           </div>
           <div className="flex items-center gap-2 self-start md:self-auto">
             <Tooltip>
@@ -783,22 +814,34 @@ export default function DashboardPage() {
           />
           <KpiCard
             icon={pnl >= 0 ? TrendingUp : TrendingDown}
-            label={isOkxDemo ? "账户盈亏" : "总收益与亏损"}
+            label={isOkxDemo ? "策略归属盈亏估算" : "总收益与亏损"}
             value={
               isOkxDemo ? (
-                "不可用"
+                demoPnl.available && demoPnl.totalPnl !== null ? (
+                  <>
+                    <TerminalValue signed value={demoPnl.totalPnl} /> USDT
+                  </>
+                ) : (
+                  "不可用"
+                )
               ) : (
                 <>
                   <TerminalValue signed value={pnl} /> USDT
                 </>
               )
             }
-            detail={
+            detail={isOkxDemo ? demoPnl.detail : `策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`}
+            trend={
               isOkxDemo
-                ? (demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用")
-                : `策略启动以来 ${pnlPercent >= 0 ? "+" : ""}${pnlPercent.toFixed(2)}%`
+                ? demoPnl.totalPnl === null
+                  ? "neutral"
+                  : demoPnl.totalPnl >= 0
+                    ? "positive"
+                    : "negative"
+                : pnl >= 0
+                  ? "positive"
+                  : "negative"
             }
-            trend={isOkxDemo ? "neutral" : pnl >= 0 ? "positive" : "negative"}
           />
           <KpiCard
             icon={CircleDollarSign}
@@ -1343,10 +1386,12 @@ export default function DashboardPage() {
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
             <div className="flex items-center justify-between border-border/70 border-b px-5 py-4">
               <div>
-                <h2 className="font-semibold">符合策略的持仓</h2>
+                <h2 className="font-semibold">
+                  {isOkxDemo ? "OKX 共享账户持仓" : "符合策略的持仓"}
+                </h2>
                 <p className="mt-0.5 text-muted-foreground text-xs">
                   {isOkxDemo
-                    ? "OKX Demo 共享交易所账户持仓；未估值资产不计入组合权益"
+                    ? "来自同一 OKX Demo 连接的账户级现货持仓，不代表也不等于本策略持仓；缺失成本或估值不显示为 0"
                     : "已根据信号建立的模拟持仓"}
                 </p>
               </div>
@@ -1385,7 +1430,7 @@ export default function DashboardPage() {
                       </span>
                       <span className="text-right tabular-nums">
                         <span className="block font-medium text-sm">
-                          {currency.format(value)}
+                          {value === null ? "估值不可用" : formatOptionalAmount(value)}
                         </span>
                         <span
                           className={cn(
@@ -1520,11 +1565,63 @@ export default function DashboardPage() {
           </Card>
 
         </section>
+        <section className="order-3 grid gap-4">
+          {isOkxDemo ? (
+            <Card className="dashboard-panel overflow-hidden rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+              <div className="border-border/70 border-b px-5 py-4">
+                <h2 className="font-semibold">真实订单与成交</h2>
+                <p className="mt-0.5 text-muted-foreground text-xs">
+                  OKX Demo 返回的真实下单与成交结果；此表才是成交事实来源
+                </p>
+              </div>
+              <CardContent className="p-0">
+                {demoOrders.length === 0 ? (
+                  <p className="px-4 py-10 text-center text-muted-foreground text-sm">
+                    尚无真实订单；交易信号不代表已下单。
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[1180px] text-left text-xs">
+                      <thead className="border-border/70 border-b bg-muted/30 text-muted-foreground">
+                        <tr>
+                          {[
+                            "方向", "标的", "状态", "请求金额", "请求数量", "成交数量",
+                            "成交均价", "成交金额", "下单时间", "成交时间", "失败原因",
+                          ].map((heading) => <th className="whitespace-nowrap px-3 py-2 font-medium" key={heading}>{heading}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/70">
+                        {demoOrders.map((order) => (
+                          <tr key={order.id}>
+                            <td className={cn("px-3 py-3 font-medium", order.side === "buy" ? "text-emerald-500" : "text-rose-500")}>
+                              {order.side === "buy" ? "买入" : order.side === "sell" ? "卖出" : "未知方向"}
+                            </td>
+                            <td className="whitespace-nowrap px-3 py-3 font-mono">{toDashboardSymbol(order.symbol)}</td>
+                            <td className="whitespace-nowrap px-3 py-3">{demoOrderStatusLabel(order.status)}</td>
+                            <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.requested_quote)}</td>
+                            <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.requested_quantity)}</td>
+                            <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.filled_quantity)}</td>
+                            <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.average_fill_price)}</td>
+                            <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.filled_quote)}</td>
+                            <td className="whitespace-nowrap px-3 py-3">{formatDemoTime(order.created_at)}</td>
+                            <td className="whitespace-nowrap px-3 py-3">{formatDemoTime(order.filled_at)}</td>
+                            <td className="max-w-64 px-3 py-3 text-rose-500">{order.error_message || order.error_code || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ) : null}
+        </section>
+
         <Card className="dashboard-panel order-3 rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
           <div className="border-border/70 border-b px-5 py-4">
-            <h2 className="font-semibold">最近执行记录</h2>
+            <h2 className="font-semibold">最近交易信号</h2>
             <p className="mt-0.5 text-muted-foreground text-xs">
-              最近确认的买入与卖出决策
+              策略评估产生的买卖意图，仅代表信号，不等于已下单或已成交
             </p>
           </div>
           <CardContent className="p-0">
@@ -1567,27 +1664,25 @@ export default function DashboardPage() {
         <Card className="dashboard-panel order-6 rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
           <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="font-semibold">策略权益曲线</h2>
+              <h2 className="font-semibold">{isOkxDemo ? "策略归属累计盈亏曲线" : "策略权益曲线"}</h2>
               <p className="mt-0.5 text-muted-foreground text-xs">
                 {isOkxDemo
-                  ? "OKX Demo 共享账户盈亏不可用；不会以纸面账本替代。"
+                  ? demoPnl.available
+                    ? `按策略成交归属估算 · ${demoPnl.detail}`
+                    : demoPnl.detail
                   : "基于初始资金、当前组合权益与累计盈亏，持续展示最新估值"}
               </p>
-              {!isOkxDemo ? (
-                <p className="mt-1 text-muted-foreground text-xs">
-                  每 15 秒刷新 · 最新时间
-                  {" "}
-                  {new Intl.DateTimeFormat("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    second: "2-digit",
-                  }).format(new Date(equityNowMs))}
-                </p>
-              ) : null}
+              <p className="mt-1 text-muted-foreground text-xs">
+                每 15 秒刷新 · 最新时间{" "}
+                {new Intl.DateTimeFormat("zh-CN", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                }).format(new Date(equityNowMs))}
+              </p>
             </div>
             <div className="flex flex-wrap items-center gap-3 sm:justify-end">
-              {!isOkxDemo ? (
-                <fieldset
+              <fieldset
                   aria-label="权益曲线时间范围"
                   className="flex items-center gap-1 rounded-md border border-border p-0.5"
                 >
@@ -1605,10 +1700,11 @@ export default function DashboardPage() {
                     </Button>
                   ))}
                 </fieldset>
-              ) : null}
               {isOkxDemo ? (
-                <span className="font-semibold text-muted-foreground text-sm">
-                  不可用
+                <span className={cn("font-semibold text-sm", demoPnl.available ? "text-foreground" : "text-muted-foreground")}>
+                  {demoPnl.available && demoPnl.totalPnl !== null
+                    ? `${demoPnl.totalPnl >= 0 ? "+" : ""}${formatOptionalAmount(demoPnl.totalPnl)} USDT`
+                    : "不可用"}
                 </span>
               ) : !account ? (
                 <span className="font-semibold text-muted-foreground text-sm">
@@ -1648,10 +1744,20 @@ export default function DashboardPage() {
             </div>
           </div>
           <CardContent className="p-2 sm:p-4">
-            {isOkxDemo ? (
+            {isOkxDemo && demoEquityCurve.length > 0 ? (
+              <PnlLineChart
+                data={demoEquityCurve}
+                height={240}
+                mode="pnl"
+                range={equityRange}
+                theme={isDark ? "dark" : "light"}
+              />
+            ) : isOkxDemo ? (
               <div className="grid h-60 place-items-center text-center">
-                <p className="text-muted-foreground text-sm">
-                  {demoExecution?.pnl.reason ?? "OKX Demo 盈亏不可用。"}
+                <p className="max-w-xl text-muted-foreground text-sm">
+                  {demoPnl.available
+                    ? "盈亏数据已可用，但后端尚未返回策略归属曲线点。恢复条件：完成至少一次成交估值后自动显示。"
+                    : demoPnl.detail}
                 </p>
               </div>
             ) : !account ? (
