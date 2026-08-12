@@ -1,7 +1,17 @@
-import { ClipboardList, FileClock, ShieldCheck } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  ClipboardList,
+  FileClock,
+  FileDown,
+  ShieldCheck,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
+import { toast } from "sonner";
 import {
+  useExportRuleStrategy,
   useRuleStrategy,
   useRuleStrategyDemoExecution,
   useRuleStrategyTrades,
@@ -40,6 +50,8 @@ function formatDate(value: string) {
 export default function TradesPage() {
   const { t } = useTranslation();
   const [strategyId] = useActiveRuleStrategyId();
+  const [demoOrdersPage, setDemoOrdersPage] = useState(1);
+  const exportStrategy = useExportRuleStrategy();
   const strategyQuery = useRuleStrategy(strategyId);
   const source = selectTradesSource(
     strategyQuery.data !== undefined,
@@ -52,9 +64,43 @@ export default function TradesPage() {
   const demoExecutionQuery = useRuleStrategyDemoExecution(
     strategyId,
     source === "okx_demo",
+    demoOrdersPage,
+    10,
   );
+  useEffect(() => {
+    setDemoOrdersPage(1);
+  }, [strategyId]);
   const paperTrades = paperTradesQuery.data ?? [];
   const demoOrders = demoExecutionQuery.data?.orders ?? [];
+  const demoOrdersPagination = demoExecutionQuery.data?.pagination;
+  useEffect(() => {
+    if (
+      demoOrdersPagination &&
+      demoOrdersPage > demoOrdersPagination.total_pages
+    ) {
+      setDemoOrdersPage(demoOrdersPagination.total_pages);
+    }
+  }, [demoOrdersPage, demoOrdersPagination]);
+  const downloadAllDemoOrders = async () => {
+    if (!strategyId || exportStrategy.isPending) return;
+    try {
+      const workbook = await exportStrategy.mutateAsync({ strategyId });
+      const objectUrl = URL.createObjectURL(workbook.blob);
+      const filename = workbook.filename?.toLowerCase().endsWith(".xlsx")
+        ? workbook.filename
+        : `${workbook.filename || "策略订单导出"}.xlsx`;
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      toast.success("全部订单记录已开始下载。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "订单导出失败，请稍后重试。");
+    }
+  };
   const isPaper = source === "paper";
   const isDemo = source === "okx_demo";
   const recordsLoading = isPaper
@@ -112,12 +158,24 @@ export default function TradesPage() {
         ) : hasRecords ? (
           isDemo ? (
             <Card>
-              <CardHeader>
-                <CardTitle>OKX Demo 订单</CardTitle>
-                <CardDescription>
-                  订单状态来自 Demo
-                  执行端点。当前接口未提供已成交量和成交均价时会明确显示“不可用”。
-                </CardDescription>
+              <CardHeader className="flex flex-row items-start justify-between gap-4">
+                <div>
+                  <CardTitle>OKX Demo 订单</CardTitle>
+                  <CardDescription>
+                    订单状态来自 Demo
+                    执行端点。当前接口未提供已成交量和成交均价时会明确显示“不可用”。
+                  </CardDescription>
+                </div>
+                <Button
+                  disabled={!strategyId || exportStrategy.isPending}
+                  onClick={() => void downloadAllDemoOrders()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <FileDown className="size-4" />
+                  {exportStrategy.isPending ? "正在导出" : "导出全部"}
+                </Button>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -160,6 +218,33 @@ export default function TradesPage() {
                     ))}
                   </TableBody>
                 </Table>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-border border-t pt-4 text-xs">
+                  <span className="text-muted-foreground">
+                    共 {demoOrdersPagination?.total_items ?? demoOrders.length} 条 · 第 {demoOrdersPagination?.page ?? demoOrdersPage} / {demoOrdersPagination?.total_pages ?? 1} 页
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      aria-label="上一页订单"
+                      disabled={demoOrdersPage <= 1 || demoExecutionQuery.isFetching}
+                      onClick={() => setDemoOrdersPage((page) => Math.max(1, page - 1))}
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                    >
+                      <ChevronLeft />
+                    </Button>
+                    <Button
+                      aria-label="下一页订单"
+                      disabled={demoOrdersPage >= (demoOrdersPagination?.total_pages ?? 1) || demoExecutionQuery.isFetching}
+                      onClick={() => setDemoOrdersPage((page) => page + 1)}
+                      size="icon"
+                      type="button"
+                      variant="outline"
+                    >
+                      <ChevronRight />
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           ) : (

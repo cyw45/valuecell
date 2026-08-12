@@ -755,6 +755,8 @@ def create_rule_strategy_router(
     )
     async def get_rule_strategy_demo_execution(
         strategy_id: str,
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=10, ge=1, le=100),
         principal: CurrentPrincipal = Depends(get_current_principal),
         db=Depends(get_db),
     ) -> SuccessResponse[dict[str, Any]]:
@@ -770,6 +772,17 @@ def create_rule_strategy_router(
                 principal.tenant_id,
                 SandboxExchangeTradingService(db),
             )
+            orders = list(data.get("orders") or [])
+            total_items = len(orders)
+            total_pages = max(1, (total_items + page_size - 1) // page_size)
+            start = (page - 1) * page_size
+            data["orders"] = orders[start : start + page_size]
+            data["pagination"] = {
+                "page": page,
+                "page_size": page_size,
+                "total_items": total_items,
+                "total_pages": total_pages,
+            }
         except DemoExecutionReadModelError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SandboxTradingError as exc:

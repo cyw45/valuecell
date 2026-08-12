@@ -35,8 +35,18 @@ const ruleStrategyLogKey = (
   strategyId: string,
   logType: "signals" | "trades" | "funding",
 ) => [...ruleStrategyKey(tenantId, strategyId), logType] as const;
-const ruleStrategyDemoExecutionKey = (tenantId: string, strategyId: string) =>
-  [...ruleStrategyKey(tenantId, strategyId), "demo-execution"] as const;
+const ruleStrategyDemoExecutionKey = (
+  tenantId: string,
+  strategyId: string,
+  page: number,
+  pageSize: number,
+) =>
+  [
+    ...ruleStrategyKey(tenantId, strategyId),
+    "demo-execution",
+    page,
+    pageSize,
+  ] as const;
 function invalidateRuleStrategy(
   queryClient: QueryClient,
   tenantId: string,
@@ -104,13 +114,20 @@ export function useExportRuleStrategy() {
 export function useRuleStrategyDemoExecution(
   strategyId?: string,
   enabled = true,
+  page = 1,
+  pageSize = 10,
 ) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: ruleStrategyDemoExecutionKey(tenantId, strategyId ?? ""),
+    queryKey: ruleStrategyDemoExecutionKey(
+      tenantId,
+      strategyId ?? "",
+      page,
+      pageSize,
+    ),
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyDemoExecution>>(
-        `/rule-strategies/${strategyId}/demo-execution`,
+        `/rule-strategies/${strategyId}/demo-execution?page=${page}&page_size=${pageSize}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,

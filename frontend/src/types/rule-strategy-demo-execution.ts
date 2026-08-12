@@ -78,6 +78,12 @@ export interface RuleStrategyDemoExecution {
   account: RuleStrategyDemoExecutionAccount;
   positions: RuleStrategyDemoExecutionPositions;
   orders: SandboxOrder[];
+  pagination: {
+    page: number;
+    page_size: number;
+    total_items: number;
+    total_pages: number;
+  };
   trade_summary?: DemoTradeSummary | null;
   pnl: RuleStrategyDemoExecutionPnl;
   equity_curve?: DemoEquityCurve | null;

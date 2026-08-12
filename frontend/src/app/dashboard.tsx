@@ -3,9 +3,12 @@ import {
   BarChart3,
   CandlestickChart,
   CircleDollarSign,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Cpu,
   Crosshair,
+  FileDown,
   Layers3,
   Moon,
   RadioTower,
@@ -16,6 +19,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { toast } from "sonner";
 import {
   type ReactNode,
   useEffect,
@@ -28,6 +32,7 @@ import {
   useRuleStrategy,
   useRuleStrategyDemoExecution,
   useRuleStrategyEvaluations,
+  useExportRuleStrategy,
   useRuleStrategyMonitorState,
   useRuleStrategyPnlCurve,
   useRuleStrategyRiskState,
@@ -330,9 +335,13 @@ export default function DashboardPage() {
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
   const strategyExecutionModeIsDemo = ruleStrategy ? isOkxDemo : undefined;
+  const [demoOrdersPage, setDemoOrdersPage] = useState(1);
+  const exportStrategy = useExportRuleStrategy();
   const demoExecutionQuery = useRuleStrategyDemoExecution(
     strategyId || undefined,
     isOkxDemo,
+    demoOrdersPage,
+    10,
   );
   const {
     data: demoExecution,
@@ -342,6 +351,38 @@ export default function DashboardPage() {
   const demoBalance = demoExecution?.account.data;
   const demoPositions = demoExecution?.positions.data.positions ?? [];
   const demoOrders = demoExecution?.orders ?? [];
+  const demoOrdersPagination = demoExecution?.pagination;
+  useEffect(() => {
+    setDemoOrdersPage(1);
+  }, [strategyId]);
+  useEffect(() => {
+    if (
+      demoOrdersPagination &&
+      demoOrdersPage > demoOrdersPagination.total_pages
+    ) {
+      setDemoOrdersPage(demoOrdersPagination.total_pages);
+    }
+  }, [demoOrdersPage, demoOrdersPagination]);
+  const downloadAllDemoOrders = async () => {
+    if (!strategyId || exportStrategy.isPending) return;
+    try {
+      const workbook = await exportStrategy.mutateAsync({ strategyId });
+      const objectUrl = URL.createObjectURL(workbook.blob);
+      const filename = workbook.filename?.toLowerCase().endsWith(".xlsx")
+        ? workbook.filename
+        : `${workbook.filename || "策略订单导出"}.xlsx`;
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      toast.success("全部订单记录已开始下载。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "订单导出失败，请稍后重试。");
+    }
+  };
   const demoPurchaseState = demoPurchaseStatePresentation(
     demoExecution?.trade_summary?.purchase_state,
   );
@@ -1568,11 +1609,23 @@ export default function DashboardPage() {
         <section className="order-3 grid gap-4">
           {isOkxDemo ? (
             <Card className="dashboard-panel overflow-hidden rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
-              <div className="border-border/70 border-b px-5 py-4">
-                <h2 className="font-semibold">真实订单与成交</h2>
-                <p className="mt-0.5 text-muted-foreground text-xs">
-                  OKX Demo 返回的真实下单与成交结果；此表才是成交事实来源
-                </p>
+              <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="font-semibold">真实订单与成交</h2>
+                  <p className="mt-0.5 text-muted-foreground text-xs">
+                    OKX Demo 返回的真实下单与成交结果；此表才是成交事实来源
+                  </p>
+                </div>
+                <Button
+                  disabled={!strategyId || exportStrategy.isPending}
+                  onClick={() => void downloadAllDemoOrders()}
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                >
+                  <FileDown className="size-4" />
+                  {exportStrategy.isPending ? "正在导出" : "导出全部"}
+                </Button>
               </div>
               <CardContent className="p-0">
                 {demoOrders.length === 0 ? (
@@ -1580,8 +1633,9 @@ export default function DashboardPage() {
                     尚无真实订单；交易信号不代表已下单。
                   </p>
                 ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[1180px] text-left text-xs">
+                  <>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[1180px] text-left text-xs">
                       <thead className="border-border/70 border-b bg-muted/30 text-muted-foreground">
                         <tr>
                           {[
@@ -1609,8 +1663,36 @@ export default function DashboardPage() {
                           </tr>
                         ))}
                       </tbody>
-                    </table>
-                  </div>
+                      </table>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-border/70 border-t px-4 py-3 text-xs">
+                      <span className="text-muted-foreground">
+                        共 {demoOrdersPagination?.total_items ?? demoOrders.length} 条 · 第 {demoOrdersPagination?.page ?? demoOrdersPage} / {demoOrdersPagination?.total_pages ?? 1} 页
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          aria-label="上一页订单"
+                          disabled={demoOrdersPage <= 1 || demoExecutionLoading}
+                          onClick={() => setDemoOrdersPage((page) => Math.max(1, page - 1))}
+                          size="icon"
+                          type="button"
+                          variant="outline"
+                        >
+                          <ChevronLeft />
+                        </Button>
+                        <Button
+                          aria-label="下一页订单"
+                          disabled={demoOrdersPage >= (demoOrdersPagination?.total_pages ?? 1) || demoExecutionLoading}
+                          onClick={() => setDemoOrdersPage((page) => page + 1)}
+                          size="icon"
+                          type="button"
+                          variant="outline"
+                        >
+                          <ChevronRight />
+                        </Button>
+                      </div>
+                    </div>
+                  </>
                 )}
               </CardContent>
             </Card>
