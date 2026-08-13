@@ -56,6 +56,7 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
 
 _MIN_INTERVAL_S = 60
 _DEMO_SUBMISSION_TIMEOUT_S = 15
+_DEMO_POSITION_DUST_EPSILON = Decimal("0.000001")
 _SYNC_JOB_ID = "_scheduler_sync_running"
 _INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60,
@@ -78,15 +79,25 @@ def _strategy_client_order_id(
 
 
 def _strategy_position_from_inventory(
-    inventory: dict[str, tuple[Decimal, Decimal]], symbol: str
+    inventory: dict[str, tuple[Decimal, Decimal]],
+    symbol: str,
+    available_quantity: Decimal | None = None,
 ) -> tuple[Decimal, Decimal, int]:
-    """Return strategy-owned quantity, cost, and open count from confirmed fills."""
-    quantity, cost = inventory.get(
-        symbol.strip().upper().replace("-", "/"),
-        (Decimal(0), Decimal(0)),
+    """Return exchange-available strategy inventory from confirmed fills."""
+    canonical_symbol = symbol.strip().upper().replace("-", "/")
+    quantity, cost = inventory.get(canonical_symbol, (Decimal(0), Decimal(0)))
+    if available_quantity is not None:
+        effective_quantity = min(quantity, max(available_quantity, Decimal(0)))
+        if effective_quantity < _DEMO_POSITION_DUST_EPSILON:
+            effective_quantity = Decimal(0)
+        effective_cost = cost * effective_quantity / quantity if quantity > 0 else Decimal(0)
+    else:
+        effective_quantity, effective_cost = quantity, cost
+    open_positions = sum(
+        (effective_quantity if item_symbol == canonical_symbol else held) > 0
+        for item_symbol, (held, _) in inventory.items()
     )
-    open_positions = sum(held > 0 for held, _ in inventory.values())
-    return quantity, cost, open_positions
+    return effective_quantity, effective_cost, open_positions
 
 
 def _program_requirements(config: RuleStrategyConfig) -> dict[str, int]:
@@ -531,8 +542,17 @@ class StrategyScheduler:
                         ),
                         {},
                     )
+                    demo_position = demo_positions.get(
+                        symbol.strip().upper().replace("/", "-"),
+                        {},
+                    )
+                    available_quantity = Decimal(
+                        str(demo_position.get("available_quantity") or 0)
+                    )
                     inventory_quantity, inventory_cost, strategy_open_positions = (
-                        _strategy_position_from_inventory(demo_inventory, symbol)
+                        _strategy_position_from_inventory(
+                            demo_inventory, symbol, available_quantity
+                        )
                     )
                     # Exchange balances are shared. Strategy signals use only
                     # this strategy's confirmed fills; balances remain the

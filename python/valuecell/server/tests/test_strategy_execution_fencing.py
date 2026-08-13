@@ -22,12 +22,12 @@ def test_strategy_client_order_id_fits_okx_limit():
 
 def test_strategy_position_ignores_shared_account_dust_after_confirmed_exit():
     inventory = {
-        "CRV/USDT": (Decimal("0"), Decimal("0")),
+        "CRV/USDT": (Decimal("0.361011"), Decimal("0.1001083503")),
         "TRX/USDT": (Decimal("250"), Decimal("75")),
     }
 
     quantity, cost, open_count = strategy_scheduler._strategy_position_from_inventory(
-        inventory, "CRV-USDT"
+        inventory, "CRV-USDT", Decimal("0.00000017")
     )
 
     assert quantity == 0
