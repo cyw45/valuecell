@@ -46,6 +46,9 @@ from valuecell.server.services.crypto_market_service import get_crypto_market_se
 from valuecell.server.services.rule_strategy_service import (
     RuleStrategyService,
 )
+from valuecell.server.services.rule_strategy_demo_execution_read_model import (
+    strategy_inventory_by_symbol,
+)
 from valuecell.server.services.saas_access_service import TenantAccessService
 from valuecell.server.services.sandbox_exchange_trading_service import (
     SandboxExchangeTradingService,
@@ -356,6 +359,7 @@ class StrategyScheduler:
 
         demo_account: dict[str, Any] | None = None
         demo_positions: dict[str, dict[str, Any]] = {}
+        demo_inventory: dict[str, tuple[Decimal, Decimal]] = {}
         if config.execution.environment == "okx_demo":
             credential_id = config.execution.sandbox_connection_id
             session = get_database_manager().get_session()
@@ -371,6 +375,15 @@ class StrategyScheduler:
                     str(item["symbol"]).upper().replace("/", "-"): item
                     for item in position_snapshot.get("positions", [])
                 }
+                strategy_orders = [
+                    item
+                    for item in trading_service.list_orders(
+                        tenant_id, credential_id or ""
+                    )
+                    if item.get("strategy_id") == strategy_id
+                    and item.get("execution_source") == "rule_strategy"
+                ]
+                demo_inventory = strategy_inventory_by_symbol(strategy_orders)
             except Exception as exc:  # noqa: BLE001
                 _safe_warning(
                     "SCHEDULER_DEMO_ACCOUNT_SYNC_FAILED",
@@ -508,6 +521,15 @@ class StrategyScheduler:
                         {},
                     )
                     position_quantity = float(demo_position.get("quantity") or 0.0)
+                    inventory_quantity, inventory_cost = demo_inventory.get(
+                        symbol.strip().upper().replace("-", "/"),
+                        (Decimal(0), Decimal(0)),
+                    )
+                    entry_price = (
+                        float(inventory_cost / inventory_quantity)
+                        if inventory_quantity > 0
+                        else None
+                    )
                     total_position_quote = sum(
                         float(item.get("usdt_value") or 0.0)
                         for item in demo_positions.values()
@@ -522,7 +544,7 @@ class StrategyScheduler:
                         total_position_quote=total_position_quote,
                         position=RuleStrategyPosition(
                             quantity=position_quantity,
-                            entry_price=None if position_quantity > 0 else None,
+                            entry_price=entry_price,
                         ),
                     )
                 else:

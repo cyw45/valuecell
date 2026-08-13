@@ -91,6 +91,43 @@ def _trade_summary(orders: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def strategy_inventory_by_symbol(
+    orders: list[dict[str, Any]],
+) -> dict[str, tuple[Decimal, Decimal]]:
+    """Return strategy-owned open quantity and cost from confirmed fills only."""
+    inventory: dict[str, tuple[Decimal, Decimal]] = {}
+    fills = [
+        item
+        for item in orders
+        if item.get("status") == "filled"
+        and (_decimal(item.get("filled_quantity")) or 0) > 0
+    ]
+    for _, fill in sorted(
+        enumerate(fills),
+        key=lambda pair: (
+            _timestamp_sort_key(
+                pair[1].get("filled_at") or pair[1].get("created_at")
+            ),
+            pair[0],
+        ),
+    ):
+        symbol = str(fill.get("symbol") or "")
+        quantity = _decimal(fill.get("filled_quantity")) or Decimal(0)
+        quote = _decimal(fill.get("filled_quote"))
+        price = _decimal(fill.get("average_fill_price"))
+        if quantity <= 0 or (quote is None and price is None):
+            continue
+        quote = quote if quote is not None else quantity * price  # type: ignore[operator]
+        held, cost = inventory.get(symbol, (Decimal(0), Decimal(0)))
+        if fill.get("side") == "buy":
+            inventory[symbol] = (held + quantity, cost + quote)
+        elif fill.get("side") == "sell" and held > 0:
+            sold = min(quantity, held)
+            average_cost = cost / held
+            inventory[symbol] = (held - sold, cost - sold * average_cost)
+    return inventory
+
+
 def _pnl_and_curve(orders: list[dict[str, Any]], positions: dict[str, Any], checked_at: str) -> tuple[dict[str, Any], dict[str, Any]]:
     legacy_filled_orders = [item for item in orders if item.get("status") == "filled" and (_decimal(item.get("filled_quantity")) or 0) <= 0]
     fills = [item for item in orders if (_decimal(item.get("filled_quantity")) or 0) > 0]
@@ -161,10 +198,14 @@ def _pnl_and_curve(orders: list[dict[str, Any]], positions: dict[str, Any], chec
         "total": str(total) if complete else None, "fees_included": False,
     }
     return pnl, {
-        "status": "unavailable",
+        "status": "available" if complete else "unavailable",
         "scope": scope,
-        "reason_code": "strategy_equity_history_unavailable",
-        "points": [],
+        "reason_code": None if complete else reason_code,
+        "points": (
+            [{"ts": checked_at, "cumulative_pnl": str(total)}]
+            if complete
+            else []
+        ),
     }
 
 

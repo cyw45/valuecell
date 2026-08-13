@@ -444,6 +444,7 @@ class RuleStrategyService:
                             "equity_quote": market.equity_quote,
                             "open_position_count": market.open_position_count,
                             "position": market.position.model_dump(mode="json"),
+                            "mark_price": market.price,
                             "source": "okx_demo",
                         },
                         None,

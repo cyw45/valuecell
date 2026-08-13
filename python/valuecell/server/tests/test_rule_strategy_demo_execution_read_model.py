@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -6,6 +7,7 @@ from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     DemoExecutionReadModelError,
     build_demo_execution_read_model,
     get_demo_execution_read_model,
+    strategy_inventory_by_symbol,
 )
 
 
@@ -82,9 +84,26 @@ def test_demo_read_model_calculates_attributed_moving_average_pnl():
     assert result["pnl"]["realized"] == "33.3333333333333333333333333"
     assert result["pnl"]["unrealized"] == "46.6666666666666666666666667"
     assert result["pnl"]["total"] == "80.0000000000000000000000000"
-    assert result["equity_curve"]["status"] == "unavailable"
-    assert result["equity_curve"]["reason_code"] == "strategy_equity_history_unavailable"
-    assert result["equity_curve"]["points"] == []
+    assert result["equity_curve"]["status"] == "available"
+    assert result["equity_curve"]["reason_code"] is None
+    assert result["equity_curve"]["points"][-1] == {
+        "ts": "2024-01-04T00:00:00+00:00",
+        "cumulative_pnl": "80.0000000000000000000000000",
+    }
+
+
+def test_strategy_inventory_uses_only_confirmed_fills_and_tracks_average_cost():
+    inventory = strategy_inventory_by_symbol([
+        {"symbol": "BTC/USDT", "side": "buy", "status": "filled", "filled_quantity": "2", "filled_quote": "200"},
+        {"symbol": "BTC/USDT", "side": "buy", "status": "filled", "filled_quantity": "1", "filled_quote": "120"},
+        {"symbol": "BTC/USDT", "side": "sell", "status": "filled", "filled_quantity": "1", "filled_quote": "140"},
+        {"symbol": "BTC/USDT", "side": "buy", "status": "submission_unknown", "filled_quantity": "99", "filled_quote": "1"},
+    ])
+
+    assert inventory["BTC/USDT"] == (
+        Decimal("2"),
+        Decimal("213.3333333333333333333333333"),
+    )
 
 
 def test_demo_pnl_is_partial_for_sell_without_owned_cost_basis():
