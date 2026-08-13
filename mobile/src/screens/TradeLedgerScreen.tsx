@@ -26,13 +26,19 @@ export default function TradeLedgerScreen() {
   const [strategyId, setStrategyId] = useState(route.params?.strategyId ?? "");
   const [pickerVisible, setPickerVisible] = useState(false);
   const strategies = useQuery({ queryKey: ["mobile", session?.tenantId, "strategies"], queryFn: () => api.strategies(false), enabled: Boolean(session) });
-  const selectedId = useMemo(() => selectActiveStrategyId(strategies.data ?? [], strategyId), [strategies.data, strategyId]);
-  const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "trades", 100], queryFn: () => api.strategyLog(selectedId, "trades", 100), enabled: Boolean(selectedId) });
+  const selectedId = useMemo(
+    () => selectActiveStrategyId(strategies.data ?? [], strategyId),
+    [strategies.data, strategyId],
+  );
+  const selectedStrategy = strategies.data?.find((item) => item.strategy_id === selectedId);
+  const isDemo = selectedStrategy?.config.execution.environment === "okx_demo";
+  const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "trades", 100], queryFn: () => api.strategyLog(selectedId, "trades", 100), enabled: Boolean(selectedId && !isDemo) });
   useEffect(() => { if (selectedId !== strategyId) setStrategyId(selectedId); }, [selectedId, strategyId]);
   const entries = ((trades.data as { entries?: TradeEntry[] } | undefined)?.entries ?? []);
 
   if (strategies.isLoading) return <StatePanel description="正在加载可用策略。" title="成交账本" />;
-  if (!selectedId) return <StatePanel description="创建策略并完成评估后，成交会保留在服务端账本中。" title="暂无策略" />;
+  if (!selectedId) return <StatePanel description="创建策略并完成评估后，成交会保留在服务端账本中。" title="暂无策略" />
+  if (isDemo) return <StatePanel description="OKX Demo 的真实订单、成交状态与错误信息来自交易所执行记录；请在策略工作台或策略详情查看。纸面成交账本不会混入 Demo 订单。" title="OKX Demo 交易记录" />
   return <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl onRefresh={() => void Promise.all([strategies.refetch(), trades.refetch()])} refreshing={strategies.isRefetching || trades.isRefetching} tintColor={palette.primary} />} style={styles.page}>
     <ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle="最近 100 笔服务端归因成交" title="成交账本" />
     {trades.isError ? <StatePanel actionLabel="重试" description={(trades.error as Error).message} onAction={() => void trades.refetch()} title="成交记录暂不可用" tone="error" /> : null}

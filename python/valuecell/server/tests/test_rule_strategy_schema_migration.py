@@ -265,3 +265,50 @@ def test_monitor_metadata_migration_installs_provider_fact_columns():
         "price_observed_at TIMESTAMP WITH TIME ZONE",
     ):
         assert column in statements
+
+
+def test_demo_daily_execution_limit_migration_updates_only_demo_strategies():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(Tenant(id="tenant-demo-limit", name="Demo limit tenant"))
+    session.add_all(
+        [
+            RuleStrategy(
+                strategy_id="rule-demo-limit",
+                tenant_id="tenant-demo-limit",
+                name="Demo limit",
+                status="stopped",
+                paper_mode=False,
+                config={
+                    "execution": {
+                        "environment": "okx_demo",
+                        "max_daily_quote_amount": 500,
+                    }
+                },
+            ),
+            RuleStrategy(
+                strategy_id="rule-paper-limit",
+                tenant_id="tenant-demo-limit",
+                name="Paper limit",
+                status="stopped",
+                paper_mode=True,
+                config={"execution": {"environment": "paper", "max_daily_quote_amount": 500}},
+            ),
+        ]
+    )
+    session.commit()
+
+    assert migrations.migrate_demo_daily_execution_limit(session) is True
+    assert migrations.migrate_demo_daily_execution_limit(session) is False
+
+    limits = dict(
+        session.execute(
+            __import__("sqlalchemy").text(
+                "SELECT strategy_id, json_extract(config, '$.execution.max_daily_quote_amount') "
+                "FROM rule_strategies"
+            )
+        ).all()
+    )
+    assert limits["rule-demo-limit"] == migrations.DEMO_DAILY_LIMIT_USDT
+    assert limits["rule-paper-limit"] == 500

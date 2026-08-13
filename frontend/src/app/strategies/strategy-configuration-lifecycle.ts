@@ -147,7 +147,7 @@ export const defaultStrategyFormValues: StrategyFormValues = {
   executionEnvironment: "paper",
   sandboxConnectionId: "",
   maxDemoOrderQuoteAmount: 100,
-  maxDemoDailyQuoteAmount: 500,
+  maxDemoDailyQuoteAmount: 1_000_000,
   maxDemoTotalQuoteAmount: 1_000,
 };
 

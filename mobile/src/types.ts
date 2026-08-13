@@ -421,6 +421,29 @@ export interface RuleStrategyFundingImpact {
   direction: "credit" | "debit" | "none";
 }
 
+export interface RuleStrategyEntryConfirmation {
+  enabled: number;
+  available: number;
+  passed: number;
+  required: number;
+  mode: "all" | "any" | "at_least" | "ratio";
+}
+
+export type RuleStrategyFunnelCode = "strategy_run" | "market_ready" | "conditions" | "risk" | "order_submission" | "fill";
+export type RuleStrategyFunnelStatus = "passed" | "blocked" | "pending" | "rejected" | "filled" | "partial";
+export interface RuleStrategyFunnelStage {
+  code: RuleStrategyFunnelCode;
+  label: string;
+  status: RuleStrategyFunnelStatus;
+  detail: string;
+}
+export interface RuleStrategyConditionSummary {
+  matched: number;
+  total: number;
+  required: number;
+  available: number;
+}
+
 export interface RuleStrategyEvaluation {
   strategy_id: string;
   evaluation_id: string;
@@ -432,10 +455,18 @@ export interface RuleStrategyEvaluation {
   indicators: RuleStrategyIndicators;
   sizing: RuleStrategySizing;
   funding: RuleStrategyFundingImpact;
-  account: RuleStrategyPaperAccount;
-  config?: RuleStrategyConfig;
-  execution_ledger?: "external";
-  paper_fill?: boolean;
+  entry_confirmation?: RuleStrategyEntryConfirmation | null;
+  account: RuleStrategyPaperAccount | Record<string, unknown>;
+  stage?: "market_data" | "account_sync" | "strategy" | "risk" | "order" | "fill";
+  status?: "ready" | "blocked" | "passed" | "pending" | "completed";
+  checked_at?: string;
+  next_check_at?: string;
+  execution?: Record<string, unknown> | null;
+  execution_ledger?: "paper" | "external" | "okx_demo" | null;
+  paper_fill?: boolean | null;
+  funnel?: RuleStrategyFunnelStage[] | null;
+  blocked_stage?: RuleStrategyFunnelCode | null;
+  condition_summary?: RuleStrategyConditionSummary | null;
 }
 
 export interface RuleStrategyTextImportConfig {
@@ -988,11 +1019,45 @@ export interface RuleStrategyDemoExecutionPositions {
 }
 
 export interface RuleStrategyDemoExecutionPnl {
-  status: "unavailable";
-  value: null;
-  reason: string;
+  status: "available" | "partial" | "unavailable";
+  scope?: string | null;
+  reason_code?: string | null;
+  value?: number | string | null;
+  total?: number | string | null;
+  realized?: number | string | null;
+  unrealized?: number | string | null;
+  total_pnl?: number | string | null;
+  realized_pnl?: number | string | null;
+  unrealized_pnl?: number | string | null;
+  return_pct?: number | null;
+  reason?: string | null;
+  fees_included?: boolean;
 }
-
+export type DemoPurchaseState = "not_bought" | "pending" | "partially_filled" | "bought" | "failed" | "unknown";
+export interface DemoTradeSummary {
+  purchase_state?: DemoPurchaseState | null;
+  order_count?: number;
+  filled_order_count?: number;
+  partially_filled_order_count?: number;
+  failed_order_count?: number;
+  latest_order?: SandboxOrder | null;
+  filled_buy_orders?: number;
+  filled_sell_orders?: number;
+  failed_orders?: number;
+  submission_unknown_orders?: number;
+  current_position_quantity?: string | number;
+}
+export interface DemoEquityCurvePoint {
+  ts?: string;
+  timestamp?: string;
+  equity_quote?: number | null;
+  equity?: number | null;
+  value?: number | string | null;
+  cumulative_pnl?: number | string | null;
+  total_pnl?: number | string | null;
+  pnl?: number | string | null;
+}
+export interface DemoEquityCurve { points?: DemoEquityCurvePoint[] | null; }
 export interface RuleStrategyDemoExecution {
   source: "okx_demo_spot";
   strategy_id: string;
@@ -1000,7 +1065,10 @@ export interface RuleStrategyDemoExecution {
   account: RuleStrategyDemoExecutionAccount;
   positions: RuleStrategyDemoExecutionPositions;
   orders: SandboxOrder[];
+  pagination: { page: number; page_size: number; total_items: number; total_pages: number };
+  trade_summary?: DemoTradeSummary | null;
   pnl: RuleStrategyDemoExecutionPnl;
+  equity_curve?: DemoEquityCurve | null;
   checked_at: string;
 }
 

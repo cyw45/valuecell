@@ -590,7 +590,7 @@ class RuleStrategyExecutionConfig(RuleStrategyModel):
     environment: Literal["paper", "okx_demo"] = "paper"
     sandbox_connection_id: str | None = Field(default=None, min_length=1, max_length=36)
     max_order_quote_amount: float = Field(default=10_000.0, gt=0, le=10_000)
-    max_daily_quote_amount: float = Field(default=10_000.0, gt=0, le=100_000)
+    max_daily_quote_amount: float = Field(default=1_000_000.0, gt=0, le=10_000_000)
     max_total_quote_amount: float = Field(default=10_000.0, gt=0, le=100_000)
 
     @model_validator(mode="after")

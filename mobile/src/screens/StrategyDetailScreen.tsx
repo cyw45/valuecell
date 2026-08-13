@@ -68,6 +68,11 @@ function confirmationCopy(confirmation: Confirmation): { destructive: boolean; l
   };
 }
 
+function formatNumericQuote(value: number | string | null | undefined): string {
+  const number = typeof value === "string" ? Number(value) : value;
+  return typeof number === "number" ? formatQuote(number) : "—";
+}
+
 export default function StrategyDetailScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute() as RouteParams;
@@ -75,11 +80,12 @@ export default function StrategyDetailScreen() {
   const queryClient = useQueryClient();
   const strategyId = route.params.strategyId;
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [demoOrdersPage, setDemoOrdersPage] = useState(1);
   const [operationError, setOperationError] = useState<string | null>(null);
   const access = useQuery({ queryKey: ["mobile", session?.tenantId, "access"], queryFn: api.access, enabled: Boolean(session) });
   const strategy = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId], queryFn: () => api.strategy(strategyId), enabled: Boolean(strategyId) });
   const account = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account"], queryFn: () => api.strategyAccount(strategyId), enabled: Boolean(strategyId && strategy.data?.config.execution.environment !== "okx_demo") });
-  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution"], queryFn: () => api.strategyDemoExecution(strategyId), enabled: Boolean(strategyId && strategy.data?.config.execution.environment === "okx_demo"), retry: false });
+  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", demoOrdersPage], queryFn: () => api.strategyDemoExecution(strategyId, demoOrdersPage, 10), enabled: Boolean(strategyId && strategy.data?.config.execution.environment === "okx_demo"), retry: false });
   const evaluations = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "evaluations", 20], queryFn: () => api.strategyEvaluations(strategyId, 20), enabled: Boolean(strategyId) });
   const signals = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "signals", 20], queryFn: () => api.strategyLog(strategyId, "signals", 20), enabled: Boolean(strategyId) });
   const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 20], queryFn: () => api.strategyLog(strategyId, "trades", 20), enabled: Boolean(strategyId) });
@@ -176,16 +182,16 @@ export default function StrategyDetailScreen() {
 
       {isDemo ? (
         <>
-          {demo.isError ? <StatePanel actionLabel="重试" description={(demo.error as Error).message} onAction={() => void demo.refetch()} title="Demo 执行数据暂不可用" tone="error" /> : null}
           <SectionCard description={demoData ? `来源：${demoSourceLabel(demoData.source)} · 最近核验 ${formatTimestamp(demoData.checked_at)}` : "仅显示交易所权威数据，绝不回退到纸面账本。"} title="OKX Demo 执行来源">
             {demoData ? <>
               <Text style={styles.row}>交易所总估值：{formatQuote(demoData.account.data.total_usdt_value)}</Text>
-              <Text style={styles.row}>持仓：{demoPositions.length} 项 · 关联订单：{demoOrders.length} 笔</Text>
+              <Text style={styles.row}>持仓：{demoPositions.length} 项 · 策略归属订单：{demoData.pagination.total_items} 笔 · 已成交 {demoData.trade_summary?.filled_order_count ?? 0} 笔</Text>
+              {demoData.pnl.status === "unavailable" ? <Text style={styles.muted}>{demoPnlReason(demoData.pnl.reason)}</Text> : <View style={styles.accountGrid}><View style={styles.accountMetric}><Text style={styles.accountLabel}>总 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.total_pnl ?? demoData.pnl.total ?? demoData.pnl.value)}</Text></View><View style={styles.accountMetric}><Text style={styles.accountLabel}>已实现</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.realized_pnl ?? demoData.pnl.realized)}</Text></View><View style={styles.accountMetric}><Text style={styles.accountLabel}>未实现</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.unrealized_pnl ?? demoData.pnl.unrealized)}</Text></View><View style={styles.accountMetric}><Text style={styles.accountLabel}>收益率</Text><Text style={styles.accountValue}>{demoData.pnl.return_pct == null ? "—" : `${demoData.pnl.return_pct.toFixed(2)}%`}</Text></View></View>}
               {demoPositions.length ? demoPositions.map((position) => <View key={position.symbol} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{position.symbol}</Text><Text style={styles.muted}>数量 {position.quantity} · 可用 {position.available_quantity}</Text></View><Text style={styles.executionValue}>{formatQuote(position.notional_usdt)}</Text></View>) : <Text style={styles.muted}>交易所当前没有返回持仓。</Text>}
-              {demoOrders.length ? <View style={styles.orderList}>{demoOrders.slice(0, 5).map((order) => <View key={order.id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · {formatTimestamp(order.updated_at)}</Text></View><Text style={styles.executionValue}>{orderStatusLabel(order.status)}</Text></View>)}</View> : null}
+              {demoOrders.length ? <View style={styles.orderList}>{demoOrders.map((order) => <View key={order.id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · 请求 {formatNumericQuote(order.requested_quote)} · {formatTimestamp(order.updated_at)}</Text>{order.error_code ? <Text style={styles.warning}>{order.error_code}</Text> : null}</View><Text style={styles.executionValue}>{orderStatusLabel(order.status)}</Text></View>)}</View> : <Text style={styles.muted}>当前没有归因到该策略的交易所订单。</Text>}
+              {demoData.pagination.total_pages > 1 ? <View style={styles.pagination}><Pressable accessibilityRole="button" disabled={demoOrdersPage <= 1} onPress={() => setDemoOrdersPage((page) => Math.max(1, page - 1))} style={[styles.pageButton, demoOrdersPage <= 1 && styles.disabled]}><Text style={styles.pageButtonText}>上一页</Text></Pressable><Pressable accessibilityRole="button" disabled={demoOrdersPage >= demoData.pagination.total_pages} onPress={() => setDemoOrdersPage((page) => Math.min(demoData.pagination.total_pages, page + 1))} style={[styles.pageButton, demoOrdersPage >= demoData.pagination.total_pages && styles.disabled]}><Text style={styles.pageButtonText}>下一页</Text></Pressable></View> : null}
             </> : <Text style={styles.muted}>正在等待交易所执行数据。</Text>}
           </SectionCard>
-          {demoData ? <StatePanel description={demoPnlReason(demoData.pnl.reason)} title="PnL 暂不可用" /> : null}
         </>
       ) : (
         <>
@@ -252,5 +258,10 @@ const styles = StyleSheet.create({
   signalDefault: { backgroundColor: palette.surfaceRaised, color: palette.textMuted },
   signalCode: { color: palette.textMuted, fontSize: 11, fontWeight: "700" },
   signalDetail: { color: palette.text, fontSize: 13, lineHeight: 20 },
+  pagination: { flexDirection: "row", gap: spacing.sm, justifyContent: "flex-end", paddingTop: spacing.sm },
+  pageButton: { borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, minHeight: 36, justifyContent: "center", paddingHorizontal: spacing.sm },
+  pageButtonText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  warning: { color: palette.warning, fontSize: 12, fontWeight: "800" },
+  disabled: { opacity: 0.5 },
   executionSectionTitle: { color: palette.primary, fontSize: 13, fontWeight: "900", marginTop: spacing.xs },
 });

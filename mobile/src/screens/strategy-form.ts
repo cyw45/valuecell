@@ -33,7 +33,7 @@ export function createStrategyConfig(): StrategyConfig {
       momentum: { enabled: true, interval: "15m", period: 14, entry_comparator: "below", entry_threshold: 20, exit_enabled: true, exit_comparator: "above", exit_threshold: 85 },
       brar: { enabled: true, interval: "15m", period: 26, component: "br", entry_comparator: "below", entry_threshold: 30, exit_enabled: false, exit_comparator: "above", exit_threshold: 85 },
     },
-    execution: { environment: "paper", max_order_quote_amount: 100, max_daily_quote_amount: 500, max_total_quote_amount: 1_000 },
+    execution: { environment: "paper", max_order_quote_amount: 100, max_daily_quote_amount: 1_000_000, max_total_quote_amount: 1_000 },
     risk: { order_quote_amount: 100, max_positions: 100, leverage: 1 },
   };
 }
@@ -55,6 +55,7 @@ export function validateStrategyConfig(
   if (config.initial_capital_quote <= 0 || config.risk.order_quote_amount <= 0 || config.risk.max_positions <= 0 || config.risk.leverage <= 0) return "初始资金、单笔金额、最大持仓和杠杆必须大于 0。";
   const execution = config.execution;
   if (execution.max_order_quote_amount <= 0 || execution.max_daily_quote_amount <= 0 || execution.max_total_quote_amount <= 0) return "执行额度必须大于 0。";
+  if (execution.max_daily_quote_amount > 10_000_000) return "OKX Demo 每日执行额度不得超过 10,000,000 USDT。";
   if (execution.environment === "okx_demo") {
     if (config.risk.leverage !== 1) return "OKX Demo 策略的杠杆必须为 1。";
     if (!execution.sandbox_connection_id || !validOkxDemoConnections(connections).some((item) => item.id === execution.sandbox_connection_id)) return "请选择当前工作区已验证、未撤销的 OKX Demo 现货连接。";

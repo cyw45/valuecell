@@ -8,10 +8,33 @@ import { BottomSheetSelector, ScreenHeader, StatePanel } from "../components";
 import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
 import { formatQuote, formatTimestamp, selectActiveStrategyId } from "./workbench";
+import type { RuleStrategyDemoExecution } from "../types";
 
 type RouteParams = { params?: { strategyId?: string } };
 type PnlPoint = { ts: string; cumulative_pnl?: number; equity_quote?: number };
 type FundingEntry = { evaluation_id?: string; evaluated_at?: string; funding_rate?: number; direction?: string; current_notional_quote?: number; estimated_payment_quote?: number };
+
+function formatDemoValue(value: number | string | null | undefined): string {
+  const number = typeof value === "string" ? Number(value) : value;
+  return typeof number === "number" && Number.isFinite(number) ? formatQuote(number) : "—";
+}
+
+function demoPoints(snapshot: RuleStrategyDemoExecution | undefined): PnlPoint[] {
+  return (snapshot?.equity_curve?.points ?? []).flatMap((point) => {
+    const toNumber = (value: number | string | null | undefined) =>
+      typeof value === "string" ? Number(value) : value;
+    const equity = toNumber(point.equity_quote ?? point.equity ?? point.value);
+    const pnl = toNumber(point.cumulative_pnl ?? point.total_pnl ?? point.pnl);
+    const timestamp = point.ts ?? point.timestamp;
+    return timestamp && typeof pnl === "number" && Number.isFinite(pnl)
+      ? [{
+          ts: timestamp,
+          cumulative_pnl: pnl,
+          equity_quote: typeof equity === "number" && Number.isFinite(equity) ? equity : undefined,
+        }]
+      : [];
+  });
+}
 
 function pathFor(points: PnlPoint[], width: number, height: number): string {
   const values = points.map((point) => point.cumulative_pnl ?? 0);
@@ -36,15 +59,17 @@ export default function FundingPnlScreen() {
   const isDemo = selectedStrategy?.config.execution.environment === "okx_demo";
   const pnl = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "pnl"], queryFn: () => api.strategyPnlCurve(selectedId), enabled: Boolean(selectedId && !isDemo) });
   const funding = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "funding", 100], queryFn: () => api.strategyLog(selectedId, "funding", 100), enabled: Boolean(selectedId && !isDemo) });
-  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "demo-execution"], queryFn: () => api.strategyDemoExecution(selectedId), enabled: Boolean(selectedId && isDemo), retry: false });
+  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "demo-execution"], queryFn: () => api.strategyDemoExecution(selectedId, 1, 10), enabled: Boolean(selectedId && isDemo), retry: false });
   useEffect(() => { if (selectedId !== strategyId) setStrategyId(selectedId); }, [selectedId, strategyId]);
   const points = pnl.data as PnlPoint[] | undefined;
   const entries = ((funding.data as { entries?: FundingEntry[] } | undefined)?.entries ?? []);
   const line = points?.length ? pathFor(points, 320, 120) : "";
+  const authoritativeDemoPoints = demoPoints(demo.data);
+  const demoLine = authoritativeDemoPoints.length ? pathFor(authoritativeDemoPoints, 320, 120) : "";
 
   if (strategies.isLoading) return <StatePanel description="正在加载可用策略。" title="资金费与 PnL" />;
   if (!selectedId) return <StatePanel description="创建策略后可查看服务端 PnL 与资金费历史。" title="暂无策略" />;
-  if (isDemo) return <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl onRefresh={() => void demo.refetch()} refreshing={demo.isRefetching} tintColor={palette.primary} />} style={styles.page}><ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle="OKX Demo 使用交易所权威执行数据，不会回退到纸面账本。" title="资金费与 PnL" />{demo.isError ? <StatePanel error={demo.error as Error} onRetry={() => void demo.refetch()} state="error" title="Demo 执行数据暂不可用" /> : <StatePanel message={demo.data?.pnl.reason ?? "交易所未提供 PnL 数据。"} state="empty" title="PnL 暂不可用" />}<View style={styles.chartCard}><Text style={styles.cardTitle}>交易所执行状态</Text><Text style={styles.caption}>来源 {demo.data?.source ?? "OKX Demo"} · 核验 {formatTimestamp(demo.data?.checked_at)} · 关联订单 {demo.data?.orders.length ?? 0}</Text></View><BottomSheetSelector onClose={() => setPickerVisible(false)} onSelect={(id) => { setStrategyId(id); setPickerVisible(false); }} options={(strategies.data ?? []).map((item) => ({ label: item.name, value: item.strategy_id }))} selectedValue={selectedId} title="选择策略" visible={pickerVisible} /></ScrollView>;
+  if (isDemo) return <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl onRefresh={() => void demo.refetch()} refreshing={demo.isRefetching} tintColor={palette.primary} />} style={styles.page}><ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle="OKX Demo 仅展示交易所权威执行数据。" title="资金费与 PnL" />{demo.isError ? <StatePanel error={demo.error as Error} onRetry={() => void demo.refetch()} state="error" title="Demo 执行数据暂不可用" /> : demo.data?.pnl.status === "unavailable" ? <StatePanel message={demo.data.pnl.reason ?? "交易所未提供可核验 PnL。"} state="empty" title="PnL 暂不可用" /> : <View style={styles.chartCard}><Text style={styles.cardTitle}>OKX Demo 累计 PnL</Text>{demoLine ? <Svg height={140} width="100%" viewBox="0 0 320 140"><Line stroke={palette.border} strokeWidth={1} x1={0} x2={320} y1={70} y2={70} /><Path d={demoLine} fill="none" stroke={palette.primary} strokeWidth={3} /></Svg> : <Text style={styles.empty}>交易所尚未提供可绘制的权益曲线。</Text>}<Text style={styles.caption}>总 PnL {formatDemoValue(demo.data?.pnl.total_pnl ?? demo.data?.pnl.total ?? demo.data?.pnl.value)} · 已实现 {formatDemoValue(demo.data?.pnl.realized_pnl ?? demo.data?.pnl.realized)} · {authoritativeDemoPoints.length} 个交易所曲线点</Text></View>}<BottomSheetSelector onClose={() => setPickerVisible(false)} onSelect={(id) => { setStrategyId(id); setPickerVisible(false); }} options={(strategies.data ?? []).map((item) => ({ label: item.name, value: item.strategy_id }))} selectedValue={selectedId} title="选择策略" visible={pickerVisible} /></ScrollView>;
   return <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl onRefresh={() => void Promise.all([pnl.refetch(), funding.refetch()])} refreshing={pnl.isRefetching || funding.isRefetching} tintColor={palette.primary} />} style={styles.page}>
     <ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle="服务端已评估曲线与资金费影响" title="资金费与 PnL" />
     {pnl.isError || funding.isError ? <StatePanel actionLabel="重试" description={((pnl.error ?? funding.error) as Error).message} onAction={() => void Promise.all([pnl.refetch(), funding.refetch()])} title="历史数据暂不可用" tone="error" /> : null}

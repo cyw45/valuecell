@@ -844,10 +844,10 @@ export function RuleStrategyConfiguration({
       if (
         !Number.isFinite(values.maxDemoDailyQuoteAmount) ||
         values.maxDemoDailyQuoteAmount < 1 ||
-        values.maxDemoDailyQuoteAmount > 100_000
+        values.maxDemoDailyQuoteAmount > 10_000_000
       )
         next.maxDemoDailyQuoteAmount =
-          "每日上限必须在 1 至 100,000 USDT 之间。";
+          "每日上限必须在 1 至 10,000,000 USDT 之间。";
       if (
         !Number.isFinite(values.maxDemoTotalQuoteAmount) ||
         values.maxDemoTotalQuoteAmount < 1 ||
@@ -1520,7 +1520,7 @@ export function RuleStrategyConfiguration({
                         update("maxDemoDailyQuoteAmount", value)
                       }
                       min={1}
-                      max={100_000}
+                      max={10_000_000}
                       unit="USDT"
                     />
                     <NumericField

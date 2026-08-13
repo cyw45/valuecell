@@ -50,13 +50,27 @@ bun run android
 # browser layout preview: bun run web
 ```
 
-## Validation and release
+## Validation and local Android builds
 
 ```bash
 bun run typecheck
 bun run export:android
 ```
 
-`eas.json` defines development, internal-preview and production build profiles. Before a store
-release, set the final Android package and iOS bundle identifier in `app.json`, configure signing in
-EAS, and run a physical-device test against the production API.
+`export:android` validates and produces a JavaScript bundle; it does not produce an APK/AAB.
+For an installable Android artifact without consuming Expo EAS cloud-build quota, generate
+the native project once, then build it locally with an installed Android SDK and JDK:
+
+```bash
+npx expo prebuild --platform android
+cd android
+./gradlew.bat assembleRelease
+```
+
+The release APK is written under
+`android/app/build/outputs/apk/release/`. Do not commit the generated `android/` directory
+or build artifacts unless the project intentionally adopts native-project ownership.
+
+`eas.json` remains available for development, internal-preview and production cloud profiles.
+Before a store release, set the final Android package and iOS bundle identifier in `app.json`,
+configure signing, and run a physical-device test against the production API.

@@ -264,6 +264,16 @@ export type ExecutionFunnelFact = {
   tone: StrategyPresentationTone;
 };
 
+export function executionFunnelFacts(evaluation: RuleStrategyEvaluation): ExecutionFunnelFact[] {
+  if (!evaluation.funnel?.length) return evaluationExecutionFunnel(evaluation);
+  return evaluation.funnel.map((stage) => ({
+    label: stage.label,
+    value: stage.status === "passed" ? "通过" : stage.status === "filled" ? "已成交" : stage.status === "partial" ? "部分成交" : stage.status === "blocked" ? "阻塞" : stage.status === "rejected" ? "已拒绝" : "等待",
+    caption: stage.detail,
+    tone: stage.status === "passed" || stage.status === "filled" ? "positive" : stage.status === "blocked" || stage.status === "rejected" ? "negative" : stage.status === "partial" ? "warning" : "default",
+  }));
+}
+
 export function evaluationExecutionFunnel(evaluation: RuleStrategyEvaluation): ExecutionFunnelFact[] {
   const primaryState = primaryConditionState(evaluation.conditions);
   const conditions = conditionStateSummary(evaluation.conditions);

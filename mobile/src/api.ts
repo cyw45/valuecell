@@ -398,9 +398,14 @@ class MobileApiClient {
 
   strategyDemoExecution = (
     strategyId: string,
+    page = 1,
+    pageSize = 10,
   ): Promise<Types.RuleStrategyDemoExecution> =>
     this.authenticatedRequest<Types.RuleStrategyDemoExecution>(
-      `/rule-strategies/${pathSegment(strategyId)}/demo-execution`,
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/demo-execution`,
+        new URLSearchParams({ page: String(page), page_size: String(pageSize) }),
+      ),
     );
 
   strategyAdvisory = (

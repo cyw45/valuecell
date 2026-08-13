@@ -10,7 +10,7 @@ import {
   conditionStateLabel,
   conditionStateSummary,
   conditionStateTone,
-  evaluationExecutionFunnel,
+  executionFunnelFacts,
   evaluationReason,
   strategyActionLabel,
   strategyActionTone,
@@ -36,7 +36,7 @@ export function StrategyEvaluationPanel({ evaluation, compact = false }: Strateg
   const { tokens } = useTheme();
   const decisionTone = strategyActionTone(evaluation.action);
   const decisionColors = toneColors(decisionTone, tokens);
-  const funnel = evaluationExecutionFunnel(evaluation);
+  const funnel = executionFunnelFacts(evaluation);
   const styles = StyleSheet.create({
     root: { gap: spacing.md },
     decision: { backgroundColor: decisionColors.soft, borderColor: decisionColors.color, borderRadius: radius.md, borderWidth: 1, gap: spacing.xs, padding: spacing.sm },
@@ -78,6 +78,7 @@ export function StrategyEvaluationPanel({ evaluation, compact = false }: Strateg
         </View>
         <Text style={styles.reason}>{evaluationReason(evaluation.reason_code, evaluation.reason)}</Text>
         <Text style={styles.machineCode}>reason_code: {evaluation.reason_code}</Text>
+        {evaluation.status || evaluation.stage || evaluation.blocked_stage ? <Text style={styles.machineCode}>状态：{evaluation.status ?? "—"} · 阶段：{evaluation.stage ?? "—"}{evaluation.blocked_stage ? ` · 阻塞：${evaluation.blocked_stage}` : ""}</Text> : null}
       </View>
 
       {!compact ? (
@@ -97,7 +98,7 @@ export function StrategyEvaluationPanel({ evaluation, compact = false }: Strateg
 
       <View style={styles.conditionsHeader}>
         <Text style={styles.conditionsTitle}>本次条件</Text>
-        <Text style={styles.conditionsSummary}>{conditionStateSummary(evaluation.conditions)}</Text>
+        <Text style={styles.conditionsSummary}>{evaluation.condition_summary ? `通过 ${evaluation.condition_summary.matched}/${evaluation.condition_summary.total}，要求 ${evaluation.condition_summary.required} 项，${evaluation.condition_summary.available} 项数据可用` : conditionStateSummary(evaluation.conditions)}</Text>
       </View>
       {evaluation.conditions.length === 0 ? (
         <Text style={styles.empty}>本次服务端评估未返回条件记录。</Text>

@@ -157,6 +157,7 @@ def _run_required_execution_attribution_migration() -> None:
     """Run required strategy state migrations before scheduler startup."""
     from ..db.connection import get_database_manager
     from ..db.migrations import (
+        migrate_demo_daily_execution_limit,
         migrate_rule_strategy_execution_attribution,
         migrate_rule_strategy_validation,
         migrate_strategy_monitor_metadata,
@@ -169,6 +170,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_strategy_product_state(session)
         migrate_rule_strategy_validation(session)
         migrate_strategy_monitor_metadata(session)
+        migrate_demo_daily_execution_limit(session)
     finally:
         session.close()
 

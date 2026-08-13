@@ -619,3 +619,58 @@ def migrate_strategy_monitor_metadata(session: Session) -> bool:
         version=STRATEGY_MONITOR_METADATA_MIGRATION_VERSION,
     )
     return True
+
+
+DEMO_DAILY_LIMIT_MIGRATION_VERSION = "20260812_demo_daily_limit_v1"
+DEMO_DAILY_LIMIT_MIGRATION_LOCK_KEY = 7720250723
+DEMO_DAILY_LIMIT_USDT = 1_000_000.0
+
+
+def migrate_demo_daily_execution_limit(session: Session) -> bool:
+    """Raise every persisted OKX Demo strategy's daily safety throughput cap."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "Demo daily execution limit migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": DEMO_DAILY_LIMIT_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": DEMO_DAILY_LIMIT_MIGRATION_VERSION},
+    ).first():
+        return False
+    for strategy in session.query(RuleStrategy).all():
+        config = dict(strategy.config or {})
+        execution = dict(config.get("execution") or {})
+        if execution.get("environment") != "okx_demo":
+            continue
+        current_daily_limit = execution.get("max_daily_quote_amount")
+        if (
+            not isinstance(current_daily_limit, (int, float))
+            or current_daily_limit < DEMO_DAILY_LIMIT_USDT
+        ):
+            execution["max_daily_quote_amount"] = DEMO_DAILY_LIMIT_USDT
+        config["execution"] = execution
+        strategy.config = config
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": DEMO_DAILY_LIMIT_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied Demo daily execution limit migration {version}",
+        version=DEMO_DAILY_LIMIT_MIGRATION_VERSION,
+    )
+    return True

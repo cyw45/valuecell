@@ -329,6 +329,25 @@ def test_okx_demo_execution_config_requires_a_sandbox_connection_and_spot_risk_l
     assert config.execution.max_daily_quote_amount == 750
 
 
+def test_okx_demo_execution_config_accepts_high_daily_throughput_limit():
+    from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
+
+    config = RuleStrategyConfig.model_validate(
+        {
+            **_config(),
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "sandbox-okx-1",
+                "max_order_quote_amount": 10_000,
+                "max_daily_quote_amount": 1_000_000,
+                "max_total_quote_amount": 100_000,
+            },
+        }
+    )
+
+    assert config.execution.max_daily_quote_amount == 1_000_000
+
+
 
 def test_rule_strategy_api_rejects_unverified_okx_demo_connection_without_leaking_details():
     client = _client()
