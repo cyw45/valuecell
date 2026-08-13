@@ -20,6 +20,33 @@ def test_strategy_client_order_id_fits_okx_limit():
     assert len(key) <= 32
 
 
+def test_strategy_position_ignores_shared_account_dust_after_confirmed_exit():
+    inventory = {
+        "CRV/USDT": (Decimal("0"), Decimal("0")),
+        "TRX/USDT": (Decimal("250"), Decimal("75")),
+    }
+
+    quantity, cost, open_count = strategy_scheduler._strategy_position_from_inventory(
+        inventory, "CRV-USDT"
+    )
+
+    assert quantity == 0
+    assert cost == 0
+    assert open_count == 1
+
+
+def test_strategy_position_uses_strategy_confirmed_fill_inventory():
+    inventory = {"CRV/USDT": (Decimal("360.649819"), Decimal("100.1083"))}
+
+    quantity, cost, open_count = strategy_scheduler._strategy_position_from_inventory(
+        inventory, "crv-usdt"
+    )
+
+    assert quantity == Decimal("360.649819")
+    assert cost == Decimal("100.1083")
+    assert open_count == 1
+
+
 def test_okx_parameter_rejection_is_deterministic_failure():
     assert SandboxExchangeTradingService._is_deterministic_order_rejection(
         'okx {"code":"1","data":[{"sCode":"51000","sMsg":"Parameter clOrdId error"}]}'

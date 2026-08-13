@@ -77,6 +77,18 @@ def _strategy_client_order_id(
     return "vcdemo" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
+def _strategy_position_from_inventory(
+    inventory: dict[str, tuple[Decimal, Decimal]], symbol: str
+) -> tuple[Decimal, Decimal, int]:
+    """Return strategy-owned quantity, cost, and open count from confirmed fills."""
+    quantity, cost = inventory.get(
+        symbol.strip().upper().replace("-", "/"),
+        (Decimal(0), Decimal(0)),
+    )
+    open_positions = sum(held > 0 for held, _ in inventory.values())
+    return quantity, cost, open_positions
+
+
 def _program_requirements(config: RuleStrategyConfig) -> dict[str, int]:
     requirements: dict[str, int] = {config.interval: 1}
     program = config.program
@@ -519,15 +531,12 @@ class StrategyScheduler:
                         ),
                         {},
                     )
-                    demo_position = demo_positions.get(
-                        symbol.strip().upper().replace("/", "-"),
-                        {},
+                    inventory_quantity, inventory_cost, strategy_open_positions = (
+                        _strategy_position_from_inventory(demo_inventory, symbol)
                     )
-                    position_quantity = float(demo_position.get("quantity") or 0.0)
-                    inventory_quantity, inventory_cost = demo_inventory.get(
-                        symbol.strip().upper().replace("-", "/"),
-                        (Decimal(0), Decimal(0)),
-                    )
+                    # Exchange balances are shared. Strategy signals use only
+                    # this strategy's confirmed fills; balances remain the
+                    # sell-side safety ceiling inside submit_order.
                     entry_price = (
                         float(inventory_cost / inventory_quantity)
                         if inventory_quantity > 0
@@ -543,10 +552,10 @@ class StrategyScheduler:
                         funding_rate=0.0,
                         equity_quote=float(demo_account.get("total_usdt_value") or 0.0),
                         quote_balance=float(usdt_balance.get("free") or 0.0),
-                        open_position_count=len(demo_positions),
+                        open_position_count=strategy_open_positions,
                         total_position_quote=total_position_quote,
                         position=RuleStrategyPosition(
-                            quantity=position_quantity,
+                            quantity=float(inventory_quantity),
                             entry_price=entry_price,
                         ),
                     )
