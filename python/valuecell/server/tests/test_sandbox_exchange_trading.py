@@ -352,6 +352,40 @@ def test_okx_demo_market_sell_is_bounded_by_available_base_and_requested_quote(
     assert result.json()["data"]["requested_quantity"] == expected_quantity
 
 
+def test_preflight_precision_error_is_terminal_failure_without_remote_submission(
+    sandbox_client, monkeypatch
+):
+    client, _, fake_exchange = sandbox_client
+    response = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase"),
+    )
+    credential_id = response.json()["data"]["id"]
+
+    def reject_precision(self, _symbol: str, _amount: float) -> str:
+        raise RuntimeError(
+            "okx amount of BTC/USDT must be greater than minimum amount precision of 0.000001"
+        )
+
+    monkeypatch.setattr(fake_exchange, "amount_to_precision", reject_precision)
+    request = {
+        "credential_id": credential_id,
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "type": "market",
+        "quote_amount": "100",
+        "idempotency_key": "precision-failure-order",
+        "sandbox": True,
+    }
+    result = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    assert result.status_code == 201, result.text
+    assert result.json()["data"]["status"] == "failed"
+    assert result.json()["data"]["error_code"] == "sandbox_order_rejected"
+    assert result.json()["data"]["exchange_order_id"] is None
+    assert "create_order" not in fake_exchange.instances[-1].calls
+
+
 def test_list_orders_refreshes_non_terminal_exchange_statuses(sandbox_client):
     client, _, _ = sandbox_client
     credential_id = create_connection(client)

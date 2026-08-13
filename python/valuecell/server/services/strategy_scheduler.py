@@ -371,6 +371,9 @@ class StrategyScheduler:
                     credential_id or "",
                     account=demo_account,
                 )
+                await trading_service.refresh_open_orders(
+                    tenant_id, credential_id or ""
+                )
                 demo_positions = {
                     str(item["symbol"]).upper().replace("/", "-"): item
                     for item in position_snapshot.get("positions", [])

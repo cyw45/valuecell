@@ -277,6 +277,7 @@ class SandboxExchangeTradingService:
                 self.db.commit()
 
         exchange = self._exchange_for(tenant_id, credential)
+        remote_submission_started = False
         try:
             exchange.set_sandbox_mode(True)
             # Market discovery, ticker and balance are preflight operations: a
@@ -333,6 +334,7 @@ class SandboxExchangeTradingService:
                     **(intent.request_payload or {}),
                     "order_cost": str(order_cost),
                 }
+            remote_submission_started = True
             create = exchange.create_order(
                 symbol,
                 order_type,
@@ -374,7 +376,7 @@ class SandboxExchangeTradingService:
             self.db.commit()
             raise
         except Exception as exc:
-            if self._is_deterministic_order_rejection(str(exc)):
+            if not remote_submission_started or self._is_deterministic_order_rejection(str(exc)):
                 order.status = "failed"
                 order.error_code = "sandbox_order_rejected"
                 if intent is not None:
