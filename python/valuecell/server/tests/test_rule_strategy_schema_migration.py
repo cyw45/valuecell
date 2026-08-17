@@ -246,6 +246,8 @@ def test_app_lifespan_wires_required_migration_before_best_effort_migrations():
     assert required_call < best_effort_block
     assert required_call < app_source.index("await _scheduler.start()")
     assert "migrate_rule_strategy_execution_attribution(session)" in app_source
+    assert "_scheduler_review_strategy_monitors" in app_source
+    assert "review_running_strategy_monitors(repository, service)" in app_source
 
 
 
@@ -312,3 +314,15 @@ def test_demo_daily_execution_limit_migration_updates_only_demo_strategies():
     )
     assert limits["rule-demo-limit"] == migrations.DEMO_DAILY_LIMIT_USDT
     assert limits["rule-paper-limit"] == 500
+
+
+def test_demo_snapshot_migration_is_registered_before_scheduler_startup():
+    from pathlib import Path
+
+    source = Path(__file__).parents[1] / "api" / "app.py"
+    app_source = source.read_text(encoding="utf-8")
+
+    assert "migrate_strategy_demo_account_snapshots(session)" in app_source
+    assert app_source.index("migrate_strategy_demo_account_snapshots(session)") < app_source.index(
+        "await _scheduler.start()"
+    )

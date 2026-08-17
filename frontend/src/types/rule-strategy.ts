@@ -457,6 +457,7 @@ export interface EvaluateRuleStrategyRequest {
 export interface RuleStrategyPnlPoint {
   ts: string;
   cumulative_pnl: number;
+  daily_pnl_quote?: number;
   action: string;
   equity_quote?: number;
 }

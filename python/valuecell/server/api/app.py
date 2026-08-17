@@ -160,6 +160,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_demo_daily_execution_limit,
         migrate_rule_strategy_execution_attribution,
         migrate_rule_strategy_validation,
+        migrate_strategy_demo_account_snapshots,
         migrate_strategy_monitor_metadata,
         migrate_strategy_product_state,
     )
@@ -171,6 +172,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_rule_strategy_validation(session)
         migrate_strategy_monitor_metadata(session)
         migrate_demo_daily_execution_limit(session)
+        migrate_strategy_demo_account_snapshots(session)
     finally:
         session.close()
 

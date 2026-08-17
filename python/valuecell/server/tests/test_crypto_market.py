@@ -132,6 +132,34 @@ def test_monitor_metadata_uses_completed_raw_quote_volume(monkeypatch):
     assert facts.listing_age_days > 60
 
 
+def test_monitor_metadata_falls_back_to_okx_provider(monkeypatch):
+    service = CryptoMarketService()
+    observed_at = datetime(2026, 8, 6, 12, tzinfo=timezone.utc)
+    day_ms = 86_400_000
+    start_ms = int((observed_at.replace(hour=0) - timedelta(days=30)).timestamp() * 1_000)
+    candles = [
+        [start_ms + index * day_ms, "0", "0", "0", "0", "0", "0", str(2_000 + index), "1"]
+        for index in range(30)
+    ]
+
+    def fetch(path, _query):
+        if path.endswith("instruments"):
+            return {"code": "0", "data": [{"listTime": "1577836800000"}]}
+        if path.endswith("history-candles"):
+            return {"code": "0", "data": list(reversed(candles))}
+        return {"code": "0", "data": [{"last": "99.5"}]}
+
+    monkeypatch.setattr(service, "_fetch_okx_monitor_json", fetch)
+
+    facts = service._fetch_okx_monitor_metadata("THETA-USDT", observed_at)
+
+    assert facts is not None
+    assert facts.provider == "okx"
+    assert facts.average_quote_volume_30d == pytest.approx(2_014.5)
+    assert facts.price_quote == 99.5
+    assert facts.listing_age_days > 60
+
+
 def test_symbol_specific_provider_error_does_not_trip_global_circuit_breaker(monkeypatch):
     service = CryptoMarketService()
     service.providers = ("mexc",)

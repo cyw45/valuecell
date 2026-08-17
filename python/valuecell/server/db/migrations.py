@@ -674,3 +674,50 @@ def migrate_demo_daily_execution_limit(session: Session) -> bool:
         version=DEMO_DAILY_LIMIT_MIGRATION_VERSION,
     )
     return True
+
+
+STRATEGY_DEMO_SNAPSHOT_MIGRATION_VERSION = "20260813_strategy_demo_account_snapshots_v1"
+STRATEGY_DEMO_SNAPSHOT_MIGRATION_LOCK_KEY = 7720250724
+
+
+def migrate_strategy_demo_account_snapshots(session: Session) -> bool:
+    """Create the durable exchange-wallet history table before Demo reads run."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "strategy Demo snapshot migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": STRATEGY_DEMO_SNAPSHOT_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": STRATEGY_DEMO_SNAPSHOT_MIGRATION_VERSION},
+    ).first():
+        return False
+    from valuecell.server.db.models.rule_strategy import RuleStrategyDemoAccountSnapshot
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[RuleStrategyDemoAccountSnapshot.__table__],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": STRATEGY_DEMO_SNAPSHOT_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=STRATEGY_DEMO_SNAPSHOT_MIGRATION_VERSION,
+    )
+    return True

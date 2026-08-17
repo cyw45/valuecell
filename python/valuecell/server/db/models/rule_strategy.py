@@ -190,6 +190,27 @@ class RuleStrategyMonitorSymbol(Base):
     )
 
 
+class RuleStrategyDemoAccountSnapshot(Base):
+    """Exchange-authoritative OKX Demo wallet snapshot for historical valuation."""
+
+    __tablename__ = "rule_strategy_demo_account_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    strategy_id = Column(String(100), ForeignKey("rule_strategies.strategy_id", ondelete="CASCADE"), nullable=False, index=True)
+    credential_id = Column(String(36), ForeignKey("tenant_credentials.id", ondelete="RESTRICT"), nullable=False, index=True)
+    observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    source = Column(String(32), nullable=False)
+    total_usdt_value = Column(Float, nullable=True)
+    balances = Column(JSON, nullable=False, default=list)
+    positions = Column(JSON, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_rule_strategy_demo_snapshot_strategy_observed", "strategy_id", "observed_at"),
+    )
+
+
 class RuleStrategyOrderAttempt(Base):
     """Append-only remote venue submission observation for an execution intent."""
 

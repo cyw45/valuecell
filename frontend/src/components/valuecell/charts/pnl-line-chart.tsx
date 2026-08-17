@@ -116,15 +116,23 @@ export function PnlLineChart({
           const value = Number(point?.value);
           if (!Number.isFinite(value))
             return `${point?.name ?? ""}<br/>${seriesName}: —`;
-          if (!isEquity)
-            return `${point.name}<br/>${seriesName}: ${value >= 0 ? "+" : ""}${value.toFixed(4)}`;
+          if (!isEquity) {
+            const dailyPnl = data[point.dataIndex]?.daily_pnl_quote;
+            const dailyLabel = dailyPnl === undefined ? "—" : `${dailyPnl >= 0 ? "+" : ""}${currencyFormatter.format(dailyPnl)} USDT`;
+            return `${point.name}<br/>${seriesName}: ${value >= 0 ? "+" : ""}${currencyFormatter.format(value)} USDT<br/>当日盈亏: ${dailyLabel}`;
+          }
 
           const cumulativePnl = data[point.dataIndex]?.cumulative_pnl;
+          const dailyPnl = data[point.dataIndex]?.daily_pnl_quote;
           const cumulativePnlLabel =
             cumulativePnl === undefined
               ? "—"
               : `${cumulativePnl >= 0 ? "+" : ""}${currencyFormatter.format(cumulativePnl)} USDT`;
-          return `${point.name}<br/>组合权益: ${currencyFormatter.format(value)} USDT<br/>累计盈亏: ${cumulativePnlLabel}`;
+          const dailyPnlLabel =
+            dailyPnl === undefined
+              ? "—"
+              : `${dailyPnl >= 0 ? "+" : ""}${currencyFormatter.format(dailyPnl)} USDT`;
+          return `${point.name}<br/>组合权益: ${currencyFormatter.format(value)} USDT<br/>当日盈亏: ${dailyPnlLabel}<br/>累计盈亏: ${cumulativePnlLabel}`;
         },
       },
       xAxis: {
@@ -134,8 +142,6 @@ export function PnlLineChart({
           new Intl.DateTimeFormat(locale, {
             month: "short",
             day: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
           }).format(new Date(point.ts)),
         ),
         axisLine: { lineStyle: { color: axisLineColor } },
@@ -194,9 +200,10 @@ export function PnlLineChart({
           data: data.map((point) =>
             isEquity ? (point.equity_quote ?? null) : point.cumulative_pnl,
           ),
-          smooth: true,
+          smooth: data.length > 2,
           connectNulls: false,
-          symbol: "none",
+          symbol: data.length === 1 ? "circle" : "none",
+          symbolSize: data.length === 1 ? 10 : 0,
           lineStyle: { color: lineColor, width: 2 },
           areaStyle: {
             color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [

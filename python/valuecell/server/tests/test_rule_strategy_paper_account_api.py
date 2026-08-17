@@ -298,6 +298,7 @@ def test_pnl_curve_skips_demo_and_incomplete_legacy_account_snapshots():
         {
             "ts": "2026-07-12T00:00:00Z",
             "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
             "equity_quote": 1_000.0,
             "action": "initial",
         }

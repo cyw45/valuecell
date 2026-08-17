@@ -21,6 +21,7 @@ from .strategy_portfolio import StrategyPortfolioView
 from .rule_strategy import (
     RuleStrategy,
     RuleStrategyAccount,
+    RuleStrategyDemoAccountSnapshot,
     RuleStrategyEvaluationJournal,
     RuleStrategyEvent,
     RuleStrategyExecutionIntent,
@@ -71,6 +72,7 @@ __all__ = [
     "RuleStrategy",
     "RuleStrategyAccount",
     "RuleStrategyEvaluationJournal",
+    "RuleStrategyDemoAccountSnapshot",
     "RuleStrategyEvent",
     "RuleStrategyExecutionIntent",
     "RuleStrategyExecutionLease",

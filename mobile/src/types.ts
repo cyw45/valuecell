@@ -521,6 +521,13 @@ export interface RuleStrategyFundingLogEntry extends RuleStrategyFundingImpact {
   evaluation_id: string;
   evaluated_at: string;
 }
+export interface RuleStrategyPnlPoint {
+  ts: string;
+  cumulative_pnl: number;
+  daily_pnl_quote?: number;
+  equity_quote?: number;
+  action: string;
+}
 
 export interface RuleStrategyLog<T> {
   strategy_id: string;
@@ -1054,8 +1061,10 @@ export interface DemoEquityCurvePoint {
   equity?: number | null;
   value?: number | string | null;
   cumulative_pnl?: number | string | null;
+  daily_pnl_quote?: number | string | null;
   total_pnl?: number | string | null;
   pnl?: number | string | null;
+  action?: string | null;
 }
 export interface DemoEquityCurve { points?: DemoEquityCurvePoint[] | null; }
 export interface RuleStrategyDemoExecution {

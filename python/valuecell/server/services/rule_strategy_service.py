@@ -192,13 +192,28 @@ class RuleStrategyService:
     def _refresh_monitor_admission(
         self, strategy_id: str, tenant_id: str, *, force: bool = True
     ) -> None:
-        """Persist configured symbols as observable without metadata gates."""
+        """Fetch fresh exchange evidence before persisting a monitor review."""
         monitors_method = getattr(self.repository, "monitors", None)
         if monitors_method is None:
             return
         monitors = monitors_method(strategy_id, tenant_id)
-        metadata: dict[str, StrategyMarketMetadata | None] = {
-            monitor.symbol.upper().replace("/", "-"): None for monitor in monitors
+        facts = self.market_service.get_monitor_metadata(
+            [monitor.symbol for monitor in monitors]
+        )
+        metadata = {
+            symbol: (
+                None
+                if fact is None
+                else StrategyMarketMetadata(
+                    listing_age_days=fact.listing_age_days,
+                    average_quote_volume_30d=fact.average_quote_volume_30d,
+                    price_quote=fact.price_quote,
+                    provider=fact.provider,
+                    listing_first_tradable_at=fact.listing_first_tradable_at,
+                    price_observed_at=fact.price_observed_at,
+                )
+            )
+            for symbol, fact in facts.items()
         }
         state = self.repository.get_account_state(strategy_id, tenant_id)
         positions: dict[str, float] = {}
@@ -218,7 +233,7 @@ class RuleStrategyService:
         if force and len(updated) != len(monitors):
             raise RuleStrategyStartAdmissionError(
                 "monitor_refresh_incomplete",
-                "策略监控标的未能全部完成实时准入复核，请稍后重试。",
+                "策略监控标的未能全部完成实时监控复核，请稍后重试。",
             )
 
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:

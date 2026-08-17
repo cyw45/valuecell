@@ -572,6 +572,10 @@ export function EquityCurveChart({
               <Text numberOfLines={1} style={[styles.detailValue, { color: selectedPnlColor }]}>{formatSignedQuote(selectedPnl, formatQuote)}</Text>
             </View>
             <View style={styles.detailMetric}>
+              <Text style={styles.detailLabel}>当日盈亏</Text>
+              <Text numberOfLines={1} style={[styles.detailValue, { color: selectedPnlColor }]}>{formatSignedQuote(selectedPoint.daily_pnl_quote, formatQuote)}</Text>
+            </View>
+            <View style={styles.detailMetric}>
               <Text style={styles.detailLabel}>服务端事件</Text>
               <Text numberOfLines={1} style={styles.detailValue}>{actionLabel(selectedPoint.action)}</Text>
             </View>

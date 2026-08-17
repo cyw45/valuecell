@@ -4,6 +4,8 @@ export type PostAuthTab = "工作台" | "我的";
 
 export type WorkbenchStackParamList = {
   StrategyOverview: { strategyId?: string } | undefined;
+  StrategySymbols: { strategyId: string };
+  ExecutionFacts: { strategyId: string; kind: "positions" | "balances" | "orders" };
   TradeLedger: { strategyId?: string } | undefined;
   FundingPnl: { strategyId?: string } | undefined;
 };

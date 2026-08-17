@@ -197,6 +197,53 @@ def test_repository_rejects_stale_monitor_worker_writeback():
     assert current.lease_owner == "worker-b"
 
 
+def test_repository_persists_fresh_monitor_provider_evidence():
+    session = _session()
+    repository = RuleStrategyRepository(db_session=session)
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.commit()
+    repository.create(_strategy("monitor-evidence", status="running"))
+    now = datetime(2026, 8, 6, tzinfo=timezone.utc)
+    session.add(
+        RuleStrategyMonitorSymbol(
+            strategy_id="monitor-evidence",
+            tenant_id="tenant-a",
+            symbol="BTC-USDT",
+            state="candidate",
+        )
+    )
+    session.commit()
+    claimed = repository.claim_monitor_lease(
+        "monitor-evidence", "tenant-a", "worker-a", now=now, force=True
+    )[0]
+
+    saved = repository.update_monitor_state(
+        claimed.id,
+        "tenant-a",
+        lease_owner="worker-a",
+        state="admitted",
+        reason_code="monitor_observation_enabled",
+        reason_detail="完整交易所事实已记录。",
+        evaluated_at=now,
+        next_check_at=now + timedelta(days=1),
+        protected_held=False,
+        consecutive_low_volume_days=0,
+        metadata_provider="okx",
+        listing_first_tradable_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        listing_age_days=2_410,
+        average_quote_volume_30d=12_500_000.0,
+        price_quote=98_000.0,
+        price_observed_at=now,
+    )
+
+    assert saved is not None
+    assert saved.metadata_provider == "okx"
+    assert saved.listing_age_days == 2_410
+    assert saved.average_quote_volume_30d == 12_500_000.0
+    assert saved.price_quote == 98_000.0
+    assert saved.lease_owner is None
+
+
 def test_repository_delete_cascades_journals_for_stopped_strategy():
     session = _session()
     repository = RuleStrategyRepository(db_session=session)

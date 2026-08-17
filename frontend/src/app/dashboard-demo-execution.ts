@@ -123,11 +123,15 @@ export function buildDemoEquityCurve(curve?: DemoEquityCurve | null) {
   return curve.points.flatMap((point) => {
     const ts = point.ts ?? point.timestamp;
     const pnl = point.cumulative_pnl ?? point.total_pnl ?? point.pnl ?? point.value;
+    const equity = point.equity_quote ?? point.equity;
+    const daily = point.daily_pnl_quote;
     if (!ts || !Number.isFinite(Date.parse(ts)) || pnl == null || !Number.isFinite(Number(pnl))) return [];
     return [{
       ts,
       cumulative_pnl: Number(pnl),
-      action: "mark_to_market" as const,
+      daily_pnl_quote: daily == null || !Number.isFinite(Number(daily)) ? undefined : Number(daily),
+      equity_quote: equity == null || !Number.isFinite(Number(equity)) ? undefined : Number(equity),
+      action: point.action ?? "wallet_snapshot",
     }];
   });
 }

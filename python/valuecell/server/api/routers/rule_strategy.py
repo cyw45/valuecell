@@ -47,6 +47,15 @@ from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     DemoExecutionReadModelError,
     get_demo_execution_read_model,
 )
+from valuecell.server.services.rule_strategy_pnl_service import (
+    build_daily_pnl_points,
+    observation_from_journal,
+)
+from valuecell.server.services.rule_strategy_demo_snapshot_service import (
+    build_demo_daily_curve,
+    list_demo_account_snapshots,
+    record_demo_account_snapshot,
+)
 from valuecell.server.services.sandbox_exchange_trading_service import (
     SandboxExchangeTradingService,
     SandboxTradingError,
@@ -705,50 +714,29 @@ def create_rule_strategy_router(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         initial_capital = float(strategy["config"]["initial_capital_quote"])
-        created_at = strategy["created_at"]
-        created_at_str = (
-            created_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-            if created_at is not None
-            else ""
+        export_reader = getattr(
+            rule_service.repository, "get_evaluations_for_export", None
         )
-        points: list[dict[str, Any]] = [
-            {
-                "ts": created_at_str,
-                "cumulative_pnl": 0.0,
-                "equity_quote": initial_capital,
-                "action": "initial",
-            }
-        ]
-        journals = list(
-            reversed(
+        journals = (
+            export_reader(strategy_id, principal.tenant_id)
+            if export_reader is not None
+            else reversed(
                 rule_service.repository.get_evaluations(
                     strategy_id, principal.tenant_id, limit=500
                 )
             )
         )
-        for journal in journals:
-            result: dict[str, Any] = journal.result or {}
-            raw_account = result.get("account")
-            if (
-                not isinstance(raw_account, dict)
-                or raw_account.get("source") == "okx_demo"
-                or "initial_capital_quote" not in raw_account
-                or "equity_quote" not in raw_account
-            ):
-                continue
-            initial_capital = float(raw_account["initial_capital_quote"])
-            equity = float(raw_account["equity_quote"])
-            ts_val = journal.created_at
-            ts_str = ts_val.strftime("%Y-%m-%dT%H:%M:%SZ") if ts_val is not None else ""
-            points.append(
-                {
-                    "ts": ts_str,
-                    "cumulative_pnl": equity - initial_capital,
-                    "equity_quote": equity,
-                    "action": result.get("action", "no_op"),
-                }
-            )
-        return SuccessResponse.create(data=points, msg="PnL curve retrieved")
+        observations = [
+            observation
+            for journal in journals
+            if (observation := observation_from_journal(journal)) is not None
+        ]
+        points = build_daily_pnl_points(
+            initial_capital,
+            strategy["created_at"],
+            observations,
+        )
+        return SuccessResponse.create(data=points, msg="Daily PnL curve retrieved")
 
     @router.get(
         "/{strategy_id}/demo-execution", response_model=SuccessResponse[dict[str, Any]]
@@ -772,6 +760,29 @@ def create_rule_strategy_router(
                 principal.tenant_id,
                 SandboxExchangeTradingService(db),
             )
+            connection_id = data.get("connection_id")
+            if not isinstance(connection_id, str) or not connection_id:
+                raise DemoExecutionReadModelError("OKX Demo connection is unavailable")
+            record_demo_account_snapshot(
+                db,
+                tenant_id=principal.tenant_id,
+                strategy_id=strategy_id,
+                credential_id=connection_id,
+                account=data["account"]["data"],
+                positions=data["positions"]["data"],
+            )
+            snapshots = list_demo_account_snapshots(
+                db,
+                tenant_id=principal.tenant_id,
+                strategy_id=strategy_id,
+            )
+            curve_points = build_demo_daily_curve(snapshots)
+            data["equity_curve"] = {
+                "status": "available" if curve_points else "unavailable",
+                "scope": "exchange_account_wallet_snapshots",
+                "reason_code": None if curve_points else "no_wallet_snapshots",
+                "points": curve_points,
+            }
             orders = list(data.get("orders") or [])
             total_items = len(orders)
             total_pages = max(1, (total_items + page_size - 1) // page_size)

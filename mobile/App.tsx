@@ -22,6 +22,7 @@ import { useTheme, ThemeProvider } from "./src/theme-context";
 import AuthScreen from "./src/screens/AuthScreen";
 import AccountScreen from "./src/screens/AccountScreen";
 import FundingPnlScreen from "./src/screens/FundingPnlScreen";
+import ExecutionFactsScreen from "./src/screens/ExecutionFactsScreen";
 import LiveExecutionScreen from "./src/screens/LiveExecutionScreen";
 import MarketScreen from "./src/screens/MarketScreen";
 import PlatformAdminScreen from "./src/screens/PlatformAdminScreen";
@@ -35,6 +36,7 @@ import StrategyDetailScreen from "./src/screens/StrategyDetailScreen";
 import StrategyEditorScreen from "./src/screens/StrategyEditorScreen";
 import StrategyListScreen from "./src/screens/StrategyListScreen";
 import StrategyOverviewScreen from "./src/screens/StrategyOverviewScreen";
+import StrategySymbolsScreen from "./src/screens/StrategySymbolsScreen";
 import TradeLedgerScreen from "./src/screens/TradeLedgerScreen";
 import WorkspaceAuditScreen from "./src/screens/WorkspaceAuditScreen";
 import WorkspaceBillingScreen from "./src/screens/WorkspaceBillingScreen";
@@ -70,6 +72,8 @@ function WorkbenchNavigator() {
   return (
     <WorkbenchStack.Navigator screenOptions={screenOptions}>
       <WorkbenchStack.Screen component={StrategyOverviewScreen} name="StrategyOverview" />
+      <WorkbenchStack.Screen component={StrategySymbolsScreen} name="StrategySymbols" options={{ headerShown: true, title: "观察标的" }} />
+      <WorkbenchStack.Screen component={ExecutionFactsScreen} name="ExecutionFacts" options={{ headerShown: true, title: "执行详情" }} />
       <WorkbenchStack.Screen component={TradeLedgerScreen} name="TradeLedger" options={{ headerShown: true, title: t("navigation.tradeLedger") }} />
       <WorkbenchStack.Screen component={FundingPnlScreen} name="FundingPnl" options={{ headerShown: true, title: t("navigation.fundingPnl") }} />
     </WorkbenchStack.Navigator>

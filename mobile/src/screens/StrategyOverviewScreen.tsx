@@ -9,15 +9,16 @@ import {
   Text,
   View,
 } from "react-native";
-import { ChevronRight, Download, LineChart, Pause, Pencil, Play, RefreshCw, Trash2 } from "lucide-react-native";
+import { Boxes, ChevronRight, Download, Landmark, LineChart, ListFilter, Pause, Pencil, Play, ReceiptText, RefreshCw, Trash2, Wallet } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { api } from "../api";
 import { accessGate, canMutate } from "../access";
 import { StrategyExportPanel } from "../components/StrategyExportPanel";
 import {
-  ConfirmSheet,
   BottomSheetSelector,
+  ConfirmSheet,
   EquityCurveChart,
+  ListRow,
   MetricCard,
   PrimaryButton,
   SectionCard,
@@ -25,6 +26,7 @@ import {
   StrategyEvaluationPanel,
 } from "../components";
 import type { WorkbenchStackParamList } from "../navigation/types";
+import type { RuleStrategyDemoExecution, RuleStrategyPnlPoint } from "../types";
 import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
 import {
@@ -88,6 +90,28 @@ function formatNumericQuote(value: number | string | null | undefined): string {
   return typeof number === "number" ? formatQuote(number) : "—";
 }
 
+function demoWalletPoints(
+  snapshot: RuleStrategyDemoExecution | undefined,
+): RuleStrategyPnlPoint[] {
+  return (snapshot?.equity_curve?.points ?? []).flatMap((point) => {
+    const toNumber = (value: number | string | null | undefined) =>
+      typeof value === "string" ? Number(value) : value;
+    const equity = toNumber(point.equity_quote ?? point.equity);
+    const pnl = toNumber(point.cumulative_pnl ?? point.total_pnl ?? point.pnl);
+    const dailyPnl = toNumber(point.daily_pnl_quote);
+    const timestamp = point.ts ?? point.timestamp;
+    return timestamp && typeof equity === "number" && Number.isFinite(equity) && typeof pnl === "number" && Number.isFinite(pnl)
+      ? [{
+          ts: timestamp,
+          equity_quote: equity,
+          cumulative_pnl: pnl,
+          daily_pnl_quote: typeof dailyPnl === "number" && Number.isFinite(dailyPnl) ? dailyPnl : undefined,
+          action: point.action ?? "wallet_snapshot",
+        }]
+      : [];
+  });
+}
+
 export default function StrategyOverviewScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<StrategyOverviewRoute>();
@@ -95,8 +119,6 @@ export default function StrategyOverviewScreen() {
   const [selectedId, setSelectedId] = useState("");
   const [selectorVisible, setSelectorVisible] = useState(false);
   const queryClient = useQueryClient();
-  const [demoOrdersPage, setDemoOrdersPage] = useState(1);
-  const [equityRange, setEquityRange] = useState<"1d" | "5d" | "1w" | "1m" | "1y" | "all">("1m");
   const [exportStrategyId, setExportStrategyId] = useState<string | null>(null);
   const [pendingOperation, setPendingOperation] = useState<{
     action: "start" | "stop" | "archive";
@@ -170,21 +192,9 @@ export default function StrategyOverviewScreen() {
     enabled: Boolean(activeId),
     refetchInterval: 15_000,
   });
-  const trades = useQuery({
-    refetchInterval: 15_000,
-    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "trades", 10],
-    queryFn: () => api.strategyLog(activeId, "trades", 10),
-    enabled: Boolean(activeId && !isDemo),
-  });
-  const funding = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "funding", 10],
-    refetchInterval: 15_000,
-    queryFn: () => api.strategyLog(activeId, "funding", 10),
-    enabled: Boolean(activeId && !isDemo),
-  });
   const demo = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "demo-execution", demoOrdersPage],
-    queryFn: () => api.strategyDemoExecution(activeId, demoOrdersPage, 10),
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "demo-execution", "summary"],
+    queryFn: () => api.strategyDemoExecution(activeId, 1, 1),
     enabled: Boolean(activeId && isDemo),
     retry: false,
     refetchInterval: 15_000,
@@ -212,8 +222,6 @@ export default function StrategyOverviewScreen() {
       account.refetch(),
       pnl.refetch(),
       evaluations.refetch(),
-      trades.refetch(),
-      funding.refetch(),
       monitorState.refetch(),
       riskState.refetch(),
     ]);
@@ -230,24 +238,6 @@ export default function StrategyOverviewScreen() {
         (item) => item.strategy_id === pendingOperation.strategyId,
       )
     : undefined;
-  const filteredPnlPoints = useMemo(() => {
-    const points = pnl.data ?? [];
-    if (equityRange === "all" || points.length < 2) return points;
-    const durations = {
-      "1d": 24 * 60 * 60 * 1_000,
-      "5d": 5 * 24 * 60 * 60 * 1_000,
-      "1w": 7 * 24 * 60 * 60 * 1_000,
-      "1m": 31 * 24 * 60 * 60 * 1_000,
-      "1y": 365 * 24 * 60 * 60 * 1_000,
-    } as const;
-    const latestTs = Date.parse(points[points.length - 1]?.ts ?? "");
-    if (!Number.isFinite(latestTs)) return points;
-    const initial = points.find((point) => point.action === "initial");
-    const ranged = points.filter(
-      (point) => Date.parse(point.ts) >= latestTs - durations[equityRange],
-    );
-    return initial && ranged[0] !== initial ? [initial, ...ranged] : ranged;
-  }, [equityRange, pnl.data]);
   const confirmOperation = async () => {
     if (!pendingOperation || !operationStrategy) return;
     try {
@@ -274,6 +264,7 @@ export default function StrategyOverviewScreen() {
 
   const paperAccount = account.data;
   const demoData = demo.data;
+  const demoCurvePoints = demoWalletPoints(demoData);
   const paperPositions = Object.entries(paperAccount?.positions ?? {});
   const demoPositions = demoData?.positions.data.positions ?? [];
   const demoBalances = demoData?.account.data.balances ?? [];
@@ -292,6 +283,8 @@ export default function StrategyOverviewScreen() {
   const runningCount = (strategies.data ?? []).filter(
     (item) => item.status === "running" && !item.archived_at,
   ).length;
+  const previewSymbols = strategy.config.symbols.slice(0, 3);
+  const remainingSymbolCount = Math.max(0, strategy.config.symbols.length - previewSymbols.length);
 
   return (
     <ScrollView
@@ -302,7 +295,6 @@ export default function StrategyOverviewScreen() {
           refreshing={
             strategies.isRefetching ||
             account.isRefetching ||
-            pnl.isRefetching ||
             evaluations.isRefetching ||
             demo.isRefetching
           }
@@ -347,139 +339,62 @@ export default function StrategyOverviewScreen() {
       </View>
 
 
-      <SectionCard description="点按交易对可直接打开该策略对应的行情视图。" title="观察标的">
+      <SectionCard actionLabel={remainingSymbolCount > 0 ? `全部 ${strategy.config.symbols.length} 个` : undefined} description="默认只显示前三个；完整观察池在独立页面中检索和查看。" onAction={remainingSymbolCount > 0 ? () => navigation.navigate("StrategySymbols", { strategyId: activeId }) : undefined} title="观察标的">
         <View style={styles.symbols}>
-          {strategy.config.symbols.map((symbol) => (
-            <Pressable
-              accessibilityLabel={`查看 ${symbol} 行情`}
-              accessibilityRole="button"
-              key={symbol}
-              onPress={() => navigation.navigate("行情", { screen: "Market", params: { strategyId: activeId, symbol } })}
-              style={({ pressed }) => [styles.symbol, pressed && styles.pressed]}
-            >
+          {previewSymbols.map((symbol) => (
+            <Pressable accessibilityLabel={`查看 ${symbol} 行情`} accessibilityRole="button" key={symbol} onPress={() => navigation.navigate("行情", { screen: "Market", params: { strategyId: activeId, symbol } })} style={({ pressed }) => [styles.symbol, pressed && styles.pressed]}>
               <Text style={styles.symbolText}>{symbol}</Text>
               <ChevronRight color={palette.primary} size={16} />
             </Pressable>
           ))}
         </View>
+        {remainingSymbolCount > 0 ? <Pressable accessibilityLabel="查看全部观察标的" accessibilityRole="button" onPress={() => navigation.navigate("StrategySymbols", { strategyId: activeId })} style={({ pressed }) => [styles.moreSymbols, pressed && styles.pressed]}><ListFilter color={palette.primary} size={17} /><Text style={styles.moreSymbolsText}>还有 {remainingSymbolCount} 个标的，查看全部</Text><ChevronRight color={palette.primary} size={17} /></Pressable> : null}
       </SectionCard>
 
       {isDemo ? (
         <>
           {demo.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取 OKX Demo 交易所执行数据。</Text></View> : null}
-          {demoData ? (
-            <>
-              <SectionCard description={`来源：${demoSourceLabel(demoData.source)} · 最近核验 ${formatTimestamp(demoData.checked_at)}`} title="OKX Demo 执行账户">
-                <View style={styles.dataRows}>
-                  <Text style={styles.row}>交易所余额条目：{demoBalances.length} 项</Text>
-                  <Text style={styles.row}>交易所持仓：{demoPositions.length} 项</Text>
-                  <Text style={styles.row}>策略归属订单：{demoData.pagination.total_items} 笔</Text>
-                  <Text style={styles.row}>已成交 {demoData.trade_summary?.filled_order_count ?? 0} · 部分成交 {demoData.trade_summary?.partially_filled_order_count ?? 0} · 失败 {demoData.trade_summary?.failed_order_count ?? 0}</Text>
-                </View>
-              </SectionCard>
-              <SectionCard title="OKX Demo 已实现交易表现">
-                {demoData.pnl.status === "unavailable" ? <Text style={styles.muted}>{demoPnlReason(demoData.pnl.reason)}</Text> : <View style={styles.accountGrid}>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>总 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.total_pnl ?? demoData.pnl.total ?? demoData.pnl.value)}</Text></View>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>已实现 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.realized_pnl ?? demoData.pnl.realized)}</Text></View>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>未实现 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.unrealized_pnl ?? demoData.pnl.unrealized)}</Text></View>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>收益率</Text><Text style={styles.accountValue}>{demoData.pnl.return_pct == null ? "—" : `${demoData.pnl.return_pct.toFixed(2)}%`}</Text></View>
-                </View>}
-                <Text style={styles.muted}>{demoData.pnl.fees_included === true ? "已含交易所费用。" : demoData.pnl.reason ?? "仅展示交易所返回且服务器可核验的 PnL。"}</Text>
-              </SectionCard>
-              <SectionCard title="交易所仓位">
-                {demoPositions.length ? demoPositions.map((position) => (
-                  <View key={position.symbol} style={styles.positionRow}>
-                    <View style={styles.rowCopy}><Text style={styles.positionSymbol}>{position.symbol}</Text><Text style={styles.muted}>数量 {position.quantity} · 可用 {position.available_quantity}</Text></View>
-                    <Text style={styles.positionValue}>{formatQuote(position.notional_usdt)}</Text>
-                  </View>
-                )) : <Text style={styles.muted}>交易所当前没有返回持仓。</Text>}
-              </SectionCard>
-              <SectionCard title="交易所余额">
-                {demoBalances.length ? demoBalances.slice(0, 6).map((balance) => (
-                  <View key={balance.currency} style={styles.positionRow}>
-                    <View style={styles.rowCopy}><Text style={styles.positionSymbol}>{balance.currency}</Text><Text style={styles.muted}>可用 {balance.free} · 总计 {balance.total}</Text></View>
-                    <Text style={styles.positionValue}>{formatQuote(balance.usdt_value)}</Text>
-                  </View>
-                )) : <Text style={styles.muted}>交易所未返回余额条目。</Text>}
-              </SectionCard>
-              <SectionCard title={`策略归属订单 · 第 ${demoData.pagination.page}/${demoData.pagination.total_pages || 1} 页`}>
-                {demoOrders.length ? demoOrders.map((order) => (
-                  <View key={order.id} style={styles.orderRow}>
-                    <View style={styles.rowCopy}><Text style={styles.positionSymbol}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · 请求 {formatNumericQuote(order.requested_quote)} · {formatTimestamp(order.updated_at)}</Text>{order.error_code ? <Text style={styles.operationError}>{order.error_code}</Text> : null}</View>
-                    <Text style={styles.orderStatus}>{orderStatusLabel(order.status)}</Text>
-                  </View>
-                )) : <Text style={styles.muted}>当前没有归因到该策略的交易所订单。</Text>}
-                {demoData.pagination.total_pages > 1 ? <View style={styles.pagination}><Pressable accessibilityRole="button" disabled={demoOrdersPage <= 1} onPress={() => setDemoOrdersPage((page) => Math.max(1, page - 1))} style={[styles.pageButton, demoOrdersPage <= 1 && styles.disabled]}><Text style={styles.pageButtonText}>上一页</Text></Pressable><Pressable accessibilityRole="button" disabled={demoOrdersPage >= demoData.pagination.total_pages} onPress={() => setDemoOrdersPage((page) => Math.min(demoData.pagination.total_pages, page + 1))} style={[styles.pageButton, demoOrdersPage >= demoData.pagination.total_pages && styles.disabled]}><Text style={styles.pageButtonText}>下一页</Text></Pressable></View> : null}
-              </SectionCard>
-            </>
-          ) : null}
-          {evaluations.isError ? <StatePanel actionLabel="重试" description={(evaluations.error as Error).message} onAction={() => void evaluations.refetch()} title="最近评估暂不可用" tone="error" /> : null}
-          <SectionCard description={latestEvaluation ? `最近评估：${formatTimestamp(latestEvaluation.evaluated_at)}` : "条件记录来自服务端评估，不会用交易所账户数据推断。"} title="最新策略评估">
-            {latestEvaluation ? <StrategyEvaluationPanel evaluation={latestEvaluation} /> : evaluations.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取最近评估。</Text></View> : <Text style={styles.muted}>服务端尚无评估记录，无法假定任何条件或执行结果。</Text>}
+          {demo.isError ? <StatePanel actionLabel="重试" description={(demo.error as Error).message} onAction={() => void demo.refetch()} title="Demo 执行数据暂不可用" tone="error" /> : null}
+          <SectionCard description={demoData ? `来源：${demoSourceLabel(demoData.source)} · 最近核验 ${formatTimestamp(demoData.checked_at)}` : "仅在独立页面展示交易所返回的明细。"} title="OKX Demo 执行概览">
+            <View style={styles.accountGrid}>
+              <View style={styles.accountMetric}><Text style={styles.accountLabel}>总 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData?.pnl.total_pnl ?? demoData?.pnl.total ?? demoData?.pnl.value)}</Text></View>
+              <View style={styles.accountMetric}><Text style={styles.accountLabel}>已成交订单</Text><Text style={styles.accountValue}>{demoData?.trade_summary?.filled_order_count ?? "—"}</Text></View>
+            </View>
+            <View style={styles.detailLinks}>
+              <ListRow accessibilityLabel="查看交易所仓位" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "positions" })} subtitle={`${demoPositions.length} 项连接级仓位 · 不代表策略分配`} title="交易所仓位" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
+              <ListRow accessibilityLabel="查看交易所余额" leading={<Landmark color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "balances" })} subtitle={`${demoBalances.length} 项连接级余额`} title="交易所余额" />
+              <ListRow accessibilityLabel="查看策略归属订单" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "orders" })} subtitle={`共 ${demoData?.pagination.total_items ?? 0} 笔 · 已成交 ${demoData?.trade_summary?.filled_order_count ?? 0} 笔`} title="策略归属订单" />
+              <ListRow accessibilityLabel="查看 Demo 资金费与 PnL" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看交易所 PnL 与权益曲线" title="资金费与 PnL" />
+            </View>
+          </SectionCard>
+          <SectionCard actionLabel="查看详情" description="账户钱包每日快照来自 OKX Demo 真实余额与估值；从本次部署开始累计历史。" onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })} title="OKX Demo 每日收益曲线">
+            {demo.isError ? <Text style={styles.muted}>{(demo.error as Error).message}</Text> : demo.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取交易所钱包日结事实。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} height={176} points={demoCurvePoints} />}
           </SectionCard>
         </>
       ) : (
         <>
           {account.isError ? <StatePanel actionLabel="重试" description={(account.error as Error).message} onAction={() => void account.refetch()} title="纸面账户暂不可用" tone="error" /> : null}
-          <SectionCard description="纸面账户以服务端账本为准，不会混入交易所 Demo 数据。" title="账户与仓位">
-            {paperAccount ? (
-              <>
-                <View style={styles.accountGrid}>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>当前权益</Text><Text style={styles.accountValue}>{formatQuote(paperAccount.equity_quote)}</Text></View>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>可用资金</Text><Text style={styles.accountValue}>{formatQuote(paperAccount.quote_balance)}</Text></View>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>已实现 PnL</Text><Text style={styles.accountValue}>{formatQuote(paperAccount.realized_pnl_quote)}</Text></View>
-                  <View style={styles.accountMetric}><Text style={styles.accountLabel}>未实现 PnL</Text><Text style={styles.accountValue}>{formatQuote(paperAccount.unrealized_pnl_quote)}</Text></View>
-                </View>
-                <View style={styles.rule} />
-                <Text style={styles.row}>持仓数 {paperPositions.length} / {strategy.config.risk.max_positions} · 单笔上限 {formatQuote(strategy.config.risk.order_quote_amount)} · 杠杆 {strategy.config.risk.leverage}×</Text>
-                {paperPositions.length ? paperPositions.map(([symbol, position]) => (
-                  <View key={symbol} style={styles.positionRow}>
-                    <View style={styles.rowCopy}><Text style={styles.positionSymbol}>{symbol}</Text><Text style={styles.muted}>数量 {position.quantity} · 标记价 {position.mark_price}</Text></View>
-                    <Text style={styles.positionValue}>{formatQuote(position.quantity * position.mark_price)}</Text>
-                  </View>
-                )) : <Text style={styles.muted}>纸面账本当前没有持仓。</Text>}
-              </>
-            ) : <Text style={styles.muted}>正在等待服务端纸面账户数据。</Text>}
+          <SectionCard description="详细仓位、成交和权益曲线均进入独立页面，工作台只保留当前摘要。" title="纸面执行概览">
+            <View style={styles.accountGrid}>
+              <View style={styles.accountMetric}><Text style={styles.accountLabel}>当前权益</Text><Text style={styles.accountValue}>{formatQuote(paperAccount?.equity_quote)}</Text></View>
+              <View style={styles.accountMetric}><Text style={styles.accountLabel}>可用资金</Text><Text style={styles.accountValue}>{formatQuote(paperAccount?.quote_balance)}</Text></View>
+            </View>
+            <View style={styles.detailLinks}>
+              <ListRow accessibilityLabel="查看纸面仓位" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "positions" })} subtitle={`${paperPositions.length} 项持仓 · 策略上限 ${strategy.config.risk.max_positions}`} title="纸面账户仓位" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
+              <ListRow accessibilityLabel="查看全部纸面成交" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId })} subtitle="查看服务端归因成交记录" title="成交账本" />
+              <ListRow accessibilityLabel="查看资金费与权益曲线" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看权益曲线与资金费影响" title="资金费与 PnL" />
+            </View>
           </SectionCard>
-
-          {evaluations.isError ? <StatePanel actionLabel="重试" description={(evaluations.error as Error).message} onAction={() => void evaluations.refetch()} title="最近评估暂不可用" tone="error" /> : null}
-          <SectionCard description={latestEvaluation ? `最近评估：${formatTimestamp(latestEvaluation.evaluated_at)}` : "评估完成后，这里会按服务端返回顺序展示全部条件状态。"} title="最新策略评估">
-            {latestEvaluation ? <StrategyEvaluationPanel evaluation={latestEvaluation} /> : evaluations.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取最近评估。</Text></View> : <Text style={styles.muted}>服务端尚无评估记录，无法假定任何条件或执行结果。</Text>}
-          </SectionCard>
-
-          <SectionCard
-            actionLabel="查看 PnL"
-            description="权益、初始本金与累计 PnL 均来自服务端账本；可拖动和双指缩放时间轴。"
-            onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })}
-            title="策略权益曲线"
-          >
-            <ScrollView contentContainerStyle={styles.rangeTabs} horizontal showsHorizontalScrollIndicator={false}>
-              {(["1d", "5d", "1w", "1m", "1y", "all"] as const).map((value) => (
-                <Pressable
-                  accessibilityLabel={`查看${({ "1d": "日", "5d": "5日", "1w": "周", "1m": "月", "1y": "年", all: "全部" } as const)[value]}权益曲线`}
-                  accessibilityRole="button"
-                  key={value}
-                  onPress={() => setEquityRange(value)}
-                  style={({ pressed }) => [styles.rangeTab, equityRange === value && styles.rangeTabActive, pressed && styles.pressed]}
-                >
-                  <Text style={[styles.rangeTabText, equityRange === value && styles.rangeTabTextActive]}>
-                    {({ "1d": "日", "5d": "5日", "1w": "周", "1m": "月", "1y": "年", all: "全部" } as const)[value]}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnl.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取服务端权益曲线。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} points={filteredPnlPoints} />}
-          </SectionCard>
-
-          <SectionCard actionLabel="全部成交" onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId })} title="最近成交">
-            {trades.isError ? <Text style={styles.muted}>{(trades.error as Error).message}</Text> : trades.data?.entries.length ? trades.data.entries.slice(0, 3).map((trade) => <View key={trade.evaluation_id} style={styles.orderRow}><View style={styles.rowCopy}><Text style={styles.positionSymbol}>{strategyActionLabel(trade.action)} · {trade.symbol}</Text><Text style={styles.muted}>{evaluationReason(trade.reason_code, trade.reason)}</Text></View><Text style={styles.positionValue}>{formatQuote(trade.quote_amount)}</Text></View>) : <Text style={styles.muted}>服务端尚无归因成交。</Text>}
-          </SectionCard>
-
-          <SectionCard actionLabel="资金费与 PnL" onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })} title="资金费影响">
-            {funding.isError ? <Text style={styles.muted}>{(funding.error as Error).message}</Text> : funding.data?.entries.length ? funding.data.entries.slice(0, 3).map((entry) => <View key={entry.evaluation_id} style={styles.orderRow}><View style={styles.rowCopy}><Text style={styles.positionSymbol}>{fundingDirectionLabel(entry.direction)}</Text><Text style={styles.muted}>名义金额 {formatQuote(entry.current_notional_quote)}</Text></View><Text style={styles.positionValue}>{formatQuote(entry.estimated_payment_quote)}</Text></View>) : <Text style={styles.muted}>服务端尚未记录资金费影响。</Text>}
+          <SectionCard actionLabel="查看详情" description="按 UTC 日期展示服务端持久化的日结权益与当日盈亏；无账户快照不会补造曲线点。" onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })} title="每日收益曲线">
+            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnl.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取每日收益事实。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} height={176} points={pnl.data ?? []} />}
           </SectionCard>
         </>
       )}
+
+      {evaluations.isError ? <StatePanel actionLabel="重试" description={(evaluations.error as Error).message} onAction={() => void evaluations.refetch()} title="最近评估暂不可用" tone="error" /> : null}
+      <SectionCard actionLabel="策略详情" description={latestEvaluation ? `最近评估：${formatTimestamp(latestEvaluation.evaluated_at)} · ${evaluationReason(latestEvaluation.reason_code, latestEvaluation.reason)}` : "服务端尚无已保存的策略评估。"} onAction={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })} title="策略决策">
+        <Text style={styles.decisionSummary}>{latestEvaluation ? `${strategyActionLabel(latestEvaluation.action)} · ${conditionStateSummary(latestEvaluation.conditions)}` : "查看策略详情、条件诊断与执行漏斗。"}</Text>
+      </SectionCard>
 
       <SectionCard description="服务端持久化的候选池与账户级阻断原因。" title="监控池与风险">
         <View style={styles.stateRows}>
@@ -576,6 +491,11 @@ const styles = StyleSheet.create({
   symbols: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   symbol: { alignItems: "center", backgroundColor: palette.primarySoft, borderColor: palette.primary, borderRadius: radius.pill, borderWidth: 1, flexDirection: "row", gap: spacing.xxs, minHeight: 44, paddingHorizontal: spacing.sm },
   symbolText: { color: palette.primary, fontSize: 13, fontWeight: "900" },
+  moreSymbols: { alignItems: "center", backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, minHeight: 44, paddingHorizontal: spacing.sm },
+  moreSymbolsText: { color: palette.primary, flex: 1, fontSize: 12, fontWeight: "800" },
+  detailLinks: { gap: spacing.xs },
+  linkValue: { color: palette.text, fontSize: 12, fontWeight: "900" },
+  decisionSummary: { color: palette.text, fontSize: 13, lineHeight: 20 },
   loading: { alignItems: "center", flexDirection: "row", gap: spacing.sm, minHeight: 48 },
   loadingText: { color: palette.textMuted, flex: 1, fontSize: 14, lineHeight: 20 },
   dataRows: { gap: spacing.xs },

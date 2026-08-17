@@ -1060,7 +1060,7 @@ class CryptoMarketService:
             facts = self._fetch_provider_monitor_metadata(symbol, observed_at, provider)
             if facts is not None:
                 return facts
-        return None
+        return self._fetch_okx_monitor_metadata(symbol, observed_at)
 
     def _fetch_provider_monitor_metadata(
         self, symbol: str, observed_at: datetime, provider: str
@@ -1140,6 +1140,100 @@ class CryptoMarketService:
                 exc,
             )
             return None
+
+    def _fetch_okx_monitor_metadata(
+        self, symbol: str, observed_at: datetime
+    ) -> MonitorMarketFacts | None:
+        """Read exact OKX listing and quote-volume facts as a provider fallback."""
+        today = observed_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            instrument = self._fetch_okx_monitor_json(
+                "/api/v5/public/instruments",
+                {"instType": "SPOT", "instId": symbol},
+            )
+            candles = self._fetch_okx_monitor_json(
+                "/api/v5/market/history-candles",
+                {"instId": symbol, "bar": "1Dutc", "limit": 100},
+            )
+            ticker = self._fetch_okx_monitor_json(
+                "/api/v5/market/ticker", {"instId": symbol}
+            )
+            instrument_rows = self._okx_data(instrument)
+            candle_rows = self._okx_data(candles)
+            ticker_rows = self._okx_data(ticker)
+            if len(instrument_rows) != 1 or len(ticker_rows) != 1:
+                raise ValueError("OKX did not return one instrument and ticker")
+            instrument_row = instrument_rows[0]
+            ticker_row = ticker_rows[0]
+            if not isinstance(instrument_row, dict) or not isinstance(ticker_row, dict):
+                raise ValueError("OKX instrument or ticker response was malformed")
+            listing_timestamp = int(instrument_row["listTime"])
+            complete_rows = sorted(
+                [
+                    row
+                    for row in candle_rows
+                    if isinstance(row, list)
+                    and len(row) >= 9
+                    and int(row[0]) < int(today.timestamp() * 1_000)
+                    and row[8] == "1"
+                ],
+                key=lambda row: int(row[0]),
+            )[-30:]
+            if len(complete_rows) != 30:
+                raise ValueError("OKX returned fewer than 30 completed daily candles")
+            timestamps = [int(row[0]) for row in complete_rows]
+            if any(
+                after - before != INTERVAL_SECONDS["1d"] * 1_000
+                for before, after in zip(timestamps, timestamps[1:])
+            ):
+                raise ValueError("OKX completed daily candle history is not contiguous")
+            quote_volumes = [self._finite(row[7]) for row in complete_rows]
+            price_quote = self._finite(ticker_row.get("last"))
+            if (
+                price_quote is None
+                or price_quote <= 0
+                or any(volume is None or volume < 0 for volume in quote_volumes)
+            ):
+                raise ValueError("OKX returned non-finite price or quote volume")
+            listing_first_tradable_at = datetime.fromtimestamp(
+                listing_timestamp / 1_000, tz=timezone.utc
+            )
+            listing_age_days = (today - listing_first_tradable_at).days
+            if listing_age_days < 0:
+                raise ValueError("OKX listing timestamp is in the future")
+            return MonitorMarketFacts(
+                symbol=symbol,
+                provider="okx",
+                observed_at=observed_at,
+                listing_first_tradable_at=listing_first_tradable_at,
+                listing_age_days=listing_age_days,
+                average_quote_volume_30d=sum(quote_volumes) / len(quote_volumes),
+                price_quote=price_quote,
+                price_observed_at=observed_at,
+            )
+        except (OSError, TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Monitor metadata unavailable symbol={} provider=okx: {}", symbol, exc
+            )
+            return None
+
+    @staticmethod
+    def _okx_data(payload: object) -> list[dict[str, object] | list[object]]:
+        if not isinstance(payload, dict) or payload.get("code") != "0":
+            raise ValueError("OKX returned an unsuccessful metadata response")
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ValueError("OKX metadata response was malformed")
+        return data
+
+    @staticmethod
+    def _fetch_okx_monitor_json(path: str, query: dict[str, str | int]) -> object:
+        request = Request(
+            f"https://www.okx.com{path}?{urlencode(query)}",
+            headers={"User-Agent": "valuecell-market-data/1.0", "Accept": "application/json"},
+        )
+        with urlopen(request, timeout=MONITOR_FETCH_TIMEOUT_S) as response:
+            return json.loads(response.read().decode("utf-8"))
 
     @staticmethod
     def _fetch_monitor_provider_json(

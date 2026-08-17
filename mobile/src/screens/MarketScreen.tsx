@@ -33,6 +33,7 @@ type MarketScreenProps = {
   route?: {
     params?: {
       strategyId?: string;
+      symbol?: string;
     };
   };
 };
@@ -84,12 +85,17 @@ const INTERVAL_MS: Record<MarketInterval, number> = {
   "4h": 14_400_000,
   "1d": 86_400_000,
 };
-const INDICATOR_OPTIONS: ReadonlyArray<{ value: IndicatorPanel; label: string }> = [
+type LowerIndicatorPanel = IndicatorPanel;
+const LOWER_INDICATOR_OPTIONS: ReadonlyArray<{ value: LowerIndicatorPanel; label: string }> = [
   { value: "rsi", label: "RSI" },
   { value: "bollinger", label: "布林带" },
   { value: "momentum", label: "动量" },
   { value: "macd", label: "MACD" },
 ];
+
+function toggleSelection<T extends string>(values: readonly T[], value: T): T[] {
+  return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
+}
 
 function parseUtcDay(value: string, endOfDay: boolean) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
@@ -153,6 +159,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
     : false;
   const tenantId = session?.tenantId ?? "public";
   const requestedStrategyId = route?.params?.strategyId;
+  const requestedSymbol = route?.params?.symbol?.trim().toUpperCase().replace("/", "-");
   const [scope, setScope] = useState<SymbolScope>("strategy");
   const [symbol, setSymbol] = useState("");
   const [symbolFilter, setSymbolFilter] = useState("");
@@ -164,7 +171,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
   const [draftToDate, setDraftToDate] = useState("");
   const [customFromDate, setCustomFromDate] = useState("");
   const [customToDate, setCustomToDate] = useState("");
-  const [indicator, setIndicator] = useState<IndicatorPanel>("rsi");
+  const [lowerPanels, setLowerPanels] = useState<LowerIndicatorPanel[]>(["rsi"]);
   const [indicatorSheetVisible, setIndicatorSheetVisible] = useState(false);
   const [visibleWindow, setVisibleWindow] = useState<ChartWindow>();
   const [selectedCandle, setSelectedCandle] = useState<CryptoCandle | null>(null);
@@ -204,6 +211,11 @@ export default function MarketScreen({ route }: MarketScreenProps) {
       setScope("catalog");
     }
   }, [allSymbols.length, scope, strategySymbols.length]);
+  useEffect(() => {
+    if (!requestedSymbol || !allSymbols.includes(requestedSymbol)) return;
+    setScope(strategySymbols.includes(requestedSymbol) ? "strategy" : "catalog");
+    setSymbol(requestedSymbol);
+  }, [allSymbols, requestedSymbol, strategySymbols]);
 
   useEffect(() => {
     if (!scopedSymbols.includes(symbol)) setSymbol(scopedSymbols[0] ?? "");
@@ -275,8 +287,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
     market.isError ||
     Boolean(failedSymbolReason) ||
     (Boolean(symbol) && !market.isLoading && !marketSymbol);
-  const selectedIndicatorLabel =
-    INDICATOR_OPTIONS.find((option) => option.value === indicator)?.label ?? indicator;
+  const lowerPanelSummary = lowerPanels.length ? lowerPanels.map((panel) => LOWER_INDICATOR_OPTIONS.find((option) => option.value === panel)?.label).filter(Boolean).join(" · ") : "无副图";
   const draftFromTs = parseUtcDay(draftFromDate, false);
   const draftToTs = parseUtcDay(draftToDate, true);
   const draftRangeValid =
@@ -553,8 +564,8 @@ export default function MarketScreen({ route }: MarketScreenProps) {
           <>
             <CandlestickChart
               key={chartSnapshotKey}
-              height={420}
               candles={marketSymbol.candles}
+              height={420}
               indicators={marketSymbol.indicators}
               onSelectCandle={setSelectedCandle}
               onWindowChange={setVisibleWindow}
@@ -566,55 +577,22 @@ export default function MarketScreen({ route }: MarketScreenProps) {
                   <Text style={styles.inspectionTimestamp}>{formatTimestamp(selectedCandle.ts)}</Text>
                 </View>
                 <View style={styles.ohlcGrid}>
-                  {[
-                    ["开", formatPrice(selectedCandle.open)],
-                    ["高", formatPrice(selectedCandle.high)],
-                    ["低", formatPrice(selectedCandle.low)],
-                    ["收", formatPrice(selectedCandle.close)],
-                    ["量", formatPrice(selectedCandle.volume)],
-                    ["涨跌", candleChange == null ? "—" : `${candleChange >= 0 ? "+" : ""}${candleChange.toFixed(2)}%`],
-                  ].map(([label, value]) => (
-                    <View key={label} style={styles.ohlcItem}>
-                      <Text style={styles.ohlcLabel}>{label}</Text>
-                      <Text
-                        style={[
-                          styles.ohlcValue,
-                          label === "涨跌" && candleChange != null
-                            ? { color: candleChange >= 0 ? palette.positive : palette.negative }
-                            : null,
-                        ]}
-                      >
-                        {value}
-                      </Text>
-                    </View>
-                  ))}
+                  {[["开", formatPrice(selectedCandle.open)], ["高", formatPrice(selectedCandle.high)], ["低", formatPrice(selectedCandle.low)], ["收", formatPrice(selectedCandle.close)], ["量", formatPrice(selectedCandle.volume)], ["涨跌", candleChange == null ? "—" : `${candleChange >= 0 ? "+" : ""}${candleChange.toFixed(2)}%`]].map(([label, value]) => <View key={label} style={styles.ohlcItem}><Text style={styles.ohlcLabel}>{label}</Text><Text style={[styles.ohlcValue, label === "涨跌" && candleChange != null ? { color: candleChange >= 0 ? palette.positive : palette.negative } : null]}>{value}</Text></View>)}
                 </View>
               </View>
             ) : null}
             <View style={styles.indicatorHeader}>
-              <View>
+              <View style={styles.indicatorCopy}>
                 <Text style={styles.indicatorTitle}>技术指标</Text>
-                <Text style={styles.cardMeta}>只显示一个面板，跟随上方 K 线可见窗口</Text>
+                <Text style={styles.cardMeta}>副图：{lowerPanelSummary}。可同时显示多个指标。</Text>
               </View>
-              <Pressable
-                accessibilityLabel="选择技术指标面板"
-                accessibilityRole="button"
-                onPress={() => setIndicatorSheetVisible(true)}
-                style={styles.selectorButton}
-              >
+              <Pressable accessibilityLabel="配置副图技术指标" accessibilityRole="button" onPress={() => setIndicatorSheetVisible(true)} style={styles.selectorButton}>
                 <SlidersHorizontal color={palette.primary} size={17} />
-                <Text style={styles.selectorButtonText}>{selectedIndicatorLabel}</Text>
+                <Text style={styles.selectorButtonText}>配置</Text>
                 <ChevronDown color={palette.textMuted} size={17} />
               </Pressable>
             </View>
-            <IndicatorChart
-              height={184}
-              candles={marketSymbol.candles}
-              indicators={marketSymbol.indicators}
-              panel={indicator}
-              window={visibleWindow}
-              selectedTimestamp={selectedCandle?.ts ?? null}
-            />
+            {lowerPanels.length ? lowerPanels.map((panel) => <IndicatorChart candles={marketSymbol.candles} height={184} indicators={marketSymbol.indicators} key={panel} panel={panel} selectedTimestamp={selectedCandle?.ts ?? null} window={visibleWindow} />) : <View style={styles.lowerPanelHint}><Text style={styles.mutedText}>未选择副图指标；可在“配置”中叠加 RSI、动量或 MACD。</Text></View>}
           </>
         ) : null}
       </View>
@@ -700,26 +678,15 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             style={StyleSheet.absoluteFill}
           />
           <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>选择一个技术指标</Text>
-            <Text style={styles.sheetCopy}>所有数值均由当前服务端行情快照提供。</Text>
+            <Text style={styles.sheetTitle}>副图技术指标</Text>
+            <Text style={styles.sheetCopy}>可同时显示多个独立副图；K 线图保持原有价格展示，不叠加这里的指标。</Text>
             <View style={styles.indicatorOptions}>
-              {INDICATOR_OPTIONS.map((option) => (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: option.value === indicator }}
-                  key={option.value}
-                  onPress={() => {
-                    setIndicator(option.value);
-                    setIndicatorSheetVisible(false);
-                  }}
-                  style={[styles.indicatorOption, option.value === indicator && styles.indicatorOptionActive]}
-                >
-                  <Text style={[styles.indicatorOptionText, option.value === indicator && styles.indicatorOptionTextActive]}>
-                    {option.label}
-                  </Text>
-                </Pressable>
-              ))}
+              {LOWER_INDICATOR_OPTIONS.map((option) => {
+                const selected = lowerPanels.includes(option.value);
+                return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={option.value} onPress={() => setLowerPanels((current) => toggleSelection(current, option.value))} style={[styles.indicatorOption, selected && styles.indicatorOptionActive]}><Text style={[styles.indicatorOptionText, selected && styles.indicatorOptionTextActive]}>{selected ? "✓ " : ""}{option.label}</Text></Pressable>;
+              })}
             </View>
+            <Pressable accessibilityRole="button" onPress={() => setIndicatorSheetVisible(false)} style={styles.primarySheetAction}><Text style={styles.primarySheetActionText}>完成</Text></Pressable>
           </View>
         </View>
       </Modal>
@@ -891,6 +858,8 @@ const styles = StyleSheet.create({
   ohlcLabel: { color: palette.textMuted, fontSize: 10 },
   ohlcValue: { color: palette.text, fontSize: 12, fontWeight: "800" },
   indicatorHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm, justifyContent: "space-between", marginTop: spacing.xs },
+  indicatorCopy: { flex: 1 },
+  lowerPanelHint: { alignItems: "center", backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, minHeight: 72, justifyContent: "center", padding: spacing.sm },
   indicatorTitle: { color: palette.text, fontSize: 15, fontWeight: "800", marginBottom: 2 },
   selectorButton: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: 5, justifyContent: "center", minHeight: 44, paddingHorizontal: spacing.sm },
   selectorButtonText: { color: palette.text, fontSize: 12, fontWeight: "800" },
@@ -901,6 +870,7 @@ const styles = StyleSheet.create({
   sheet: { backgroundColor: palette.surface, borderColor: palette.border, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, borderWidth: 1, gap: spacing.sm, padding: spacing.md, paddingBottom: spacing.lg },
   sheetTitle: { color: palette.text, fontSize: 18, fontWeight: "800" },
   sheetCopy: { color: palette.textMuted, fontSize: 12, lineHeight: 19 },
+  modalSectionTitle: { color: palette.text, fontSize: 13, fontWeight: "900", marginTop: spacing.xs },
   inputLabel: { color: palette.text, fontSize: 12, fontWeight: "800", marginTop: spacing.xs },
   dateInput: { backgroundColor: palette.canvas, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, color: palette.text, fontSize: 15, height: 48, paddingHorizontal: spacing.sm },
   sheetActions: { flexDirection: "row", gap: spacing.xs, justifyContent: "flex-end", marginTop: spacing.sm },

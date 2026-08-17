@@ -15,6 +15,7 @@ export type ChartWindow = Readonly<{
   end: number;
 }>;
 
+
 type Props = {
   candles: CryptoCandle[];
   indicators: CryptoIndicatorPoint[];

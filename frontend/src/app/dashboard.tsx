@@ -51,7 +51,6 @@ import {
   formatDemoTime,
   formatOptionalAmount,
 } from "@/app/dashboard-demo-execution";
-import { buildLiveEquityCurve } from "@/app/dashboard-equity-curve";
 import { dashboardRefreshTargets } from "@/app/dashboard-refresh";
 import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
 import {
@@ -391,6 +390,11 @@ export default function DashboardPage() {
   const demoCheckedAt = demoExecution
     ? demoExecutionCheckedAtLabel(demoExecution)
     : undefined;
+  const demoCurveMode = demoEquityCurve.some(
+    (point) => point.equity_quote !== undefined,
+  )
+    ? "equity"
+    : "pnl";
   const demoCheckedAtTime = demoCheckedAt
     ? new Date(demoCheckedAt).toLocaleTimeString("zh-CN")
     : "等待策略账户同步";
@@ -423,16 +427,12 @@ export default function DashboardPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [requestNowMs, setRequestNowMs] = useState(() => Date.now());
-  const [equityNowMs, setEquityNowMs] = useState(() => Date.now());
   const [equityRange, setEquityRange] = useState<
     (typeof EQUITY_RANGES)[number]["value"]
   >("1m");
   const [rsiMode, setRsiMode] = useState<RsiBollingerMode>("both");
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const now = Date.now();
-      setRequestNowMs(now);
-      setEquityNowMs(now);
       const refreshTargets = dashboardRefreshTargets(
         strategyId || undefined,
         strategyExecutionModeIsDemo,
@@ -557,18 +557,7 @@ export default function DashboardPage() {
     ? (demoBalance?.total_usdt_value ?? 0)
     : (account?.equity_quote ?? 0);
   const displayCash = isOkxDemo ? demoUsdt : (account?.quote_balance ?? 0);
-  const liveEquityCurve = useMemo(
-    () =>
-      account
-        ? buildLiveEquityCurve({
-            initialCapital: account.initial_capital_quote,
-            currentEquity: displayEquity,
-            serverPoints: pnlCurve,
-            nowMs: equityNowMs,
-          })
-        : [],
-    [account, displayEquity, equityNowMs, pnlCurve],
-  );
+  const liveEquityCurve = pnlCurve;
   const holdingRows = useMemo(
     () =>
       isOkxDemo
@@ -1755,12 +1744,7 @@ export default function DashboardPage() {
                   : "基于初始资金、当前组合权益与累计盈亏，持续展示最新估值"}
               </p>
               <p className="mt-1 text-muted-foreground text-xs">
-                每 15 秒刷新 · 最新时间{" "}
-                {new Intl.DateTimeFormat("zh-CN", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  second: "2-digit",
-                }).format(new Date(equityNowMs))}
+                最新日结事实 {pnlCurve.at(-1)?.ts ? new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium" }).format(new Date(pnlCurve.at(-1)?.ts ?? "")) : "暂无"}
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3 sm:justify-end">
@@ -1830,7 +1814,7 @@ export default function DashboardPage() {
               <PnlLineChart
                 data={demoEquityCurve}
                 height={240}
-                mode="pnl"
+                mode={demoCurveMode}
                 range={equityRange}
                 theme={isDark ? "dark" : "light"}
               />
@@ -1838,24 +1822,31 @@ export default function DashboardPage() {
               <div className="grid h-60 place-items-center text-center">
                 <p className="max-w-xl text-muted-foreground text-sm">
                   {demoPnl.available
-                    ? "盈亏数据已可用，但后端尚未返回策略归属曲线点。恢复条件：完成至少一次成交估值后自动显示。"
+                    ? "已记录真实账户钱包快照，但尚不足两个日结事实以绘制曲线。"
                     : demoPnl.detail}
                 </p>
               </div>
-            ) : !account ? (
+            ) : pnlCurveQuery.isLoading ? (
               <div className="grid h-60 place-items-center text-center">
                 <p className="text-muted-foreground text-sm">
-                  正在读取纸面策略账户与收益曲线。
+                  正在读取服务端每日收益事实。
                 </p>
               </div>
             ) : (
-              <PnlLineChart
-                data={liveEquityCurve}
-                height={240}
-                mode="equity"
-                range={equityRange}
-                theme={isDark ? "dark" : "light"}
-              />
+              <div className="space-y-3">
+                <PnlLineChart
+                  data={liveEquityCurve}
+                  height={240}
+                  mode="equity"
+                  range={equityRange}
+                  theme={isDark ? "dark" : "light"}
+                />
+                {liveEquityCurve.length < 2 ? (
+                  <p className="text-center text-muted-foreground text-xs">
+                    当前仅有一个已记录日结事实；完成下一次服务端账户快照后将连成曲线。
+                  </p>
+                ) : null}
+              </div>
             )}
           </CardContent>
         </Card>

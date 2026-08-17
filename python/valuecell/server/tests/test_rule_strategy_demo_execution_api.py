@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers import rule_strategy as router_module
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
@@ -45,11 +47,35 @@ def test_demo_execution_endpoint_paginates_orders_without_changing_summary(monke
 
     async def read_model(*_args, **_kwargs):
         return {
+            "connection_id": "conn-a",
+            "account": {
+                "data": {
+                    "source": "okx_demo",
+                    "total_usdt_value": 1_000.0,
+                    "balances": [],
+                }
+            },
+            "positions": {"data": {"source": "okx_demo", "positions": []}},
             "orders": [{"id": f"order-{index}"} for index in range(23)],
             "trade_summary": {"order_count": 23},
         }
 
     monkeypatch.setattr(router_module, "get_demo_execution_read_model", read_model)
+    monkeypatch.setattr(router_module, "record_demo_account_snapshot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        router_module,
+        "list_demo_account_snapshots",
+        lambda *_args, **_kwargs: [
+            SimpleNamespace(
+                observed_at=datetime(2026, 8, 6, tzinfo=timezone.utc),
+                total_usdt_value=1_000.0,
+            ),
+            SimpleNamespace(
+                observed_at=datetime(2026, 8, 7, tzinfo=timezone.utc),
+                total_usdt_value=1_025.0,
+            ),
+        ],
+    )
     monkeypatch.setattr(router_module, "SandboxExchangeTradingService", lambda _db: object())
 
     response = TestClient(app).get(
@@ -68,3 +94,19 @@ def test_demo_execution_endpoint_paginates_orders_without_changing_summary(monke
         "total_items": 23,
         "total_pages": 3,
     }
+    assert data["equity_curve"]["points"] == [
+        {
+            "ts": "2026-08-06T00:00:00Z",
+            "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
+            "equity_quote": 1_000.0,
+            "action": "wallet_snapshot",
+        },
+        {
+            "ts": "2026-08-07T00:00:00Z",
+            "cumulative_pnl": 25.0,
+            "daily_pnl_quote": 25.0,
+            "equity_quote": 1_025.0,
+            "action": "wallet_snapshot",
+        },
+    ]

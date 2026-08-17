@@ -207,6 +207,7 @@ def test_pnl_curve_returns_initial_capital_baseline_before_any_evaluation():
         {
             "ts": "2026-07-10T00:00:00Z",
             "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
             "equity_quote": 1_000.0,
             "action": "initial",
         }
@@ -260,18 +261,21 @@ def test_pnl_curve_places_one_baseline_before_chronological_journals():
         {
             "ts": "2026-07-10T00:00:00Z",
             "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
             "equity_quote": 1_000.0,
             "action": "initial",
         },
         {
             "ts": "2026-07-11T00:00:00Z",
             "cumulative_pnl": 25.0,
+            "daily_pnl_quote": 25.0,
             "equity_quote": 1_025.0,
             "action": "buy",
         },
         {
             "ts": "2026-07-12T00:00:00Z",
             "cumulative_pnl": 15.0,
+            "daily_pnl_quote": -10.0,
             "equity_quote": 1_015.0,
             "action": "sell",
         },

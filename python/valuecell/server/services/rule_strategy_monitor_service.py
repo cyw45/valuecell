@@ -64,6 +64,22 @@ def decide_monitor_state(
             protected_held=True,
         )
 
+    if metadata is None or any(
+        value is None
+        for value in (
+            metadata.listing_age_days,
+            metadata.average_quote_volume_30d,
+            metadata.price_quote,
+        )
+    ):
+        return MonitorDecision(
+            state="admitted",
+            reason_code="market_metadata_unavailable",
+            reason_detail="观察标的已启用，但交易所未返回完整上市时间、30日成交额或价格证据。",
+            consecutive_low_volume_days=0,
+            protected_held=False,
+        )
+
     return MonitorDecision(
         state="admitted",
         reason_code=ADMISSION_REASON,
