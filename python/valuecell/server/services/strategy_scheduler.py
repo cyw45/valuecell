@@ -54,6 +54,7 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
     SandboxExchangeTradingService,
 )
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
+    get_official_test_baseline,
     record_demo_account_snapshot,
 )
 
@@ -420,7 +421,13 @@ class StrategyScheduler:
                     if item.get("strategy_id") == strategy_id
                     and item.get("execution_source") == "rule_strategy"
                 ]
-                demo_inventory = strategy_inventory_by_symbol(strategy_orders)
+                baseline = get_official_test_baseline(
+                    session, tenant_id=tenant_id, strategy_id=strategy_id
+                )
+                demo_inventory = strategy_inventory_by_symbol(
+                    strategy_orders,
+                    started_at=baseline.started_at if baseline is not None else None,
+                )
             except Exception as exc:  # noqa: BLE001
                 _safe_warning(
                     "SCHEDULER_DEMO_ACCOUNT_SYNC_FAILED",

@@ -106,6 +106,32 @@ def test_strategy_inventory_uses_only_confirmed_fills_and_tracks_average_cost():
     )
 
 
+def test_strategy_inventory_ignores_fills_before_official_test_baseline():
+    inventory = strategy_inventory_by_symbol(
+        [
+            {
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "status": "filled",
+                "filled_quantity": "2",
+                "filled_quote": "200",
+                "filled_at": "2026-08-17T08:00:00+00:00",
+            },
+            {
+                "symbol": "ETH/USDT",
+                "side": "buy",
+                "status": "filled",
+                "filled_quantity": "1",
+                "filled_quote": "100",
+                "filled_at": "2026-08-17T09:00:00+00:00",
+            },
+        ],
+        started_at=datetime(2026, 8, 17, 8, 30, tzinfo=timezone.utc),
+    )
+
+    assert inventory == {"ETH/USDT": (Decimal("1"), Decimal("100"))}
+
+
 def test_demo_pnl_is_partial_for_sell_without_owned_cost_basis():
     result = build_demo_execution_read_model(
         _demo_strategy(), {}, {"checked_at": "now", "positions": [{"symbol": "BTC/USDT", "quantity": 50, "mark_price": None}]},

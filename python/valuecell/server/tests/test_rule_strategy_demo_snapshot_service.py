@@ -49,3 +49,40 @@ def test_demo_wallet_curve_uses_final_real_snapshot_per_utc_day():
             "action": "wallet_snapshot",
         },
     ]
+
+
+def test_demo_wallet_curve_starts_at_official_test_baseline():
+    snapshots = [
+        SimpleNamespace(
+            observed_at=datetime(2026, 8, 16, 9, tzinfo=timezone.utc),
+            total_usdt_value=900.0,
+        ),
+        SimpleNamespace(
+            observed_at=datetime(2026, 8, 17, 8, 30, tzinfo=timezone.utc),
+            total_usdt_value=1_000.0,
+        ),
+        SimpleNamespace(
+            observed_at=datetime(2026, 8, 18, 9, tzinfo=timezone.utc),
+            total_usdt_value=1_025.0,
+        ),
+    ]
+
+    assert build_demo_daily_curve(
+        snapshots,
+        started_at=datetime(2026, 8, 17, 8, 30, tzinfo=timezone.utc),
+    ) == [
+        {
+            "ts": "2026-08-17T00:00:00Z",
+            "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
+            "equity_quote": 1_000.0,
+            "action": "wallet_snapshot",
+        },
+        {
+            "ts": "2026-08-18T00:00:00Z",
+            "cumulative_pnl": 25.0,
+            "daily_pnl_quote": 25.0,
+            "equity_quote": 1_025.0,
+            "action": "wallet_snapshot",
+        },
+    ]

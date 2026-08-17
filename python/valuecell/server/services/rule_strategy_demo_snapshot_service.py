@@ -8,7 +8,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from valuecell.server.db.models.rule_strategy import RuleStrategyDemoAccountSnapshot
+from valuecell.server.db.models.rule_strategy import (
+    RuleStrategyDemoAccountSnapshot,
+    RuleStrategyOfficialTestBaseline,
+)
 from valuecell.server.services.rule_strategy_pnl_service import (
     DailyPnlObservation,
     build_daily_pnl_points,
@@ -62,14 +65,25 @@ def list_demo_account_snapshots(
     )
 
 
+def get_official_test_baseline(
+    session: Session, *, tenant_id: str, strategy_id: str
+) -> RuleStrategyOfficialTestBaseline | None:
+    return session.query(RuleStrategyOfficialTestBaseline).filter_by(
+        tenant_id=tenant_id, strategy_id=strategy_id
+    ).first()
+
+
 def build_demo_daily_curve(
     snapshots: Iterable[RuleStrategyDemoAccountSnapshot],
+    *,
+    started_at: datetime | None = None,
 ) -> list[dict[str, float | str]]:
     """Build daily wallet equity from persisted, exchange-observed values only."""
     rows = [
         snapshot
         for snapshot in snapshots
         if snapshot.total_usdt_value is not None
+        and (started_at is None or _aware(snapshot.observed_at) >= _aware(started_at))
     ]
     if not rows:
         return []

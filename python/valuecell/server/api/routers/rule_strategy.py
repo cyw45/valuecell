@@ -53,6 +53,7 @@ from valuecell.server.services.rule_strategy_pnl_service import (
 )
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     build_demo_daily_curve,
+    get_official_test_baseline,
     list_demo_account_snapshots,
     record_demo_account_snapshot,
 )
@@ -755,10 +756,14 @@ def create_rule_strategy_router(
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
+            baseline = get_official_test_baseline(
+                db, tenant_id=principal.tenant_id, strategy_id=strategy_id
+            )
             data = await get_demo_execution_read_model(
                 strategy,
                 principal.tenant_id,
                 SandboxExchangeTradingService(db),
+                started_at=baseline.started_at if baseline is not None else None,
             )
             connection_id = data.get("connection_id")
             if not isinstance(connection_id, str) or not connection_id:
@@ -776,7 +781,13 @@ def create_rule_strategy_router(
                 tenant_id=principal.tenant_id,
                 strategy_id=strategy_id,
             )
-            curve_points = build_demo_daily_curve(snapshots)
+            baseline = get_official_test_baseline(
+                db, tenant_id=principal.tenant_id, strategy_id=strategy_id
+            )
+            curve_points = build_demo_daily_curve(
+                snapshots,
+                started_at=baseline.started_at if baseline is not None else None,
+            )
             data["equity_curve"] = {
                 "status": "available" if curve_points else "unavailable",
                 "scope": "exchange_account_wallet_snapshots",
