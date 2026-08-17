@@ -386,6 +386,52 @@ def test_preflight_precision_error_is_terminal_failure_without_remote_submission
     assert "create_order" not in fake_exchange.instances[-1].calls
 
 
+def test_zero_available_sell_is_rejected_before_amount_precision(
+    sandbox_client, monkeypatch
+):
+    client, _, fake_exchange = sandbox_client
+    response = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase"),
+    )
+    credential_id = response.json()["data"]["id"]
+
+    async def empty_btc_balance(self):
+        self._private("fetch_balance")
+        return {
+            "total": {"USDT": 1000, "BTC": 0},
+            "free": {"USDT": 1000, "BTC": 0},
+            "used": {"BTC": 0},
+        }
+
+    precision_called = False
+
+    def reject_precision(self, _symbol: str, _amount: float) -> str:
+        nonlocal precision_called
+        precision_called = True
+        raise AssertionError("zero quantity must be rejected before precision conversion")
+
+    monkeypatch.setattr(fake_exchange, "fetch_balance", empty_btc_balance)
+    monkeypatch.setattr(fake_exchange, "amount_to_precision", reject_precision)
+    request = {
+        "credential_id": credential_id,
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "type": "market",
+        "quote_amount": "100",
+        "idempotency_key": "zero-balance-sell-order",
+        "sandbox": True,
+    }
+
+    result = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    assert result.status_code == 201, result.text
+    assert result.json()["data"]["status"] == "failed"
+    assert result.json()["data"]["error_code"] == "sandbox_order_rejected"
+    assert precision_called is False
+    assert "create_order" not in fake_exchange.instances[-1].calls
+
+
 def test_list_orders_refreshes_non_terminal_exchange_statuses(sandbox_client):
     client, _, _ = sandbox_client
     credential_id = create_connection(client)

@@ -308,6 +308,8 @@ class SandboxExchangeTradingService:
             quantity = (
                 nominal_quantity if side == "buy" else min(available, nominal_quantity)
             )
+            if quantity <= 0:
+                raise SandboxTradingError("Order does not satisfy OKX Demo minimum size")
             precision = getattr(exchange, "amount_to_precision", None)
             if callable(precision):
                 quantity = self._decimal(precision(symbol, float(quantity)), "Order amount unavailable")
