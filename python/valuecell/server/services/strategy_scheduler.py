@@ -850,6 +850,15 @@ class StrategyScheduler:
             }
         if action not in {"buy", "sell"}:
             return {"execution": "blocked", "reason": "Signal is not executable"}
+        if symbol.upper().replace("/", "-") not in {
+            item.upper().replace("/", "-")
+            for item in getattr(config, "symbols", ())
+        }:
+            return {
+                "execution": "blocked",
+                "sandbox": True,
+                "reason": "symbol is not configured for this strategy",
+            }
         requested_quote = min(
             quote_amount, Decimal(str(execution_config.max_order_quote_amount))
         )
