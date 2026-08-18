@@ -99,7 +99,6 @@ _SUPPORTED_MARKET_SYMBOLS = frozenset(
         "BNT-USDT",
         "LRC-USDT",
         "GNO-USDT",
-        "PAXG-USDT",
         "UMA-USDT",
         "BAL-USDT",
         "SPELL-USDT",

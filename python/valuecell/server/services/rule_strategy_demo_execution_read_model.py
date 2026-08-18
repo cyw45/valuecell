@@ -93,6 +93,8 @@ def _trade_summary(orders: list[dict[str, Any]]) -> dict[str, Any]:
 
 def strategy_inventory_by_symbol(
     orders: list[dict[str, Any]],
+    *,
+    started_at: datetime | None = None,
 ) -> dict[str, tuple[Decimal, Decimal]]:
     """Return strategy-owned open quantity and cost from confirmed fills only."""
     inventory: dict[str, tuple[Decimal, Decimal]] = {}
@@ -101,6 +103,11 @@ def strategy_inventory_by_symbol(
         for item in orders
         if item.get("status") == "filled"
         and (_decimal(item.get("filled_quantity")) or 0) > 0
+        and (
+            started_at is None
+            or _timestamp_sort_key(item.get("filled_at") or item.get("created_at"))
+            >= _timestamp_sort_key(started_at)
+        )
     ]
     for _, fill in sorted(
         enumerate(fills),
@@ -209,7 +216,14 @@ def _pnl_and_curve(orders: list[dict[str, Any]], positions: dict[str, Any], chec
     }
 
 
-def build_demo_execution_read_model(strategy: dict[str, Any], account: dict[str, Any], positions: dict[str, Any], orders: list[dict[str, Any]]) -> dict[str, Any]:
+def build_demo_execution_read_model(
+    strategy: dict[str, Any],
+    account: dict[str, Any],
+    positions: dict[str, Any],
+    orders: list[dict[str, Any]],
+    *,
+    started_at: datetime | None = None,
+) -> dict[str, Any]:
     """Build an explainable, strategy-attributed, non-paper response."""
     execution = (strategy.get("config") or {}).get("execution") or {}
     if execution.get("environment") != "okx_demo":
@@ -217,7 +231,17 @@ def build_demo_execution_read_model(strategy: dict[str, Any], account: dict[str,
     strategy_id = strategy.get("strategy_id") or strategy.get("id")
     if not strategy_id:
         raise DemoExecutionReadModelError("Strategy identifier is unavailable")
-    strategy_orders = [item for item in orders if item.get("strategy_id") == strategy_id and item.get("execution_source") == "rule_strategy"]
+    strategy_orders = [
+        item
+        for item in orders
+        if item.get("strategy_id") == strategy_id
+        and item.get("execution_source") == "rule_strategy"
+        and (
+            started_at is None
+            or _timestamp_sort_key(item.get("filled_at") or item.get("created_at"))
+            >= _timestamp_sort_key(started_at)
+        )
+    ]
     checked_at = positions.get("checked_at") or account.get("checked_at") or datetime.now(timezone.utc).isoformat()
     pnl, equity_curve = _pnl_and_curve(strategy_orders, positions, checked_at)
     return {
@@ -230,7 +254,13 @@ def build_demo_execution_read_model(strategy: dict[str, Any], account: dict[str,
     }
 
 
-async def get_demo_execution_read_model(strategy: dict[str, Any], tenant_id: str, service: Any) -> dict[str, Any]:
+async def get_demo_execution_read_model(
+    strategy: dict[str, Any],
+    tenant_id: str,
+    service: Any,
+    *,
+    started_at: datetime | None = None,
+) -> dict[str, Any]:
     """Fetch exchange-authoritative account facts and locally attributed order audit rows."""
     execution = (strategy.get("config") or {}).get("execution") or {}
     if execution.get("environment") != "okx_demo":
@@ -245,4 +275,6 @@ async def get_demo_execution_read_model(strategy: dict[str, Any], tenant_id: str
         orders = service.list_orders(tenant_id, connection_id)
     except SandboxTradingError:
         raise
-    return build_demo_execution_read_model(strategy, account, positions, orders)
+    return build_demo_execution_read_model(
+        strategy, account, positions, orders, started_at=started_at
+    )

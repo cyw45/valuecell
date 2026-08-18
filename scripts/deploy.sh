@@ -169,7 +169,7 @@ if (( !DRY_RUN )); then
   curl --fail --silent --show-error http://127.0.0.1:18000/api/v1/healthz >/dev/null || fatal "backend health failed"
   curl --fail --silent --show-error -o /dev/null http://127.0.0.1:18080/ || fatal "frontend HTTP check failed"
 
-  BACKEND_CID="$(docker compose -f "$COMPOSE_FILE" ps -q backend)"
+  BACKEND_CID="$(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps -q backend)"
   [[ -n "$BACKEND_CID" ]] || fatal "backend container not found"
   docker inspect "$BACKEND_CID" --format 'backend={{.Id}} status={{.State.Status}} restart={{.RestartCount}} oom={{.State.OOMKilled}}'
   docker logs --since 3m "$BACKEND_CID" 2>&1 | grep -Ei 'Traceback|FATAL|Application startup failed|scheduler initialization deferred' && fatal "startup error found in backend logs" || true

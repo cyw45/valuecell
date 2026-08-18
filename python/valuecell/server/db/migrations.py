@@ -678,6 +678,8 @@ def migrate_demo_daily_execution_limit(session: Session) -> bool:
 
 STRATEGY_DEMO_SNAPSHOT_MIGRATION_VERSION = "20260813_strategy_demo_account_snapshots_v1"
 STRATEGY_DEMO_SNAPSHOT_MIGRATION_LOCK_KEY = 7720250724
+STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_VERSION = "20260817_strategy_official_test_baseline_v1"
+STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_LOCK_KEY = 7720250725
 
 
 def migrate_strategy_demo_account_snapshots(session: Session) -> bool:
@@ -766,4 +768,47 @@ def migrate_rule_strategy_manual_close(session: Session) -> bool:
     )
     session.commit()
     logger.info("Applied schema migration {version}", version=MANUAL_CLOSE_MIGRATION_VERSION)
+    return True
+
+
+def migrate_strategy_official_test_baselines(session: Session) -> bool:
+    """Create the immutable official-test boundary table before Demo scheduling."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "strategy official-test baseline migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_VERSION},
+    ).first():
+        return False
+    from valuecell.server.db.models.rule_strategy import RuleStrategyOfficialTestBaseline
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[RuleStrategyOfficialTestBaseline.__table__],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_VERSION,
+    )
     return True

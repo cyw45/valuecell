@@ -69,7 +69,6 @@ DEFAULT_SPOT_SYMBOLS: tuple[str, ...] = (
     "BNT-USDT",
     "LRC-USDT",
     "GNO-USDT",
-    "PAXG-USDT",
     "UMA-USDT",
     "BAL-USDT",
     "MIR-USDT",

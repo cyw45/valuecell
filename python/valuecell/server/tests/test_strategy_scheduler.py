@@ -237,6 +237,32 @@ async def test_okx_demo_submission_is_not_recorded_as_a_paper_fill(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_okx_demo_execution_blocks_symbol_removed_from_strategy_config(monkeypatch):
+    config = RuleStrategyConfig.model_validate(
+        {
+            "symbols": ["BTC-USDT"],
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "okx-demo-connection",
+            },
+        }
+    )
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a",
+        "rule-a",
+        config,
+        "PAXG-USDT",
+        "buy",
+        Decimal("100"),
+        Decimal("4000"),
+        1234,
+        "eval-a",
+    )
+    assert result["execution"] == "blocked"
+    assert "not configured" in result["reason"]
+
+
+@pytest.mark.asyncio
 async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministic_id(
     monkeypatch,
 ):

@@ -211,6 +211,20 @@ class RuleStrategyDemoAccountSnapshot(Base):
     )
 
 
+class RuleStrategyOfficialTestBaseline(Base):
+    """Immutable operator-selected boundary for official Demo performance evidence."""
+
+    __tablename__ = "rule_strategy_official_test_baselines"
+
+    strategy_id = Column(String(100), ForeignKey("rule_strategies.strategy_id", ondelete="CASCADE"), primary_key=True)
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    credential_id = Column(String(36), ForeignKey("tenant_credentials.id", ondelete="RESTRICT"), nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    initial_total_usdt_value = Column(Float, nullable=False)
+    snapshot_id = Column(Integer, ForeignKey("rule_strategy_demo_account_snapshots.id", ondelete="RESTRICT"), nullable=False, unique=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class RuleStrategyOrderAttempt(Base):
     """Append-only remote venue submission observation for an execution intent."""
 
