@@ -408,6 +408,36 @@ class MobileApiClient {
       ),
     );
 
+  strategyDemoExecutionAll = async (
+    strategyId: string,
+    pageSize = 100,
+  ): Promise<Types.RuleStrategyDemoExecution> => {
+    let page = 1;
+    let first: Types.RuleStrategyDemoExecution | null = null;
+    const orders: Types.SandboxOrder[] = [];
+    while (true) {
+      const data = await this.strategyDemoExecution(strategyId, page, pageSize);
+      first ??= data;
+      orders.push(...data.orders);
+      if (page >= data.pagination.total_pages) {
+        return { ...first, orders, pagination: { ...data.pagination, page: 1, page_size: orders.length, total_items: orders.length, total_pages: 1 } };
+      }
+      page += 1;
+    }
+  };
+
+  manualCloseStrategy = (
+    strategyId: string,
+    request: Types.RuleStrategyManualCloseRequest,
+  ): Promise<Types.RuleStrategyManualCloseResponse> =>
+    this.authenticatedRequest<Types.RuleStrategyManualCloseResponse>(
+      `/rule-strategies/${pathSegment(strategyId)}/manual-close`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
+
   strategyAdvisory = (
     strategyId: string,
   ): Promise<Types.RuleStrategyAdvisory> =>

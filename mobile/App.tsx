@@ -36,6 +36,8 @@ import StrategyDetailScreen from "./src/screens/StrategyDetailScreen";
 import StrategyEditorScreen from "./src/screens/StrategyEditorScreen";
 import StrategyListScreen from "./src/screens/StrategyListScreen";
 import StrategyOverviewScreen from "./src/screens/StrategyOverviewScreen";
+import StrategyPositionsScreen from "./src/screens/StrategyPositionsScreen";
+import StrategyWorkbenchDetailScreen from "./src/screens/StrategyWorkbenchDetailScreen";
 import StrategySymbolsScreen from "./src/screens/StrategySymbolsScreen";
 import TradeLedgerScreen from "./src/screens/TradeLedgerScreen";
 import WorkspaceAuditScreen from "./src/screens/WorkspaceAuditScreen";
@@ -73,6 +75,8 @@ function WorkbenchNavigator() {
     <WorkbenchStack.Navigator screenOptions={screenOptions}>
       <WorkbenchStack.Screen component={StrategyOverviewScreen} name="StrategyOverview" />
       <WorkbenchStack.Screen component={StrategySymbolsScreen} name="StrategySymbols" options={{ headerShown: true, title: "观察标的" }} />
+      <WorkbenchStack.Screen component={StrategyPositionsScreen} name="StrategyPositions" options={{ headerShown: true, title: "我的持仓" }} />
+      <WorkbenchStack.Screen component={StrategyWorkbenchDetailScreen} name="StrategyWorkbenchDetail" options={{ headerShown: true, title: "策略详情" }} />
       <WorkbenchStack.Screen component={ExecutionFactsScreen} name="ExecutionFacts" options={{ headerShown: true, title: "执行详情" }} />
       <WorkbenchStack.Screen component={TradeLedgerScreen} name="TradeLedger" options={{ headerShown: true, title: t("navigation.tradeLedger") }} />
       <WorkbenchStack.Screen component={FundingPnlScreen} name="FundingPnl" options={{ headerShown: true, title: t("navigation.fundingPnl") }} />

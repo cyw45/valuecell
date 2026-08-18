@@ -22,7 +22,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react-native";
 import { api, MobileApiError } from "../api";
-import CandlestickChart, { type ChartWindow } from "../components/CandlestickChart";
+import CandlestickChart, { type ChartWindow, type PriceOverlay } from "../components/CandlestickChart";
 import IndicatorChart, { type IndicatorPanel } from "../components/IndicatorChart";
 import { useSession } from "../session";
 import { marketDataRefreshInterval, usePreferences } from "../preferences";
@@ -85,10 +85,16 @@ const INTERVAL_MS: Record<MarketInterval, number> = {
   "4h": 14_400_000,
   "1d": 86_400_000,
 };
-type LowerIndicatorPanel = IndicatorPanel;
+type LowerIndicatorPanel = Exclude<IndicatorPanel, "bollinger">;
+const PRICE_OVERLAY_OPTIONS: ReadonlyArray<{ value: PriceOverlay; label: string }> = [
+  { value: "ma5", label: "MA5" },
+  { value: "ma10", label: "MA10" },
+  { value: "ma20", label: "MA20" },
+  { value: "ma60", label: "MA60" },
+  { value: "bollinger", label: "布林带" },
+];
 const LOWER_INDICATOR_OPTIONS: ReadonlyArray<{ value: LowerIndicatorPanel; label: string }> = [
   { value: "rsi", label: "RSI" },
-  { value: "bollinger", label: "布林带" },
   { value: "momentum", label: "动量" },
   { value: "macd", label: "MACD" },
 ];
@@ -171,7 +177,8 @@ export default function MarketScreen({ route }: MarketScreenProps) {
   const [draftToDate, setDraftToDate] = useState("");
   const [customFromDate, setCustomFromDate] = useState("");
   const [customToDate, setCustomToDate] = useState("");
-  const [lowerPanels, setLowerPanels] = useState<LowerIndicatorPanel[]>(["rsi"]);
+  const [priceOverlays, setPriceOverlays] = useState<PriceOverlay[]>(["ma5", "ma20", "bollinger"]);
+  const [lowerPanel, setLowerPanel] = useState<LowerIndicatorPanel | null>("rsi");
   const [indicatorSheetVisible, setIndicatorSheetVisible] = useState(false);
   const [visibleWindow, setVisibleWindow] = useState<ChartWindow>();
   const [selectedCandle, setSelectedCandle] = useState<CryptoCandle | null>(null);
@@ -287,7 +294,8 @@ export default function MarketScreen({ route }: MarketScreenProps) {
     market.isError ||
     Boolean(failedSymbolReason) ||
     (Boolean(symbol) && !market.isLoading && !marketSymbol);
-  const lowerPanelSummary = lowerPanels.length ? lowerPanels.map((panel) => LOWER_INDICATOR_OPTIONS.find((option) => option.value === panel)?.label).filter(Boolean).join(" · ") : "无副图";
+  const overlaySummary = priceOverlays.length ? priceOverlays.map((overlay) => PRICE_OVERLAY_OPTIONS.find((option) => option.value === overlay)?.label).filter(Boolean).join(" · ") : "无价格叠加";
+  const lowerPanelSummary = lowerPanel ? LOWER_INDICATOR_OPTIONS.find((option) => option.value === lowerPanel)?.label ?? lowerPanel : "不显示";
   const draftFromTs = parseUtcDay(draftFromDate, false);
   const draftToTs = parseUtcDay(draftToDate, true);
   const draftRangeValid =
@@ -569,6 +577,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
               indicators={marketSymbol.indicators}
               onSelectCandle={setSelectedCandle}
               onWindowChange={setVisibleWindow}
+              priceOverlays={priceOverlays}
             />
             {selectedCandle ? (
               <View style={styles.inspectionStrip}>
@@ -584,15 +593,15 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             <View style={styles.indicatorHeader}>
               <View style={styles.indicatorCopy}>
                 <Text style={styles.indicatorTitle}>技术指标</Text>
-                <Text style={styles.cardMeta}>副图：{lowerPanelSummary}。可同时显示多个指标。</Text>
+                <Text style={styles.cardMeta}>价格图层：{overlaySummary} · 副图：{lowerPanelSummary}</Text>
               </View>
-              <Pressable accessibilityLabel="配置副图技术指标" accessibilityRole="button" onPress={() => setIndicatorSheetVisible(true)} style={styles.selectorButton}>
+              <Pressable accessibilityLabel="配置技术指标" accessibilityRole="button" onPress={() => setIndicatorSheetVisible(true)} style={styles.selectorButton}>
                 <SlidersHorizontal color={palette.primary} size={17} />
                 <Text style={styles.selectorButtonText}>配置</Text>
                 <ChevronDown color={palette.textMuted} size={17} />
               </Pressable>
             </View>
-            {lowerPanels.length ? lowerPanels.map((panel) => <IndicatorChart candles={marketSymbol.candles} height={184} indicators={marketSymbol.indicators} key={panel} panel={panel} selectedTimestamp={selectedCandle?.ts ?? null} window={visibleWindow} />) : <View style={styles.lowerPanelHint}><Text style={styles.mutedText}>未选择副图指标；可在“配置”中叠加 RSI、动量或 MACD。</Text></View>}
+            {lowerPanel ? <IndicatorChart candles={marketSymbol.candles} height={184} indicators={marketSymbol.indicators} panel={lowerPanel} selectedTimestamp={selectedCandle?.ts ?? null} window={visibleWindow} /> : <View style={styles.lowerPanelHint}><Text style={styles.mutedText}>副图已关闭。价格指标已直接叠加在同一张 K 线图中。</Text></View>}
           </>
         ) : null}
       </View>
@@ -678,13 +687,19 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             style={StyleSheet.absoluteFill}
           />
           <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>副图技术指标</Text>
-            <Text style={styles.sheetCopy}>可同时显示多个独立副图；K 线图保持原有价格展示，不叠加这里的指标。</Text>
+            <Text style={styles.sheetTitle}>图层和副图</Text>
+            <Text style={styles.sheetCopy}>均线与布林带共用价格坐标，叠加在同一张 K 线图；RSI、动量、MACD 只保留一个下方副图，避免拆成多张图。</Text>
+            <Text style={styles.modalSectionTitle}>价格图层</Text>
             <View style={styles.indicatorOptions}>
-              {LOWER_INDICATOR_OPTIONS.map((option) => {
-                const selected = lowerPanels.includes(option.value);
-                return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={option.value} onPress={() => setLowerPanels((current) => toggleSelection(current, option.value))} style={[styles.indicatorOption, selected && styles.indicatorOptionActive]}><Text style={[styles.indicatorOptionText, selected && styles.indicatorOptionTextActive]}>{selected ? "✓ " : ""}{option.label}</Text></Pressable>;
+              {PRICE_OVERLAY_OPTIONS.map((option) => {
+                const selected = priceOverlays.includes(option.value);
+                return <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: selected }} key={option.value} onPress={() => setPriceOverlays((current) => toggleSelection(current, option.value))} style={[styles.indicatorOption, selected && styles.indicatorOptionActive]}><Text style={[styles.indicatorOptionText, selected && styles.indicatorOptionTextActive]}>{selected ? "✓ " : ""}{option.label}</Text></Pressable>;
               })}
+            </View>
+            <Text style={styles.modalSectionTitle}>下方副图</Text>
+            <View style={styles.indicatorOptions}>
+              <Pressable accessibilityRole="radio" accessibilityState={{ selected: lowerPanel === null }} onPress={() => setLowerPanel(null)} style={[styles.indicatorOption, lowerPanel === null && styles.indicatorOptionActive]}><Text style={[styles.indicatorOptionText, lowerPanel === null && styles.indicatorOptionTextActive]}>不显示副图</Text></Pressable>
+              {LOWER_INDICATOR_OPTIONS.map((option) => <Pressable accessibilityRole="radio" accessibilityState={{ selected: lowerPanel === option.value }} key={option.value} onPress={() => setLowerPanel(option.value)} style={[styles.indicatorOption, lowerPanel === option.value && styles.indicatorOptionActive]}><Text style={[styles.indicatorOptionText, lowerPanel === option.value && styles.indicatorOptionTextActive]}>{option.label}</Text></Pressable>)}
             </View>
             <Pressable accessibilityRole="button" onPress={() => setIndicatorSheetVisible(false)} style={styles.primarySheetAction}><Text style={styles.primarySheetActionText}>完成</Text></Pressable>
           </View>

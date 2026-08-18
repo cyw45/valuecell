@@ -333,6 +333,30 @@ def test_okx_demo_execution_config_requires_a_sandbox_connection_and_spot_risk_l
     assert config.execution.max_daily_quote_amount == 750
 
 
+def test_manual_close_requires_exact_target_confirmation():
+    from pydantic import ValidationError
+    from valuecell.server.api.routers.rule_strategy import RuleStrategyManualCloseRequest
+
+    request = RuleStrategyManualCloseRequest.model_validate(
+        {
+            "scope": "symbol",
+            "symbol": "btc-usdt",
+            "confirmation": "CLOSE BTC/USDT",
+            "idempotency_key": "manual-close-request-0001",
+        }
+    )
+
+    assert request.symbol == "BTC/USDT"
+    with pytest.raises(ValidationError, match="confirmation must be exactly"):
+        RuleStrategyManualCloseRequest.model_validate(
+            {
+                "scope": "all",
+                "confirmation": "CLOSE ALL POSITION",
+                "idempotency_key": "manual-close-request-0002",
+            }
+        )
+
+
 def test_okx_demo_execution_config_accepts_high_daily_throughput_limit():
     from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
 

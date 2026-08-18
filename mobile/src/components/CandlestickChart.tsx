@@ -15,14 +15,22 @@ export type ChartWindow = Readonly<{
   end: number;
 }>;
 
+export type PriceOverlay = "ma5" | "ma10" | "ma20" | "ma60" | "bollinger";
 
 type Props = {
   candles: CryptoCandle[];
   indicators: CryptoIndicatorPoint[];
+  priceOverlays?: readonly PriceOverlay[];
+  tradeMarkers?: readonly TradeMarker[];
   height?: number;
   onSelectCandle?: (candle: CryptoCandle | null) => void;
   onWindowChange?: (window: ChartWindow) => void;
 };
+export type TradeMarker = Readonly<{
+  ts: number;
+  price: number;
+  side: "buy" | "sell";
+}>;
 
 export const CHART_HORIZONTAL_INSETS = { left: 8, right: 54 } as const;
 const PADDING = { top: 28, ...CHART_HORIZONTAL_INSETS, bottom: 22 };
@@ -105,6 +113,8 @@ function linePath(
 export default function CandlestickChart({
   candles,
   indicators,
+  priceOverlays = ["ma5", "ma20", "ma60"],
+  tradeMarkers = [],
   height = 420,
   onSelectCandle,
   onWindowChange,
@@ -353,16 +363,25 @@ export default function CandlestickChart({
   const priceBottom = volumeTop - PANEL_GAP;
   const priceHeight = Math.max(1, priceBottom - priceTop);
   const plotWidth = Math.max(1, width - PADDING.left - PADDING.right);
-  const priceValues = visibleCandles.flatMap((candle, index) => {
-    const indicator = visibleIndicators[index];
-    return [
-      candle.low,
-      candle.high,
-      finite(indicator?.ma.ma5),
-      finite(indicator?.ma.ma20),
-      finite(indicator?.ma.ma60),
-    ].filter((value): value is number => value != null);
-  });
+  const overlaySet = new Set(priceOverlays);
+  const ma5 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma5));
+  const ma10 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma10));
+  const ma20 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma20));
+  const ma60 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma60));
+  const bollingerUpper = visibleIndicators.map((indicator) => finite(indicator?.bollinger?.upper));
+  const bollingerMiddle = visibleIndicators.map((indicator) => finite(indicator?.bollinger?.middle));
+  const bollingerLower = visibleIndicators.map((indicator) => finite(indicator?.bollinger?.lower));
+  const selectedOverlayValues = [
+    ...(overlaySet.has("ma5") ? ma5 : []),
+    ...(overlaySet.has("ma10") ? ma10 : []),
+    ...(overlaySet.has("ma20") ? ma20 : []),
+    ...(overlaySet.has("ma60") ? ma60 : []),
+    ...(overlaySet.has("bollinger") ? [...bollingerUpper, ...bollingerMiddle, ...bollingerLower] : []),
+  ].filter((value): value is number => value != null);
+  const priceValues = [
+    ...tradeMarkers.map((marker) => marker.price),
+    ...selectedOverlayValues,
+  ];
   const low = Math.min(...priceValues);
   const high = Math.max(...priceValues);
   const pricePadding = Math.max((high - low) * 0.08, Math.abs(high) * 0.001, Number.EPSILON);
@@ -381,9 +400,6 @@ export default function CandlestickChart({
     1,
     Math.min(12, (plotWidth / visibleCandles.length) * 0.72),
   );
-  const ma5 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma5));
-  const ma20 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma20));
-  const ma60 = visibleIndicators.map((indicator) => finite(indicator?.ma.ma60));
   const selectedLocalIndex =
     selectedIndex == null ? null : selectedIndex - window.start;
   const selectedCandle =
@@ -492,9 +508,17 @@ export default function CandlestickChart({
             </G>
           );
         })}
-        <Path d={linePath(ma5, xAt, priceY)} fill="none" stroke="#F5B544" strokeWidth={1.35} />
-        <Path d={linePath(ma20, xAt, priceY)} fill="none" stroke={palette.primary} strokeWidth={1.35} />
-        <Path d={linePath(ma60, xAt, priceY)} fill="none" stroke="#B58CFF" strokeWidth={1.35} />
+        {tradeMarkers.map((marker) => {
+          const localIndex = visibleCandles.findIndex((candle) => candle.ts === marker.ts);
+          if (localIndex < 0 || !Number.isFinite(marker.price)) return null;
+          const markerColor = marker.side === "buy" ? palette.positive : palette.negative;
+          return <Circle accessibilityLabel={`${marker.side === "buy" ? "买入" : "卖出"}成交点`} cx={xAt(localIndex)} cy={priceY(marker.price)} fill={markerColor} key={`${marker.side}-${marker.ts}-${marker.price}`} r={5} stroke={palette.surface} strokeWidth={2} />;
+        })}
+        {overlaySet.has("bollinger") ? <><Path d={linePath(bollingerUpper, xAt, priceY)} fill="none" stroke="#2AB5F6" strokeDasharray="4 3" strokeWidth={1.2} /><Path d={linePath(bollingerMiddle, xAt, priceY)} fill="none" stroke="#2AB5F6" strokeWidth={1.2} /><Path d={linePath(bollingerLower, xAt, priceY)} fill="none" stroke="#2AB5F6" strokeDasharray="4 3" strokeWidth={1.2} /></> : null}
+        {overlaySet.has("ma5") ? <Path d={linePath(ma5, xAt, priceY)} fill="none" stroke="#F5B544" strokeWidth={1.35} /> : null}
+        {overlaySet.has("ma10") ? <Path d={linePath(ma10, xAt, priceY)} fill="none" stroke="#F9844A" strokeWidth={1.35} /> : null}
+        {overlaySet.has("ma20") ? <Path d={linePath(ma20, xAt, priceY)} fill="none" stroke={palette.primary} strokeWidth={1.35} /> : null}
+        {overlaySet.has("ma60") ? <Path d={linePath(ma60, xAt, priceY)} fill="none" stroke="#B58CFF" strokeWidth={1.35} /> : null}
         {selectedCandle && selectedLocalIndex != null ? (
           <>
             <Line
@@ -527,9 +551,11 @@ export default function CandlestickChart({
         ) : null}
       </Svg>
       <View pointerEvents="none" style={styles.legend}>
-        <Text style={[styles.legendText, { color: "#F5B544" }]}>MA5</Text>
-        <Text style={[styles.legendText, { color: palette.primary }]}>MA20</Text>
-        <Text style={[styles.legendText, { color: "#B58CFF" }]}>MA60</Text>
+        {overlaySet.has("ma5") ? <Text style={[styles.legendText, { color: "#F5B544" }]}>MA5</Text> : null}
+        {overlaySet.has("ma10") ? <Text style={[styles.legendText, { color: "#F9844A" }]}>MA10</Text> : null}
+        {overlaySet.has("ma20") ? <Text style={[styles.legendText, { color: palette.primary }]}>MA20</Text> : null}
+        {overlaySet.has("ma60") ? <Text style={[styles.legendText, { color: "#B58CFF" }]}>MA60</Text> : null}
+        {overlaySet.has("bollinger") ? <Text style={[styles.legendText, { color: "#2AB5F6" }]}>布林带</Text> : null}
         <Text style={styles.windowText}>可见 {visibleCandles.length} 根</Text>
       </View>
       <View pointerEvents="none" style={styles.gestureCopy}>

@@ -6,6 +6,8 @@ export type WorkbenchStackParamList = {
   StrategyOverview: { strategyId?: string } | undefined;
   StrategySymbols: { strategyId: string };
   ExecutionFacts: { strategyId: string; kind: "positions" | "balances" | "orders" };
+  StrategyPositions: { strategyId: string };
+  StrategyWorkbenchDetail: { strategyId: string; section: "execution" | "decision" | "risk" };
   TradeLedger: { strategyId?: string } | undefined;
   FundingPnl: { strategyId?: string } | undefined;
 };

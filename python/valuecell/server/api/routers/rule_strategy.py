@@ -8,7 +8,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.schemas.base import SuccessResponse
@@ -55,6 +56,10 @@ from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     build_demo_daily_curve,
     list_demo_account_snapshots,
     record_demo_account_snapshot,
+)
+from valuecell.server.services.rule_strategy_manual_close_service import (
+    ManualCloseError,
+    execute_manual_close,
 )
 from valuecell.server.services.sandbox_exchange_trading_service import (
     SandboxExchangeTradingService,
@@ -148,6 +153,38 @@ class RuleStrategyTemplateInstantiateRequest(BaseModel):
         "paper_virtual", "dedicated_credential", "dedicated_subaccount"
     ] = "paper_virtual"
     credential_id: str | None = Field(default=None, min_length=1, max_length=36)
+class RuleStrategyManualCloseRequest(BaseModel):
+    """Explicit, typed confirmation for one-symbol or all-position Demo close."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["symbol", "all"]
+    symbol: str | None = Field(default=None, min_length=6, max_length=32)
+    confirmation: str = Field(min_length=10, max_length=64)
+    idempotency_key: str = Field(min_length=16, max_length=128)
+
+    @field_validator("symbol", mode="before")
+    @classmethod
+    def canonicalize_symbol(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().upper().replace("-", "/")
+        return value
+
+    @model_validator(mode="after")
+    def validate_confirmation(self) -> "RuleStrategyManualCloseRequest":
+        expected = (
+            "CLOSE ALL POSITIONS"
+            if self.scope == "all"
+            else f"CLOSE {self.symbol}"
+        )
+        if self.scope == "symbol" and self.symbol is None:
+            raise ValueError("symbol is required for a symbol close")
+        if self.scope == "all" and self.symbol is not None:
+            raise ValueError("symbol is forbidden for an all-position close")
+        if self.confirmation.strip().upper() != expected:
+            raise ValueError(f"confirmation must be exactly '{expected}'")
+        return self
+
 
 def create_rule_strategy_router(
     service: RuleStrategyService | None = None,
@@ -802,6 +839,39 @@ def create_rule_strategy_router(
                 detail={"code": "okx_demo_read_unavailable", "detail": str(exc)},
             ) from exc
         return SuccessResponse.create(data=data, msg="OKX Demo strategy execution retrieved")
+
+    @router.post(
+        "/{strategy_id}/manual-close",
+        response_model=SuccessResponse[dict[str, Any]],
+        status_code=202,
+    )
+    async def manual_close_strategy(
+        strategy_id: str,
+        request: RuleStrategyManualCloseRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_manage(principal)
+        require_tenant_permission(principal, "trade.execute")
+        try:
+            strategy = rule_service.get(strategy_id, principal.tenant_id)
+            data = await execute_manual_close(
+                db,
+                tenant_id=principal.tenant_id,
+                requested_by=principal.user_id,
+                strategy=strategy,
+                scope=request.scope,
+                symbol=request.symbol,
+                idempotency_key=request.idempotency_key,
+            )
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ManualCloseError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "manual_close_blocked", "detail": str(exc)},
+            ) from exc
+        return SuccessResponse.create(data=data, msg="Manual close command submitted")
 
     @router.get(
         "/{strategy_id}/account", response_model=SuccessResponse[dict[str, Any]]

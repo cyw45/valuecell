@@ -720,4 +720,50 @@ def migrate_strategy_demo_account_snapshots(session: Session) -> bool:
         "Applied schema migration {version}",
         version=STRATEGY_DEMO_SNAPSHOT_MIGRATION_VERSION,
     )
+
+
+    return True
+
+
+MANUAL_CLOSE_MIGRATION_VERSION = "20260814_rule_strategy_manual_close_v1"
+MANUAL_CLOSE_MIGRATION_LOCK_KEY = 7720250725
+
+
+def migrate_rule_strategy_manual_close(session: Session) -> bool:
+    """Create durable manual-close command storage before enabling the route."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "manual close migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": MANUAL_CLOSE_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": MANUAL_CLOSE_MIGRATION_VERSION},
+    ).first():
+        return False
+    from valuecell.server.db.models.rule_strategy_manual_close import RuleStrategyManualCloseCommand
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[RuleStrategyManualCloseCommand.__table__],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": MANUAL_CLOSE_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info("Applied schema migration {version}", version=MANUAL_CLOSE_MIGRATION_VERSION)
     return True

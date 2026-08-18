@@ -12,6 +12,7 @@ export type ConfirmSheetProps = PropsWithChildren<{
   cancelLabel?: string;
   destructive?: boolean;
   confirming?: boolean;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }>;
@@ -24,6 +25,7 @@ export function ConfirmSheet({
   cancelLabel,
   destructive = false,
   confirming = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
   children,
@@ -54,7 +56,7 @@ export function ConfirmSheet({
           <Text style={styles.message}>{message}</Text>
           {children}
           <View style={styles.actions}>
-            <Pressable accessibilityRole="button" disabled={confirming} onPress={onConfirm} style={({ pressed }) => [styles.confirm, confirming && { opacity: 0.55 }, pressed && !confirming && { opacity: 0.78 }]}>
+            <Pressable accessibilityRole="button" disabled={confirming || confirmDisabled} onPress={onConfirm} style={({ pressed }) => [styles.confirm, (confirming || confirmDisabled) && { opacity: 0.55 }, pressed && !confirming && !confirmDisabled && { opacity: 0.78 }]}>
               {confirming ? <ActivityIndicator color={actionColor} /> : null}
               <Text style={styles.confirmText}>{confirmLabel ?? t("common.confirm")}</Text>
             </Pressable>

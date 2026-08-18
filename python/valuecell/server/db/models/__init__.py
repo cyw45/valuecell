@@ -37,6 +37,7 @@ from .rule_strategy_validation import (
     RuleStrategyValidationPoint,
     RuleStrategyValidationRun,
 )
+from .rule_strategy_manual_close import RuleStrategyManualCloseCommand
 from .rule_strategy_text_import_job import RuleStrategyTextImportJobRecord
 from .tenant import SaaSUser, Tenant, TenantMembership, TenantProfile
 from .tenant_credential import TenantCredential
@@ -82,6 +83,7 @@ __all__ = [
     "RuleStrategyRiskState",
     "RuleStrategyValidationDataset",
     "RuleStrategyValidationFill",
+    "RuleStrategyManualCloseCommand",
     "RuleStrategyValidationPoint",
     "RuleStrategyValidationRun",
     "RuleStrategyTextImportJobRecord",

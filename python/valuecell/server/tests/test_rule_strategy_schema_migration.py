@@ -326,3 +326,15 @@ def test_demo_snapshot_migration_is_registered_before_scheduler_startup():
     assert app_source.index("migrate_strategy_demo_account_snapshots(session)") < app_source.index(
         "await _scheduler.start()"
     )
+
+
+def test_manual_close_migration_is_registered_before_scheduler_startup():
+    from pathlib import Path
+
+    source = Path(__file__).parents[1] / "api" / "app.py"
+    app_source = source.read_text(encoding="utf-8")
+
+    assert "migrate_rule_strategy_manual_close(session)" in app_source
+    assert app_source.index("migrate_rule_strategy_manual_close(session)") < app_source.index(
+        "await _scheduler.start()"
+    )

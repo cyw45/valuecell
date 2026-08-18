@@ -651,11 +651,45 @@ export type CreateSandboxOrderSubmission = Omit<
   "idempotency_key"
 >;
 
+export type RuleStrategyManualCloseScope = "symbol" | "all";
+export interface RuleStrategyManualCloseRequest {
+  scope: RuleStrategyManualCloseScope;
+  symbol?: string;
+  confirmation: string;
+  idempotency_key: string;
+}
+export interface RuleStrategyManualCloseResult {
+  symbol?: string;
+  requested_quantity?: string;
+  requested_quote?: string;
+  status: string;
+  reason?: string;
+  order_id?: string | null;
+  exchange_order_id?: string | null;
+}
+export interface RuleStrategyManualCloseResponse {
+  command_id: string;
+  strategy_id: string;
+  scope: RuleStrategyManualCloseScope;
+  symbol: string | null;
+  status: string;
+  results: RuleStrategyManualCloseResult[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+
 export interface SandboxOrder {
   id: string;
   credential_id: string;
   provider: SandboxExchangeProvider;
   client_order_id: string;
+  filled_quantity?: string | number | null;
+  average_fill_price?: string | number | null;
+  filled_quote?: string | number | null;
+  remaining_quantity?: string | number | null;
+  error_message?: string | null;
+  filled_at?: string | null;
   symbol: string;
   side: SandboxOrderSide;
   type: SandboxOrderType;

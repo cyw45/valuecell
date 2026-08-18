@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { Boxes, ChevronRight, Download, Landmark, LineChart, ListFilter, Pause, Pencil, Play, ReceiptText, RefreshCw, Trash2, Wallet } from "lucide-react-native";
+import { Boxes, ChevronRight, Download, Landmark, LineChart, ListFilter, Pause, Pencil, Play, ReceiptText, RefreshCw, ShieldAlert, Trash2, Wallet } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { api } from "../api";
 import { accessGate, canMutate } from "../access";
@@ -88,6 +88,11 @@ function demoPositionValue(
 function formatNumericQuote(value: number | string | null | undefined): string {
   const number = typeof value === "string" ? Number(value) : value;
   return typeof number === "number" ? formatQuote(number) : "—";
+}
+
+function numberValue(value: number | string | null | undefined): number | undefined {
+  const number = typeof value === "string" ? Number(value) : value;
+  return typeof number === "number" && Number.isFinite(number) ? number : undefined;
 }
 
 function demoWalletPoints(
@@ -186,6 +191,12 @@ export default function StrategyOverviewScreen() {
     enabled: Boolean(activeId && !isDemo),
     refetchInterval: 15_000,
   });
+  const trades = useQuery({
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "trades", 100],
+    queryFn: () => api.strategyLog(activeId, "trades", 100),
+    enabled: Boolean(activeId && !isDemo),
+    refetchInterval: 15_000,
+  });
   const evaluations = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "evaluations", 20],
     queryFn: () => api.strategyEvaluations(activeId, 20),
@@ -194,7 +205,7 @@ export default function StrategyOverviewScreen() {
   });
   const demo = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "demo-execution", "summary"],
-    queryFn: () => api.strategyDemoExecution(activeId, 1, 1),
+    queryFn: () => api.strategyDemoExecution(activeId, 1, 10),
     enabled: Boolean(activeId && isDemo),
     retry: false,
     refetchInterval: 15_000,
@@ -285,6 +296,11 @@ export default function StrategyOverviewScreen() {
   ).length;
   const previewSymbols = strategy.config.symbols.slice(0, 3);
   const remainingSymbolCount = Math.max(0, strategy.config.symbols.length - previewSymbols.length);
+  const totalPnl = isDemo
+    ? demoData?.pnl.total_pnl ?? demoData?.pnl.total ?? demoData?.pnl.value
+    : paperAccount
+      ? paperAccount.realized_pnl_quote + paperAccount.unrealized_pnl_quote
+      : undefined;
 
   return (
     <ScrollView
@@ -326,16 +342,10 @@ export default function StrategyOverviewScreen() {
       </View>
 
       <View style={styles.metricGrid}>
-        <MetricCard caption={isDemo ? "OKX Demo 交易所仓位名义价值" : "纸面仓位按服务端标记价格计算"} label="持仓价值" style={styles.metric} tone="default" value={formatQuote(positionValue)} />
+        <MetricCard caption={isDemo ? "OKX Demo 钱包总估值" : `可用资金 ${formatQuote(paperAccount?.quote_balance)}`} label="资金总览" style={styles.metric} tone="default" value={formatQuote(isDemo ? numberValue(demoData?.account.data.total_usdt_value) : paperAccount?.equity_quote)} />
         <MetricCard caption="当前工作区未归档的运行策略" label="运行策略" style={styles.metric} tone={runningCount > 0 ? "positive" : "default"} value={`${runningCount} 个`} />
-        <MetricCard caption={strategy.config.symbols.join(" · ") || "未配置观察标的"} label="观察币种" style={styles.metric} tone="warning" value={`${strategy.config.symbols.length} 个`} />
-        <MetricCard
-          caption={latestEvaluation ? latestEvaluation.conditions.length ? conditionStateSummary(latestEvaluation.conditions) : "本次评估未返回条件记录" : evaluations.isLoading ? "正在读取最近评估" : "服务端尚无评估记录"}
-          label="活动条件状态"
-          style={styles.metric}
-          tone={activeConditionState ? conditionStateTone(activeConditionState) : "default"}
-          value={activeConditionState ? conditionStateLabel(activeConditionState) : latestEvaluation ? "未返回条件" : evaluations.isLoading ? "同步中" : "尚无评估"}
-        />
+        <MetricCard caption={strategy.config.symbols.join(" · ") || "未配置观察标的"} label="币种观察" style={styles.metric} tone="warning" value={`${strategy.config.symbols.length} 个`} />
+        <MetricCard caption="服务端账户快照累计" label="收益 / 亏损" style={styles.metric} tone={typeof totalPnl === "number" && totalPnl >= 0 ? "positive" : "warning"} value={formatNumericQuote(totalPnl)} />
       </View>
 
 
@@ -361,8 +371,7 @@ export default function StrategyOverviewScreen() {
               <View style={styles.accountMetric}><Text style={styles.accountLabel}>已成交订单</Text><Text style={styles.accountValue}>{demoData?.trade_summary?.filled_order_count ?? "—"}</Text></View>
             </View>
             <View style={styles.detailLinks}>
-              <ListRow accessibilityLabel="查看交易所仓位" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "positions" })} subtitle={`${demoPositions.length} 项连接级仓位 · 不代表策略分配`} title="交易所仓位" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
-              <ListRow accessibilityLabel="查看交易所余额" leading={<Landmark color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "balances" })} subtitle={`${demoBalances.length} 项连接级余额`} title="交易所余额" />
+              <ListRow accessibilityLabel="查看交易所持仓" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyPositions", { strategyId: activeId })} subtitle={`${demoPositions.length} 项连接级仓位 · 不代表策略分配`} title="我的持仓" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
               <ListRow accessibilityLabel="查看策略归属订单" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "orders" })} subtitle={`共 ${demoData?.pagination.total_items ?? 0} 笔 · 已成交 ${demoData?.trade_summary?.filled_order_count ?? 0} 笔`} title="策略归属订单" />
               <ListRow accessibilityLabel="查看 Demo 资金费与 PnL" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看交易所 PnL 与权益曲线" title="资金费与 PnL" />
             </View>
@@ -380,7 +389,7 @@ export default function StrategyOverviewScreen() {
               <View style={styles.accountMetric}><Text style={styles.accountLabel}>可用资金</Text><Text style={styles.accountValue}>{formatQuote(paperAccount?.quote_balance)}</Text></View>
             </View>
             <View style={styles.detailLinks}>
-              <ListRow accessibilityLabel="查看纸面仓位" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "positions" })} subtitle={`${paperPositions.length} 项持仓 · 策略上限 ${strategy.config.risk.max_positions}`} title="纸面账户仓位" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
+              <ListRow accessibilityLabel="查看纸面持仓" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyPositions", { strategyId: activeId })} subtitle={`${paperPositions.length} 项持仓 · 策略上限 ${strategy.config.risk.max_positions}`} title="我的持仓" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
               <ListRow accessibilityLabel="查看全部纸面成交" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId })} subtitle="查看服务端归因成交记录" title="成交账本" />
               <ListRow accessibilityLabel="查看资金费与权益曲线" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看权益曲线与资金费影响" title="资金费与 PnL" />
             </View>
@@ -391,17 +400,16 @@ export default function StrategyOverviewScreen() {
         </>
       )}
 
-      {evaluations.isError ? <StatePanel actionLabel="重试" description={(evaluations.error as Error).message} onAction={() => void evaluations.refetch()} title="最近评估暂不可用" tone="error" /> : null}
-      <SectionCard actionLabel="策略详情" description={latestEvaluation ? `最近评估：${formatTimestamp(latestEvaluation.evaluated_at)} · ${evaluationReason(latestEvaluation.reason_code, latestEvaluation.reason)}` : "服务端尚无已保存的策略评估。"} onAction={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })} title="策略决策">
-        <Text style={styles.decisionSummary}>{latestEvaluation ? `${strategyActionLabel(latestEvaluation.action)} · ${conditionStateSummary(latestEvaluation.conditions)}` : "查看策略详情、条件诊断与执行漏斗。"}</Text>
+      <SectionCard actionLabel="全部交易" description="最新交易明细按页查看；Demo 展示策略归属交易所订单。" onAction={() => navigation.navigate(isDemo ? "ExecutionFacts" : "TradeLedger", isDemo ? { strategyId: activeId, kind: "orders" } : { strategyId: activeId })} title="交易明细">
+        {isDemo ? demoData?.orders.length ? demoData.orders.slice(0, 3).map((order) => <View key={order.id} style={styles.orderRow}><View style={styles.rowCopy}><Text style={styles.positionSymbol}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · {formatTimestamp(order.updated_at)}</Text></View><Text style={styles.orderStatus}>{orderStatusLabel(order.status)}</Text></View>) : <Text style={styles.muted}>当前没有策略归属订单。</Text> : trades.data?.entries.length ? trades.data.entries.slice(0, 3).map((trade) => <View key={trade.evaluation_id} style={styles.orderRow}><View style={styles.rowCopy}><Text style={styles.positionSymbol}>{strategyActionLabel(trade.action)} · {trade.symbol}</Text><Text style={styles.muted}>{formatTimestamp(trade.evaluated_at)}</Text></View><Text style={styles.positionValue}>{formatQuote(trade.quote_amount)}</Text></View>) : <Text style={styles.muted}>服务端尚无归因成交。</Text>}
       </SectionCard>
 
-      <SectionCard description="服务端持久化的候选池与账户级阻断原因。" title="监控池与风险">
-        <View style={styles.stateRows}>
-          <Text style={styles.stateText}>待准入 {monitorState.data?.filter((item) => item.state === "candidate").length ?? 0} · 已准入 {monitorState.data?.filter((item) => item.state === "admitted").length ?? 0} · 持仓保留 {monitorState.data?.filter((item) => item.state === "held").length ?? 0} · 已移除 {monitorState.data?.filter((item) => item.state === "removed").length ?? 0}</Text>
-          <Text style={styles.stateText}>风险状态：{displayRiskState(riskState.data?.state)}</Text>
-          <Text style={styles.muted}>{riskState.data?.reason_detail?.match(/[\u4e00-\u9fff]/) ? riskState.data.reason_detail : "暂无持久化风险原因"}</Text>
-          {monitorState.data?.slice(0, 4).map((item) => <Text key={item.symbol} style={styles.muted}>{item.symbol} · {displayMonitorState(item.state)} · {item.reason_detail?.match(/[\u4e00-\u9fff]/) ? item.reason_detail : "暂无中文说明"}</Text>)}
+      {evaluations.isError ? <StatePanel actionLabel="重试" description={(evaluations.error as Error).message} onAction={() => void evaluations.refetch()} title="最近评估暂不可用" tone="error" /> : null}
+      <SectionCard description="执行、决策和风控细节进入专用页面，首页只保留入口。" title="策略详情入口">
+        <View style={styles.detailLinks}>
+          <ListRow accessibilityLabel="查看执行概览" leading={<LineChart color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "execution" })} subtitle="执行环境、策略代际和服务端执行状态" title="执行概览" />
+          <ListRow accessibilityLabel="查看策略决策" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "decision" })} subtitle={latestEvaluation ? `最近评估 ${formatTimestamp(latestEvaluation.evaluated_at)}` : "查看条件、执行漏斗和决策原因"} title="策略决策说明" />
+          <ListRow accessibilityLabel="查看监控池和风险" leading={<ShieldAlert color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "risk" })} subtitle="查看监控池状态和账户级风险原因" title="监控池与风险" />
         </View>
       </SectionCard>
       <SectionCard
