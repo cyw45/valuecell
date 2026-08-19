@@ -2,6 +2,7 @@ import {
   BarChart,
   CandlestickChart as ECandlestickChart,
   LineChart,
+  ScatterChart,
 } from "echarts/charts";
 import {
   AxisPointerComponent,
@@ -25,6 +26,7 @@ import { useStockColors } from "@/store/settings-store";
 echarts.use([
   BarChart,
   ECandlestickChart,
+  ScatterChart,
   LineChart,
   GridComponent,
   LegendComponent,
@@ -49,9 +51,17 @@ export interface CandlestickMovingAverage {
   color?: string;
 }
 
+export interface CandlestickTradeMarker {
+  time: string;
+  price: number;
+  side: "buy" | "sell";
+  label?: string;
+}
+
 interface CandlestickChartProps {
   data: CandlestickData[];
   movingAverages?: CandlestickMovingAverage[];
+  tradeMarkers?: CandlestickTradeMarker[];
   currentPrice?: number | null;
   width?: number | string;
   height?: number | string;
@@ -65,6 +75,7 @@ interface CandlestickChartProps {
 function CandlestickChart({
   data,
   movingAverages = [],
+  tradeMarkers = [],
   currentPrice,
   width = "100%",
   height = 500,
@@ -126,6 +137,24 @@ function CandlestickChart({
             : undefined,
       },
     ];
+    for (const marker of tradeMarkers) {
+      series.push({
+        name: marker.label ?? (marker.side === "buy" ? "买入" : "卖出"),
+        type: "scatter",
+        data: [[TimeUtils.formatUTC(marker.time, dateFormat), marker.price]],
+        symbol: "circle",
+        symbolSize: 11,
+        itemStyle: { color: marker.side === "buy" ? "#10b981" : "#f43f5e" },
+        label: {
+          show: true,
+          formatter: marker.label ?? (marker.side === "buy" ? "买入" : "卖出"),
+          position: marker.side === "buy" ? "bottom" : "top",
+          color: marker.side === "buy" ? "#10b981" : "#f43f5e",
+          fontSize: 11,
+        },
+        z: 10,
+      });
+    }
     for (const movingAverage of movingAverages) {
       series.push({
         name: movingAverage.name,
@@ -265,6 +294,7 @@ function CandlestickChart({
   }, [
     data,
     movingAverages,
+    tradeMarkers,
     currentPrice,
     stockColors,
     showVolume,

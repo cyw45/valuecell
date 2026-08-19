@@ -28,6 +28,7 @@ export type MarketStackParamList = {
 export type AccountStackParamList = {
   Account: undefined;
   Preferences: undefined;
+  ChangePassword: undefined;
   SandboxConnections: undefined;
   SandboxConnectionEditor: { connectionId?: string } | undefined;
   SandboxConnectionDetail: { connectionId: string };

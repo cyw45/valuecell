@@ -3,6 +3,7 @@ import { apiClient } from "@/lib/api-client";
 import type { ApiResponse } from "@/lib/api-client";
 import type {
   SaaSAuthResponse,
+  SaaSChangePasswordRequest,
   SaaSLoginRequest,
   SaaSMeResponse,
   SaaSRegisterRequest,
@@ -25,6 +26,17 @@ export function useLogin() {
       apiClient.post<ApiResponse<SaaSAuthResponse>>(
         "/saas/auth/login",
         request,
+      ),
+  });
+}
+
+export function useChangePassword() {
+  return useMutation({
+    mutationFn: (request: SaaSChangePasswordRequest) =>
+      apiClient.post<ApiResponse<{ updated: boolean }>>(
+        "/saas/auth/change-password",
+        request,
+        { requiresAuth: true },
       ),
   });
 }

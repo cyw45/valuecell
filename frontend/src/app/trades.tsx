@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import {
   useExportRuleStrategy,
@@ -50,6 +50,7 @@ function formatDate(value: string) {
 export default function TradesPage() {
   const { t } = useTranslation();
   const [strategyId] = useActiveRuleStrategyId();
+  const [searchParams] = useSearchParams();
   const [demoOrdersPage, setDemoOrdersPage] = useState(1);
   const exportStrategy = useExportRuleStrategy();
   const strategyQuery = useRuleStrategy(strategyId);
@@ -70,6 +71,7 @@ export default function TradesPage() {
   useEffect(() => {
     setDemoOrdersPage(1);
   }, [strategyId]);
+  const selectedOrderId = searchParams.get("orderId");
   const paperTrades = paperTradesQuery.data ?? [];
   const demoOrders = demoExecutionQuery.data?.orders ?? [];
   const demoOrdersPagination = demoExecutionQuery.data?.pagination;
@@ -193,27 +195,15 @@ export default function TradesPage() {
                   </TableHeader>
                   <TableBody>
                     {demoOrders.map((order) => (
-                      <TableRow key={order.id}>
-                        <TableCell className="whitespace-nowrap">
-                          {formatDate(order.created_at)}
-                        </TableCell>
-                        <TableCell>{order.symbol}</TableCell>
-                        <TableCell className="uppercase">
-                          {order.side}
-                        </TableCell>
+                      <TableRow className={selectedOrderId === order.id ? "bg-sky-500/10" : ""} key={order.id}>
+                        <TableCell className="whitespace-nowrap">{formatDate(order.created_at)}</TableCell>
+                        <TableCell><Link className="font-medium text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(order.symbol.replace("/", "-"))}&orderId=${encodeURIComponent(order.id)}${order.evaluation_id ? `&evaluationId=${encodeURIComponent(order.evaluation_id)}` : ""}`}>{order.symbol}</Link></TableCell>
+                        <TableCell className="uppercase">{order.side}</TableCell>
                         <TableCell>{order.type}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{order.status}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {order.requested_quote} USDT
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {demoOrderFilledQuantityLabel(order)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {demoOrderAveragePriceLabel(order)}
-                        </TableCell>
+                        <TableCell><Badge variant="outline">{order.status}</Badge></TableCell>
+                        <TableCell className="text-right tabular-nums">{order.requested_quote} USDT</TableCell>
+                        <TableCell className="text-right tabular-nums">{demoOrderFilledQuantityLabel(order)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{demoOrderAveragePriceLabel(order)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -282,30 +272,14 @@ export default function TradesPage() {
                   <TableBody>
                     {paperTrades.map((trade) => (
                       <TableRow key={`${trade.evaluation_id}-${trade.action}`}>
-                        <TableCell className="whitespace-nowrap">
-                          {formatDate(trade.evaluated_at)}
-                        </TableCell>
-                        <TableCell className="capitalize">
-                          {trade.action}
-                        </TableCell>
-                        <TableCell>{trade.symbol}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {trade.price.toFixed(4)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {trade.quote_amount.toFixed(2)} USDT
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {trade.realized_pnl_quote.toFixed(2)} USDT
-                        </TableCell>
-                        <TableCell className="whitespace-normal break-words">
-                          {trade.reason}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant="outline">
-                            {trade.execution.replace("_", " ")}
-                          </Badge>
-                        </TableCell>
+                        <TableCell className="whitespace-nowrap">{formatDate(trade.evaluated_at)}</TableCell>
+                        <TableCell className="capitalize">{trade.action}</TableCell>
+                        <TableCell><Link className="font-medium text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(trade.symbol)}&evaluationId=${encodeURIComponent(trade.evaluation_id)}`}>{trade.symbol}</Link></TableCell>
+                        <TableCell className="text-right tabular-nums">{trade.price.toFixed(4)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{trade.quote_amount.toFixed(2)} USDT</TableCell>
+                        <TableCell className="text-right tabular-nums">{trade.realized_pnl_quote.toFixed(2)} USDT</TableCell>
+                        <TableCell className="whitespace-normal break-words">{trade.reason}</TableCell>
+                        <TableCell><Badge variant="outline">{trade.execution.replace("_", " ")}</Badge></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -315,19 +289,9 @@ export default function TradesPage() {
           )
         ) : (
           <EmptyState
-            action={
-              isDemo ? "配置策略" : t("saas.operations.trades.actions.evaluate")
-            }
-            description={
-              isDemo
-                ? "该策略尚无 OKX Demo 订单。纸面交易记录不会显示在此视图中。"
-                : t("saas.operations.trades.empty.description")
-            }
-            title={
-              isDemo
-                ? "暂无 OKX Demo 订单"
-                : t("saas.operations.trades.empty.title")
-            }
+            action={isDemo ? "配置策略" : t("saas.operations.trades.actions.evaluate")}
+            description={isDemo ? "该策略尚无 OKX Demo 订单。纸面交易记录不会显示在此视图中。" : t("saas.operations.trades.empty.description")}
+            title={isDemo ? "暂无 OKX Demo 订单" : t("saas.operations.trades.empty.title")}
           />
         )}
 

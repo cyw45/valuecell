@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -27,11 +27,13 @@ const tenantTranslations = {
 export default function AuthScreen() {
   const { t } = useI18n();
   const { tokens } = useTheme();
-  const { authNotice, dismissAuthNotice, rememberedEmail, register, signIn } = useSession();
+  const { authNotice, dismissAuthNotice, rememberedEmail, rememberedPassword, register, signIn } = useSession();
+  const scrollRef = useRef<ScrollView>(null);
   const [mode, setMode] = useState<AuthMode>("login");
   const [tenantType, setTenantType] = useState<TenantType>("personal");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
   const [organizationName, setOrganizationName] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -40,7 +42,11 @@ export default function AuthScreen() {
 
   useEffect(() => {
     if (!email && rememberedEmail) setEmail(rememberedEmail);
-  }, [email, rememberedEmail]);
+    if (!password && rememberedPassword) {
+      setPassword(rememberedPassword);
+      setRememberPassword(true);
+    }
+  }, [email, password, rememberedEmail, rememberedPassword]);
 
   const styles = useMemo(() => StyleSheet.create({
     page: { backgroundColor: tokens.canvas, flex: 1 },
@@ -74,6 +80,11 @@ export default function AuthScreen() {
     modeButtonText: { color: tokens.primary, fontSize: 14, fontWeight: "800" },
     securityRow: { alignItems: "center", flexDirection: "row", gap: spacing.xs },
     securityCopy: { color: tokens.textMuted, flex: 1, fontSize: 12, lineHeight: 17 },
+    rememberRow: { alignItems: "center", flexDirection: "row", gap: spacing.xs, minHeight: 36 },
+    rememberBox: { alignItems: "center", borderColor: tokens.border, borderRadius: 4, borderWidth: 1, height: 20, justifyContent: "center", width: 20 },
+    rememberBoxActive: { backgroundColor: tokens.primary, borderColor: tokens.primary },
+    rememberTick: { color: tokens.canvas, fontSize: 13, fontWeight: "900" },
+    rememberText: { color: tokens.textMuted, fontSize: 13 },
   }), [tokens]);
 
   function switchMode(nextMode: AuthMode) {
@@ -109,7 +120,7 @@ export default function AuthScreen() {
           organization_name: tenantType === "enterprise" ? organizationName.trim() : undefined,
         });
       } else {
-        await signIn(email, password);
+        await signIn(email, password, rememberPassword);
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t(isRegistration ? "auth.failed.register" : "auth.failed.login"));
@@ -121,10 +132,10 @@ export default function AuthScreen() {
   const workspacePlaceholder = t(tenantType === "enterprise" ? "auth.workspace.enterprise" : "auth.workspace.personal");
 
   return (
-    <KeyboardAvoidingView behavior={Platform.select({ ios: "padding", default: undefined })} style={styles.page}>
+    <KeyboardAvoidingView behavior={Platform.select({ ios: "padding", android: "height" })} style={styles.page}>
       <View pointerEvents="none" style={styles.orbPrimary} />
       <View pointerEvents="none" style={styles.orbSecondary} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView automaticallyAdjustKeyboardInsets contentContainerStyle={styles.content} keyboardDismissMode="interactive" keyboardShouldPersistTaps="handled" ref={scrollRef}>
         <View style={styles.brandRow}>
           <View style={styles.brandIcon}><BarChart3 color={tokens.canvas} size={21} /></View>
           <Text style={styles.brand}>VALUE CELL</Text>
@@ -147,6 +158,7 @@ export default function AuthScreen() {
               onChangeText={setEmail}
               placeholder={t("auth.email")}
               placeholderTextColor={tokens.textMuted}
+              onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
               style={styles.input}
               textContentType="username"
               value={email}
@@ -163,9 +175,11 @@ export default function AuthScreen() {
               secureTextEntry
               style={styles.input}
               textContentType={isRegistration ? "newPassword" : "password"}
+              onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
               value={password}
             />
           </View>
+          {!isRegistration ? <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: rememberPassword }} onPress={() => setRememberPassword((current) => !current)} style={styles.rememberRow}><View style={[styles.rememberBox, rememberPassword && styles.rememberBoxActive]}>{rememberPassword ? <Text style={styles.rememberTick}>✓</Text> : null}</View><Text style={styles.rememberText}>{t("auth.rememberPassword")}</Text></Pressable> : null}
           {isRegistration ? (
             <>
               <Text style={styles.tenantLabel}>{t("auth.tenantType")}</Text>
@@ -195,6 +209,7 @@ export default function AuthScreen() {
                   placeholder={workspacePlaceholder}
                   placeholderTextColor={tokens.textMuted}
                   style={styles.input}
+                  onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                   value={workspaceName}
                 />
               </View>
@@ -208,6 +223,7 @@ export default function AuthScreen() {
                     placeholder={t("auth.organizationName")}
                     placeholderTextColor={tokens.textMuted}
                     style={styles.input}
+                    onFocus={() => scrollRef.current?.scrollToEnd({ animated: true })}
                     value={organizationName}
                   />
                 </View>

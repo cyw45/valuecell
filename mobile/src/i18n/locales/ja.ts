@@ -20,6 +20,7 @@ export const ja = {
   "auth.register.copy": "個人またはエンタープライズの Value Cell ワークスペースを設定します",
   "auth.email": "業務用メールアドレス",
   "auth.password": "パスワード",
+  "auth.rememberPassword": "この端末にパスワードを保存",
   "auth.workspace.personal": "個人ワークスペース名",
   "auth.workspace.enterprise": "ワークスペース名",
   "auth.tenantType": "ワークスペースの種類",

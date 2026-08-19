@@ -25,6 +25,7 @@ export default function LoginPage() {
   const registerMutation = useRegister();
 
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
+  const [rememberPassword, setRememberPassword] = useState(false);
   const [registerForm, setRegisterForm] = useState({
     email: "",
     password: "",
@@ -41,6 +42,14 @@ export default function LoginPage() {
         if (!session?.access_token || !session.user_id || !session.tenant_id) {
           toast.error(t("saas.login.errors.incompleteAuthentication"));
           return;
+        }
+        if (rememberPassword) {
+          window.localStorage.setItem(
+            "valuecell.web.remembered-email",
+            loginForm.email.trim().toLowerCase(),
+          );
+        } else {
+          window.localStorage.removeItem("valuecell.web.remembered-email");
         }
         setSaaSSession({
           access_token: session.access_token,
@@ -90,7 +99,7 @@ export default function LoginPage() {
   return (
     <main
       aria-label={t("saas.login.aria.authentication")}
-      className="flex size-full items-center justify-center bg-muted/40"
+      className="flex min-h-screen w-full items-start justify-center overflow-y-auto bg-muted/40 py-8 sm:items-center"
     >
       <div className="w-full max-w-sm px-4">
         <div className="mb-8 text-center">
@@ -130,9 +139,7 @@ export default function LoginPage() {
                       autoComplete="email"
                       required
                       value={loginForm.email}
-                      onChange={(e) =>
-                        setLoginForm((f) => ({ ...f, email: e.target.value }))
-                      }
+                      onChange={(e) => setLoginForm((f) => ({ ...f, email: e.target.value }))}
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -145,14 +152,10 @@ export default function LoginPage() {
                       autoComplete="current-password"
                       required
                       value={loginForm.password}
-                      onChange={(e) =>
-                        setLoginForm((f) => ({
-                          ...f,
-                          password: e.target.value,
-                        }))
-                      }
+                      onChange={(e) => setLoginForm((f) => ({ ...f, password: e.target.value }))}
                     />
                   </div>
+                  <label className="flex cursor-pointer items-center gap-2 text-muted-foreground text-sm"><input checked={rememberPassword} onChange={(e) => setRememberPassword(e.target.checked)} type="checkbox" />记住登录邮箱；密码由浏览器密码管理器保管</label>
                   <Button
                     type="submit"
                     className="w-full"

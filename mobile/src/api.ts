@@ -5,6 +5,7 @@ import type * as Types from "./types";
 
 const ACCESS_TOKEN_KEY = "valuecell.mobile.access-token";
 const REMEMBERED_EMAIL_KEY = "valuecell.mobile.remembered-email";
+const REMEMBERED_PASSWORD_KEY = "valuecell.mobile.remembered-password";
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://vc.zhiweionline.com/api/v1";
 
@@ -248,6 +249,13 @@ class MobileApiClient {
     request: Types.SaaSRegisterRequest,
   ): Promise<Types.SaaSAuthResponse> =>
     this.publicRequest<Types.SaaSAuthResponse>("/saas/auth/register", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  changePassword = (
+    request: Types.SaaSChangePasswordRequest,
+  ): Promise<{ updated: boolean }> =>
+    this.authenticatedRequest<{ updated: boolean }>("/saas/auth/change-password", {
       method: "POST",
       body: JSON.stringify(request),
     });
@@ -847,4 +855,19 @@ export async function persistRememberedEmail(email: string): Promise<void> {
     return;
   }
   await SecureStore.setItemAsync(REMEMBERED_EMAIL_KEY, email);
+}
+
+export async function loadRememberedPassword(): Promise<string | null> {
+  if (Platform.OS === "web") return null;
+  return SecureStore.getItemAsync(REMEMBERED_PASSWORD_KEY);
+}
+
+export async function persistRememberedPassword(password: string): Promise<void> {
+  if (Platform.OS === "web") return;
+  await SecureStore.setItemAsync(REMEMBERED_PASSWORD_KEY, password);
+}
+
+export async function clearRememberedPassword(): Promise<void> {
+  if (Platform.OS === "web") return;
+  await SecureStore.deleteItemAsync(REMEMBERED_PASSWORD_KEY);
 }

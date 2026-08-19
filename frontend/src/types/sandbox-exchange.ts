@@ -90,6 +90,11 @@ export interface SandboxOrder {
   sandbox: true;
   error_code?: string | null;
   error_message?: string | null;
+  strategy_id?: string | null;
+  evaluation_id?: string | null;
+  execution_generation?: number | null;
+  execution_source?: string | null;
+  execution_intent_id?: string | null;
   filled_at?: string | null;
   created_at: string;
   updated_at: string;

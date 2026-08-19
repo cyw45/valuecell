@@ -27,6 +27,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Link } from "react-router";
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
 import {
   useRuleStrategy,
@@ -87,6 +88,7 @@ import {
 import CandlestickChartComponent, {
   type CandlestickData,
   type CandlestickMovingAverage,
+  type CandlestickTradeMarker,
 } from "@/components/valuecell/charts/candlestick-chart";
 import {
   MarketIndicatorPanelChart,
@@ -420,6 +422,8 @@ export default function DashboardPage() {
     [activeSymbols, trackedSymbols],
   );
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USDT");
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
   const [marketInterval, setMarketInterval] =
     useState<(typeof MARKET_INTERVALS)[number]>("1h");
   const [historyRange, setHistoryRange] =
@@ -548,6 +552,26 @@ export default function DashboardPage() {
         color: ["#fbbf24", "#38bdf8", "#c084fc"][index],
       }))
     : [];
+  const selectedOrder = demoOrders.find((order) => order.id === selectedOrderId);
+  const selectedEvaluation = evaluations.find((evaluation) =>
+    evaluation.evaluation_id === selectedEvaluationId ||
+    evaluation.evaluation_id === selectedOrder?.evaluation_id,
+  );
+  const tradeMarkers = useMemo<CandlestickTradeMarker[]>(() => {
+    const demoMarkers = selectedOrder ? [selectedOrder] : demoOrders;
+    if (isOkxDemo) {
+      return demoMarkers.flatMap((order) => {
+        const price = Number(order.average_fill_price);
+        const time = order.filled_at ?? order.updated_at ?? order.created_at;
+        return Number.isFinite(price) && price > 0 && time
+          ? [{ time, price, side: order.side, label: order.side === "buy" ? "买入" : "卖出" }]
+          : [];
+      });
+    }
+    return trades
+      .filter((trade) => !selectedEvaluationId || trade.evaluation_id === selectedEvaluationId)
+      .map((trade) => ({ time: trade.evaluated_at, price: trade.price, side: trade.action === "sell" || trade.action === "close" ? "sell" : "buy", label: trade.action === "sell" || trade.action === "close" ? "卖出" : "买入" }));
+  }, [demoOrders, isOkxDemo, selectedEvaluationId, selectedOrder, trades]);
   const account = ruleStrategy?.account;
   const demoUsdt = Number(
     demoBalance?.balances.find((balance) => balance.currency === "USDT")
@@ -1405,6 +1429,7 @@ export default function DashboardPage() {
                   currentPrice={market?.latest_price}
                   data={candles}
                   movingAverages={movingAverages}
+                  tradeMarkers={tradeMarkers}
                   loading={candlestickLoading}
                   height={410}
                   theme={isDark ? "dark" : "light"}
@@ -1452,10 +1477,7 @@ export default function DashboardPage() {
                           {toDashboardSymbol(symbol)}
                         </span>
                         <span className="block text-muted-foreground text-xs">
-                          {position.quantity.toFixed(6)} 个，成本价{" "}
-                          {position.entry_price == null
-                            ? "不可用"
-                            : compactCurrency.format(position.entry_price ?? 0)}
+                          {position.quantity.toFixed(6)} 个 · 买入价 {position.entry_price == null ? "不可用" : compactCurrency.format(position.entry_price)} · 当前价 {position.mark_price == null ? "不可用" : compactCurrency.format(position.mark_price)}
                         </span>
                       </span>
                       <span className="text-right tabular-nums">
@@ -1639,7 +1661,7 @@ export default function DashboardPage() {
                             <td className={cn("px-3 py-3 font-medium", order.side === "buy" ? "text-emerald-500" : "text-rose-500")}>
                               {order.side === "buy" ? "买入" : order.side === "sell" ? "卖出" : "未知方向"}
                             </td>
-                            <td className="whitespace-nowrap px-3 py-3 font-mono">{toDashboardSymbol(order.symbol)}</td>
+                            <td className="whitespace-nowrap px-3 py-3 font-mono"><Link className="text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(order.symbol.replace("/", "-"))}&orderId=${encodeURIComponent(order.id)}${order.evaluation_id ? `&evaluationId=${encodeURIComponent(order.evaluation_id)}` : ""}`}>{toDashboardSymbol(order.symbol)}</Link></td>
                             <td className="whitespace-nowrap px-3 py-3">{demoOrderStatusLabel(order.status)}</td>
                             <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.requested_quote)}</td>
                             <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.requested_quantity)}</td>

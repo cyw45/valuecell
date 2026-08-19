@@ -20,6 +20,7 @@ export const zh_TW = {
   "auth.register.copy": "建立個人或企業 Value Cell 工作區",
   "auth.email": "公司電子郵件",
   "auth.password": "密碼",
+  "auth.rememberPassword": "記住密碼（僅加密保存在本機）",
   "auth.workspace.personal": "個人工作區名稱",
   "auth.workspace.enterprise": "工作區名稱",
   "auth.tenantType": "工作區類型",

@@ -1,4 +1,4 @@
-import { ArrowRight, Building2, CreditCard, UsersRound } from "lucide-react";
+import { ArrowRight, Building2, CreditCard, KeyRound, UsersRound } from "lucide-react";
 import { Link } from "react-router";
 import { useSaaSAccess } from "@/api/saas-control";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -77,6 +77,17 @@ export default function WorkspacePage() {
             <p className="mt-3 text-muted-foreground text-sm">
               权限变化立即在服务端生效。
             </p>
+          </CardContent>
+        </Card>
+      </section>
+      <section>
+        <Card>
+          <CardHeader>
+            <CardTitle>账户安全</CardTitle>
+            <CardDescription>修改密码并管理当前浏览器的登录凭据。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline"><Link to="/workspace/security">修改密码 <KeyRound /></Link></Button>
           </CardContent>
         </Card>
       </section>

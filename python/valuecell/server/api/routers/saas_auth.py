@@ -61,6 +61,15 @@ class WorkspaceSwitchRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=36)
 
 
+
+
+class ChangePasswordRequest(BaseModel):
+    """Authenticated password rotation input."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=12, max_length=256)
 def create_saas_auth_router() -> APIRouter:
     """Create local MVP SaaS authentication endpoints."""
     router = APIRouter(prefix="/saas/auth", tags=["saas-auth"])
@@ -210,6 +219,24 @@ def create_saas_auth_router() -> APIRouter:
                 "email": user.email,
             },
             msg="SaaS workspace switched",
+        )
+
+    @router.post("/change-password", response_model=SuccessResponse[dict])
+    async def change_password(
+        request: ChangePasswordRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[dict]:
+        user = db.query(SaaSUser).filter(SaaSUser.id == principal.user_id).first()
+        if user is None or not verify_password(request.current_password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Current password is incorrect")
+        try:
+            user.password_hash = hash_password(request.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        db.commit()
+        return SuccessResponse.create(
+            data={"updated": True}, msg="Password changed successfully"
         )
 
     return router

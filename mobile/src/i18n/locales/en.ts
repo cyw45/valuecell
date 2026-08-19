@@ -20,6 +20,7 @@ export const en = {
   "auth.register.copy": "Set up a personal or enterprise Value Cell workspace",
   "auth.email": "Work email",
   "auth.password": "Password",
+  "auth.rememberPassword": "Remember password on this device",
   "auth.workspace.personal": "Personal workspace name",
   "auth.workspace.enterprise": "Workspace name",
   "auth.tenantType": "Workspace type",

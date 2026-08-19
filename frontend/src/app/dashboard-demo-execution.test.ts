@@ -66,7 +66,7 @@ test("unavailable pnl explains reason and recovery condition in Chinese", () => 
   assert.match(result.detail, /恢复条件/);
 });
 
-test("demo curve points remain strategy-attributed pnl, not shared account equity", () => {
+test("demo curve points preserve persisted snapshot actions", () => {
   assert.deepEqual(
     buildDemoEquityCurve({
       points: [
@@ -75,8 +75,8 @@ test("demo curve points remain strategy-attributed pnl, not shared account equit
       ],
     }),
     [
-      { ts: "2026-08-11T00:00:00Z", cumulative_pnl: 0, action: "mark_to_market" },
-      { ts: "2026-08-11T01:00:00Z", cumulative_pnl: 12, action: "mark_to_market" },
+      { ts: "2026-08-11T00:00:00Z", cumulative_pnl: 0, daily_pnl_quote: undefined, equity_quote: undefined, action: "wallet_snapshot" },
+      { ts: "2026-08-11T01:00:00Z", cumulative_pnl: 12, daily_pnl_quote: undefined, equity_quote: undefined, action: "wallet_snapshot" },
     ],
   );
 });

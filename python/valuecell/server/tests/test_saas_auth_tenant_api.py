@@ -287,3 +287,33 @@ def test_platform_administrator_is_distinct_from_tenant_owner(
     assert platform_me["access_status"] == "active"
     assert tenant_owner_me["role"] == "owner"
     assert tenant_owner_me["is_platform_admin"] is False
+
+
+def test_authenticated_user_can_change_password(auth_client: TestClient):
+    registered = auth_client.post(
+        "/saas/auth/register",
+        json={
+            "email": "password-owner@example.test",
+            "password": "correct-horse-battery-staple",
+            "workspace_name": "Password Desk",
+        },
+    )
+    token = registered.json()["data"]["access_token"]
+    changed = auth_client.post(
+        "/saas/auth/change-password",
+        headers=_authorization(token),
+        json={
+            "current_password": "correct-horse-battery-staple",
+            "new_password": "new-correct-horse-battery",
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["data"] == {"updated": True}
+    assert auth_client.post(
+        "/saas/auth/login",
+        json={"email": "password-owner@example.test", "password": "correct-horse-battery-staple"},
+    ).status_code == 401
+    assert auth_client.post(
+        "/saas/auth/login",
+        json={"email": "password-owner@example.test", "password": "new-correct-horse-battery"},
+    ).status_code == 200

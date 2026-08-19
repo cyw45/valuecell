@@ -21,6 +21,7 @@ import { spacing } from "./src/theme";
 import { useTheme, ThemeProvider } from "./src/theme-context";
 import AuthScreen from "./src/screens/AuthScreen";
 import AccountScreen from "./src/screens/AccountScreen";
+import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
 import FundingPnlScreen from "./src/screens/FundingPnlScreen";
 import ExecutionFactsScreen from "./src/screens/ExecutionFactsScreen";
 import LiveExecutionScreen from "./src/screens/LiveExecutionScreen";
@@ -116,6 +117,7 @@ function AccountNavigator() {
     <AccountStack.Navigator screenOptions={screenOptions}>
       <AccountStack.Screen component={AccountScreen} name="Account" />
       <AccountStack.Screen component={PreferencesScreen} name="Preferences" options={{ headerShown: true, title: t("preferences.title") }} />
+      <AccountStack.Screen component={ChangePasswordScreen} name="ChangePassword" options={{ headerShown: true, title: "修改密码" }} />
       <AccountStack.Screen component={SandboxConnectionsScreen} name="SandboxConnections" options={{ headerShown: true, title: t("navigation.sandboxConnections") }} />
       <AccountStack.Screen component={SandboxConnectionEditorScreen} name="SandboxConnectionEditor" options={{ headerShown: true, presentation: "modal", title: t("navigation.sandboxConnectionEditor") }} />
       <AccountStack.Screen component={SandboxConnectionDetailScreen} name="SandboxConnectionDetail" options={{ headerShown: true, title: t("navigation.sandboxConnectionDetail") }} />

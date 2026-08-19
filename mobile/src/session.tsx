@@ -2,10 +2,13 @@ import { createContext, type PropsWithChildren, useCallback, useContext, useEffe
 import { useQueryClient } from "@tanstack/react-query";
 import {
   api,
+  clearRememberedPassword,
   clearSession,
   loadRememberedEmail,
+  loadRememberedPassword,
   loadSession,
   persistRememberedEmail,
+  persistRememberedPassword,
   persistSession,
 } from "./api";
 import type { PostAuthTab } from "./navigation/types";
@@ -17,10 +20,11 @@ type SessionContextValue = {
   postAuthTab: PostAuthTab;
   ready: boolean;
   rememberedEmail: string;
+  rememberedPassword: string;
   register: (request: SaaSRegisterRequest) => Promise<void>;
   replaceSession: (next: SaaSAuthResponse, postAuthTab: PostAuthTab) => Promise<void>;
   session: Session | null;
-  signIn: (email: string, password: string) => Promise<void>;
+  signIn: (email: string, password: string, rememberPassword: boolean) => Promise<void>;
   signOut: () => Promise<void>;
   switchWorkspace: (tenantId: string) => Promise<void>;
 };
@@ -32,6 +36,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   const [ready, setReady] = useState(false);
   const [postAuthTab, setPostAuthTab] = useState<PostAuthTab>("工作台");
   const [rememberedEmail, setRememberedEmail] = useState("");
+  const [rememberedPassword, setRememberedPassword] = useState("");
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
@@ -49,9 +54,10 @@ export function SessionProvider({ children }: PropsWithChildren) {
     return () => api.setUnauthorizedHandler(null);
   }, [endSession]);
   useEffect(() => {
-    void Promise.all([loadSession(), loadRememberedEmail()])
-      .then(([restoredSession, storedEmail]) => {
+    void Promise.all([loadSession(), loadRememberedEmail(), loadRememberedPassword()])
+      .then(([restoredSession, storedEmail, storedPassword]) => {
         setRememberedEmail(storedEmail ?? restoredSession?.email ?? "");
+        setRememberedPassword(storedPassword ?? "");
         setSession(restoredSession);
       })
       .catch(() => setSession(null))
@@ -73,8 +79,15 @@ export function SessionProvider({ children }: PropsWithChildren) {
     setSession(saved);
   }, [queryClient]);
 
-  const signIn = useCallback(async (email: string, password: string) => {
+  const signIn = useCallback(async (email: string, password: string, rememberPassword: boolean) => {
     await replaceSession(await api.login(email.trim(), password), "工作台");
+    if (rememberPassword) {
+      await persistRememberedPassword(password);
+      setRememberedPassword(password);
+    } else {
+      await clearRememberedPassword();
+      setRememberedPassword("");
+    }
   }, [replaceSession]);
 
   const register = useCallback(async (request: SaaSRegisterRequest) => {
@@ -90,7 +103,7 @@ export function SessionProvider({ children }: PropsWithChildren) {
   }, [endSession]);
 
   return (
-    <SessionContext.Provider value={{ authNotice, dismissAuthNotice: () => setAuthNotice(null), postAuthTab, ready, rememberedEmail, register, replaceSession, session, signIn, signOut, switchWorkspace }}>
+    <SessionContext.Provider value={{ authNotice, dismissAuthNotice: () => setAuthNotice(null), postAuthTab, ready, rememberedEmail, rememberedPassword, register, replaceSession, session, signIn, signOut, switchWorkspace }}>
       {children}
     </SessionContext.Provider>
   );

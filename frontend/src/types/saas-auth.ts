@@ -13,6 +13,11 @@ export interface SaaSLoginRequest {
   password: string;
 }
 
+export interface SaaSChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
 export interface SaaSAuthResponse {
   access_token: string;
   user_id: string;
