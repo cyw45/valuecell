@@ -1,7 +1,11 @@
-"""Crypto market data API for strategy dashboards."""
+"""Crypto market indicator API with bounded upstream latency."""
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from __future__ import annotations
+
 from valuecell.server.config.settings import get_settings
+import asyncio
+from loguru import logger
+from fastapi import APIRouter, HTTPException, Query, Response
 
 from valuecell.server.api.schemas import SuccessResponse
 from valuecell.server.api.schemas.crypto_market import (
@@ -127,14 +131,35 @@ def create_crypto_market_router() -> APIRouter:
                 request_kwargs["from_ts_ms"] = from_ts_ms
             if to_ts_ms is not None:
                 request_kwargs["to_ts_ms"] = to_ts_ms
-            data = await service.get_indicators(**request_kwargs)
+            data = await asyncio.wait_for(
+                service.get_indicators(**request_kwargs),
+                timeout=settings.MARKET_DATA_REQUEST_TIMEOUT_S,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Crypto market request timed out symbols={} interval={} lookback={}",
+                symbol_list,
+                interval,
+                lookback,
+            )
+            data = CryptoMarketIndicatorsData(
+                interval=interval,
+                lookback=lookback,
+                providers=provider_list or list(settings.MARKET_DATA_PROVIDERS),
+                symbols=[],
+                failed_symbols={symbol: "market_request_timeout" for symbol in symbol_list},
+            )
         except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Crypto market data unavailable: {exc}",
-            ) from exc
+            logger.warning("Crypto market request failed: {}", exc)
+            data = CryptoMarketIndicatorsData(
+                interval=interval,
+                lookback=lookback,
+                providers=provider_list or list(settings.MARKET_DATA_PROVIDERS),
+                symbols=[],
+                failed_symbols={symbol: "market_data_unavailable" for symbol in symbol_list},
+            )
         return SuccessResponse.create(
             data=data,
             msg="Crypto indicators retrieved successfully",

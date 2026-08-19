@@ -96,7 +96,7 @@ export default function StrategyPositionsScreen() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const strategyId = route.params.strategyId;
-  const [selectedSymbol, setSelectedSymbol] = useState("");
+  const [selectedSymbol, setSelectedSymbol] = useState(route.params.symbol ?? "");
   const [range, setRange] = useState<Range>("1m");
   const [pendingClose, setPendingClose] = useState<PendingClose>(null);
   const [closeError, setCloseError] = useState<string | null>(null);

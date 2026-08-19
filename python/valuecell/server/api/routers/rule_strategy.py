@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date
 from typing import Any, Literal
 from uuid import UUID
@@ -781,10 +782,10 @@ def create_rule_strategy_router(
     )
     async def get_rule_strategy_demo_execution(
         strategy_id: str,
+        principal: CurrentPrincipal = Depends(get_current_principal),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=10, ge=1, le=100),
-        principal: CurrentPrincipal = Depends(get_current_principal),
-        db=Depends(get_db),
+        db: Session = Depends(get_db),
     ) -> SuccessResponse[dict[str, Any]]:
         """Return explicit OKX Demo facts; never substitute the paper ledger."""
         require_strategy_read(principal)
@@ -796,11 +797,14 @@ def create_rule_strategy_router(
             baseline = get_official_test_baseline(
                 db, tenant_id=principal.tenant_id, strategy_id=strategy_id
             )
-            data = await get_demo_execution_read_model(
-                strategy,
-                principal.tenant_id,
-                SandboxExchangeTradingService(db),
-                started_at=baseline.started_at if baseline is not None else None,
+            data = await asyncio.wait_for(
+                get_demo_execution_read_model(
+                    strategy,
+                    principal.tenant_id,
+                    SandboxExchangeTradingService(db),
+                    started_at=baseline.started_at if baseline is not None else None,
+                ),
+                timeout=30.0,
             )
             connection_id = data.get("connection_id")
             if not isinstance(connection_id, str) or not connection_id:
@@ -842,6 +846,14 @@ def create_rule_strategy_router(
                 "total_items": total_items,
                 "total_pages": total_pages,
             }
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "code": "okx_demo_read_timeout",
+                    "detail": "OKX Demo account read timed out; retry shortly.",
+                },
+            ) from exc
         except DemoExecutionReadModelError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except SandboxTradingError as exc:

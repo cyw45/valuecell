@@ -13,10 +13,12 @@ from valuecell.server.services.crypto_market_service import (
 @pytest.fixture(autouse=True)
 def clear_crypto_market_service_state():
     CryptoMarketService._cache.clear()
+    CryptoMarketService._range_cache.clear()
     CryptoMarketService._inflight.clear()
     CryptoMarketService._provider_health.clear()
     yield
     CryptoMarketService._cache.clear()
+    CryptoMarketService._range_cache.clear()
     CryptoMarketService._inflight.clear()
     CryptoMarketService._provider_health.clear()
 
@@ -96,3 +98,38 @@ async def test_provider_failure_without_prior_candle_cache_is_surfaced(
         )
 
     assert CryptoMarketService._cache == {}
+
+
+@pytest.mark.asyncio
+async def test_serves_cached_historical_candles_when_upstream_range_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", "1")
+    get_settings.cache_clear()
+    service = CryptoMarketService(providers=("okx",))
+    result = _real_provider_result()
+    fetch = AsyncMock(side_effect=[result, RuntimeError("temporary outage")])
+    monkeypatch.setattr(service, "_fetch_history_with_limit", fetch)
+    time_range = (1_699_000_000_000, 1_700_000_000_000)
+
+    initial = await service._fetch_with_fallback(
+        symbol="BTC-USDT",
+        interval="1h",
+        lookback=1,
+        providers=["okx"],
+        time_range=time_range,
+    )
+    cache_key = ("okx", "BTC-USDT", "1h", 1, *time_range)
+    CryptoMarketService._range_cache[cache_key].expires_at = 0.0
+
+    fallback = await service._fetch_with_fallback(
+        symbol="BTC-USDT",
+        interval="1h",
+        lookback=1,
+        providers=["okx"],
+        time_range=time_range,
+    )
+
+    assert initial is result
+    assert fallback is result
+    assert fetch.await_count == 2

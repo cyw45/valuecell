@@ -569,6 +569,29 @@ def test_crypto_market_router_returns_success_response(
     )
 
 
+def test_crypto_market_router_returns_structured_data_when_upstream_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = AsyncMock()
+    service.get_indicators = AsyncMock(side_effect=RuntimeError("upstream failed"))
+    monkeypatch.setattr(
+        "valuecell.server.api.routers.crypto_market.get_crypto_market_service",
+        lambda: service,
+    )
+    app = FastAPI()
+    app.include_router(create_crypto_market_router())
+
+    response = TestClient(app).get(
+        "/crypto-market/indicators",
+        params={"symbols": "BTC-USDT", "interval": "15m", "lookback": 2},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["failed_symbols"] == {
+        "BTC-USDT": "market_data_unavailable"
+    }
+
+
 @pytest.mark.asyncio
 async def test_default_snapshot_refresh_preserves_previous_snapshot_on_exception(
     monkeypatch: pytest.MonkeyPatch,

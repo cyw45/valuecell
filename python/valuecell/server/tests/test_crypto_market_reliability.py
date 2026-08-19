@@ -22,10 +22,12 @@ def clear_crypto_market_service_state(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", raising=False)
     get_settings.cache_clear()
     CryptoMarketService._cache.clear()
+    CryptoMarketService._range_cache.clear()
     CryptoMarketService._inflight.clear()
     CryptoMarketService._provider_health.clear()
     yield
     CryptoMarketService._cache.clear()
+    CryptoMarketService._range_cache.clear()
     CryptoMarketService._inflight.clear()
     CryptoMarketService._provider_health.clear()
     get_settings.cache_clear()

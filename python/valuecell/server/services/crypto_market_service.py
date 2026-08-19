@@ -184,6 +184,7 @@ class CryptoMarketService:
 
     _cache: ClassVar[dict[tuple[str, str, str, int], CacheEntry]] = {}
     _inflight: ClassVar[dict[tuple[str, str, str, int], asyncio.Task[CandleFetchResult]]] = {}
+    _range_cache: ClassVar[dict[tuple[str, str, str, int, int | None, int | None], CacheEntry]] = {}
     _provider_health: ClassVar[dict[str, ProviderHealth]] = {}
     _semaphore: ClassVar[asyncio.Semaphore | None] = None
     _semaphore_limit: ClassVar[int | None] = None
@@ -435,22 +436,37 @@ class CryptoMarketService:
         errors: list[str] = []
         stale_result: CandleFetchResult | None = None
         settings = get_settings()
+        historical = any(time_range)
         for provider in providers:
             health = self._provider_health.setdefault(provider, ProviderHealth())
             cache_key = (provider, symbol, interval, lookback)
             cached = self._cache.get(cache_key)
+            range_key = (
+                provider,
+                symbol,
+                interval,
+                lookback,
+                time_range[0],
+                time_range[1],
+            )
+            range_cached = self._range_cache.get(range_key) if historical else None
+            if range_cached is not None and range_cached.expires_at > time.monotonic():
+                return range_cached.result
+            if range_cached is not None and stale_result is None:
+                stale_result = range_cached.result
             if health.cooldown_until > time.monotonic():
                 errors.append(f"{provider}: cooling down")
-                if not any(time_range) and stale_result is None and cached is not None:
+                if not historical and stale_result is None and cached is not None:
                     stale_result = cached.result
                 continue
-            for attempt in range(settings.MARKET_DATA_PROVIDER_ATTEMPTS):
+            attempts = settings.MARKET_DATA_PROVIDER_ATTEMPTS
+            for attempt in range(attempts):
                 try:
                     result = (
                         await self._fetch_history_with_limit(
                             provider, symbol, interval, lookback, time_range
                         )
-                        if any(time_range)
+                        if historical
                         else await self._fetch_from_provider(
                             provider=provider,
                             symbol=symbol,
@@ -462,20 +478,24 @@ class CryptoMarketService:
                     health.cooldown_until = 0.0
                     health.last_error = None
                     health.last_success_at = datetime.now(timezone.utc).isoformat()
+                    if historical:
+                        self._range_cache[range_key] = CacheEntry(
+                            expires_at=time.monotonic()
+                            + settings.MARKET_DATA_CACHE_TTL_S,
+                            result=result,
+                        )
                     return result
                 except Exception as exc:
                     failure_type = self._failure_type(exc)
                     errors.append(f"{provider}: {failure_type}")
-                    if not any(time_range) and stale_result is None and cached is not None:
+                    if not historical and stale_result is None and cached is not None:
                         stale_result = cached.result
-                    if attempt + 1 < settings.MARKET_DATA_PROVIDER_ATTEMPTS:
-                        await asyncio.sleep(0.25 * (attempt + 1) + random.uniform(0, 0.1))
+                    if attempt + 1 < attempts:
+                        await asyncio.sleep(
+                            0.25 * (attempt + 1) + random.uniform(0, 0.1)
+                        )
                         continue
-                    # A caller-selected historical range can be unavailable even
-                    # while the provider's live market endpoint is healthy. Do
-                    # not poison the shared live-provider circuit breaker for a
-                    # range-specific failure.
-                    if not any(time_range) and failure_type != "unsupported_symbol":
+                    if not historical and failure_type != "unsupported_symbol":
                         self._record_provider_failure(provider, exc)
                     logger.warning(
                         "Crypto OHLCV fetch failed provider={} symbol={} interval={} attempts={} "
@@ -486,11 +506,12 @@ class CryptoMarketService:
                         attempt + 1,
                         failure_type,
                     )
-        if stale_result is not None and not any(time_range):
+        if stale_result is not None:
             logger.warning(
-                "Serving last successful candles during provider outage symbol={} interval={}",
+                "Serving last successful candles during provider outage symbol={} interval={} range={}",
                 symbol,
                 interval,
+                time_range,
             )
             return stale_result
         raise RuntimeError("; ".join(errors) or "No provider succeeded")
