@@ -31,6 +31,7 @@ def test_demo_execution_endpoint_is_not_a_paper_account_fallback(monkeypatch):
         raise DemoExecutionReadModelError("Strategy is not configured for OKX Demo execution")
 
     monkeypatch.setattr(router_module, "get_demo_execution_read_model", blocked)
+    monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(router_module, "SandboxExchangeTradingService", lambda _db: object())
     response = TestClient(app).get("/rule-strategies/strategy-a/demo-execution")
 
@@ -61,6 +62,7 @@ def test_demo_execution_endpoint_paginates_orders_without_changing_summary(monke
         }
 
     monkeypatch.setattr(router_module, "get_demo_execution_read_model", read_model)
+    monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(router_module, "record_demo_account_snapshot", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         router_module,
