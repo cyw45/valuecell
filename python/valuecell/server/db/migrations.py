@@ -728,7 +728,7 @@ def migrate_strategy_demo_account_snapshots(session: Session) -> bool:
 
 
 MANUAL_CLOSE_MIGRATION_VERSION = "20260814_rule_strategy_manual_close_v1"
-MANUAL_CLOSE_MIGRATION_LOCK_KEY = 7720250725
+MANUAL_CLOSE_MIGRATION_LOCK_KEY = 7720250726
 
 
 def migrate_rule_strategy_manual_close(session: Session) -> bool:
