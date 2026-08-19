@@ -1,9 +1,8 @@
 """Standalone API for persisted, deterministic paper rule strategies."""
 
 from __future__ import annotations
+from datetime import datetime, timezone
 
-import asyncio
-from datetime import date
 from typing import Any, Literal
 from uuid import UUID
 
@@ -11,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from valuecell.server.config.settings import get_settings
 
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.schemas.base import SuccessResponse
@@ -46,8 +46,7 @@ from valuecell.server.services.rule_strategy_text_import_job_service import (
     get_rule_strategy_text_import_job_service,
 )
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
-    DemoExecutionReadModelError,
-    get_demo_execution_read_model,
+    build_demo_execution_read_model,
 )
 from valuecell.server.services.rule_strategy_pnl_service import (
     build_daily_pnl_points,
@@ -55,9 +54,10 @@ from valuecell.server.services.rule_strategy_pnl_service import (
 )
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     build_demo_daily_curve,
+    get_demo_account_sync_state,
+    get_latest_demo_account_snapshot,
     get_official_test_baseline,
     list_demo_account_snapshots,
-    record_demo_account_snapshot,
 )
 from valuecell.server.services.rule_strategy_manual_close_service import (
     ManualCloseError,
@@ -787,81 +787,109 @@ def create_rule_strategy_router(
         page_size: int = Query(default=10, ge=1, le=100),
         db: Session = Depends(get_db),
     ) -> SuccessResponse[dict[str, Any]]:
-        """Return explicit OKX Demo facts; never substitute the paper ledger."""
+        """Return only the latest persisted Demo snapshot and local orders."""
         require_strategy_read(principal)
         try:
             strategy = rule_service.get(strategy_id, principal.tenant_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        try:
-            baseline = get_official_test_baseline(
-                db, tenant_id=principal.tenant_id, strategy_id=strategy_id
-            )
-            data = await asyncio.wait_for(
-                get_demo_execution_read_model(
-                    strategy,
-                    principal.tenant_id,
-                    SandboxExchangeTradingService(db),
-                    started_at=baseline.started_at if baseline is not None else None,
-                ),
-                timeout=30.0,
-            )
-            connection_id = data.get("connection_id")
-            if not isinstance(connection_id, str) or not connection_id:
-                raise DemoExecutionReadModelError("OKX Demo connection is unavailable")
-            record_demo_account_snapshot(
-                db,
-                tenant_id=principal.tenant_id,
-                strategy_id=strategy_id,
-                credential_id=connection_id,
-                account=data["account"]["data"],
-                positions=data["positions"]["data"],
-            )
-            snapshots = list_demo_account_snapshots(
-                db,
-                tenant_id=principal.tenant_id,
-                strategy_id=strategy_id,
-            )
-            baseline = get_official_test_baseline(
-                db, tenant_id=principal.tenant_id, strategy_id=strategy_id
-            )
-            curve_points = build_demo_daily_curve(
-                snapshots,
-                started_at=baseline.started_at if baseline is not None else None,
-            )
-            data["equity_curve"] = {
-                "status": "available" if curve_points else "unavailable",
-                "scope": "exchange_account_wallet_snapshots",
-                "reason_code": None if curve_points else "no_wallet_snapshots",
-                "points": curve_points,
-            }
-            orders = list(data.get("orders") or [])
-            total_items = len(orders)
-            total_pages = max(1, (total_items + page_size - 1) // page_size)
-            start = (page - 1) * page_size
-            data["orders"] = orders[start : start + page_size]
-            data["pagination"] = {
-                "page": page,
-                "page_size": page_size,
-                "total_items": total_items,
-                "total_pages": total_pages,
-            }
-        except asyncio.TimeoutError as exc:
+
+        baseline = get_official_test_baseline(
+            db, tenant_id=principal.tenant_id, strategy_id=strategy_id
+        )
+        execution = (strategy.get("config") or {}).get("execution") or {}
+        connection_id = execution.get("sandbox_connection_id")
+        if not isinstance(connection_id, str) or not connection_id:
             raise HTTPException(
-                status_code=504,
+                status_code=409,
                 detail={
-                    "code": "okx_demo_read_timeout",
-                    "detail": "OKX Demo account read timed out; retry shortly.",
+                    "code": "okx_demo_connection_unavailable",
+                    "detail": "OKX Demo connection is unavailable.",
                 },
-            ) from exc
-        except DemoExecutionReadModelError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        except SandboxTradingError as exc:
+            )
+        snapshot = get_latest_demo_account_snapshot(
+            db,
+            tenant_id=principal.tenant_id,
+            strategy_id=strategy_id,
+            credential_id=connection_id,
+        )
+        if snapshot is None:
             raise HTTPException(
-                status_code=502,
-                detail={"code": "okx_demo_read_unavailable", "detail": str(exc)},
-            ) from exc
-        return SuccessResponse.create(data=data, msg="OKX Demo strategy execution retrieved")
+                status_code=503,
+                detail={
+                    "code": "demo_account_snapshot_pending",
+                    "detail": "后台尚未完成 OKX Demo 账户同步，请稍后重试。",
+                },
+            )
+
+        observed_at = snapshot.observed_at
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=timezone.utc)
+        account = {
+            "source": snapshot.source,
+            "total_usdt_value": snapshot.total_usdt_value,
+            "balances": list(snapshot.balances or []),
+            "checked_at": observed_at.isoformat(),
+        }
+        positions = {
+            "source": snapshot.source,
+            "positions": list(snapshot.positions or []),
+            "checked_at": observed_at.isoformat(),
+        }
+        # list_orders reads local rows only; it does not refresh the exchange.
+        orders = SandboxExchangeTradingService(db).list_orders(
+            principal.tenant_id, connection_id
+        )
+        data = build_demo_execution_read_model(
+            strategy,
+            account,
+            positions,
+            orders,
+            started_at=baseline.started_at if baseline is not None else None,
+        )
+        snapshots = list_demo_account_snapshots(
+            db,
+            tenant_id=principal.tenant_id,
+            strategy_id=strategy_id,
+            credential_id=connection_id,
+        )
+        curve_points = build_demo_daily_curve(
+            snapshots,
+            started_at=baseline.started_at if baseline is not None else None,
+        )
+        sync_state = get_demo_account_sync_state(
+            db, tenant_id=principal.tenant_id, strategy_id=strategy_id
+        )
+        freshness_age_s = max(0, int((datetime.now(timezone.utc) - observed_at).total_seconds()))
+        data["sync"] = {
+            "status": "stale" if freshness_age_s > get_settings().DEMO_ACCOUNT_SYNC_INTERVAL_S * 2 else "healthy",
+            "observed_at": observed_at.isoformat(),
+            "freshness_age_s": freshness_age_s,
+            "last_attempt_at": sync_state.last_attempt_at.isoformat() if sync_state and sync_state.last_attempt_at else None,
+            "last_success_at": sync_state.last_success_at.isoformat() if sync_state and sync_state.last_success_at else None,
+            "consecutive_failures": sync_state.consecutive_failures if sync_state else 0,
+            "last_error_code": sync_state.last_error_code if sync_state else None,
+        }
+        data["equity_curve"] = {
+            "status": "available" if curve_points else "unavailable",
+            "scope": "persisted_exchange_account_wallet_snapshots",
+            "reason_code": None if curve_points else "no_wallet_snapshots",
+            "points": curve_points,
+        }
+        all_orders = list(data.get("orders") or [])
+        total_items = len(all_orders)
+        total_pages = max(1, (total_items + page_size - 1) // page_size)
+        start = (page - 1) * page_size
+        data["orders"] = all_orders[start : start + page_size]
+        data["pagination"] = {
+            "page": page,
+            "page_size": page_size,
+            "total_items": total_items,
+            "total_pages": total_pages,
+        }
+        return SuccessResponse.create(
+            data=data, msg="OKX Demo strategy execution snapshot retrieved"
+        )
 
     @router.post(
         "/{strategy_id}/manual-close",

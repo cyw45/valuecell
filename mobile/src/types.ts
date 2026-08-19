@@ -1113,6 +1113,15 @@ export interface RuleStrategyDemoExecution {
   pnl: RuleStrategyDemoExecutionPnl;
   equity_curve?: DemoEquityCurve | null;
   checked_at: string;
+  sync?: {
+    status: "healthy" | "stale";
+    observed_at: string;
+    freshness_age_s: number;
+    last_attempt_at?: string | null;
+    last_success_at?: string | null;
+    consecutive_failures: number;
+    last_error_code?: string | null;
+  } | null;
 }
 
 // Existing mobile names remain the wire-contract names consumed by current screens.

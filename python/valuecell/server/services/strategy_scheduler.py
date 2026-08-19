@@ -55,7 +55,6 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
 )
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     get_official_test_baseline,
-    record_demo_account_snapshot,
 )
 
 _MIN_INTERVAL_S = 60
@@ -397,14 +396,6 @@ class StrategyScheduler:
                     tenant_id,
                     credential_id or "",
                     account=demo_account,
-                )
-                record_demo_account_snapshot(
-                    session,
-                    tenant_id=tenant_id,
-                    strategy_id=strategy_id,
-                    credential_id=credential_id or "",
-                    account=demo_account,
-                    positions=position_snapshot,
                 )
                 await trading_service.refresh_open_orders(
                     tenant_id, credential_id or ""

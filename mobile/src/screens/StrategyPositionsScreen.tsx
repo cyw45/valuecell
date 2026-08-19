@@ -18,7 +18,12 @@ type Range = "1d" | "5d" | "1w" | "1m";
 type PositionView = { symbol: string; quantity: number; entryPrice: number | null; currentPrice: number | null; value: number | null; pnl: number | null };
 type PendingClose = { scope: "symbol" | "all"; symbol?: string } | null;
 
-const RANGE_DAYS: Record<Range, number> = { "1d": 1, "5d": 5, "1w": 7, "1m": 31 };
+const RANGE_MARKET_REQUEST: Record<Range, { interval: "1h" | "4h"; lookback: number }> = {
+  "1d": { interval: "1h", lookback: 25 },
+  "5d": { interval: "1h", lookback: 121 },
+  "1w": { interval: "1h", lookback: 169 },
+  "1m": { interval: "4h", lookback: 187 },
+};
 
 function numberValue(value: number | string | null | undefined): number | null {
   const number = typeof value === "string" ? Number(value) : value;
@@ -106,13 +111,14 @@ export default function StrategyPositionsScreen() {
   const access = useQuery({ queryKey: ["mobile", session?.tenantId, "access"], queryFn: api.access, enabled: Boolean(session) });
   const account = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account"], queryFn: () => api.strategyAccount(strategyId), enabled: Boolean(strategyId && strategy.data && !isDemo) });
   const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 500], queryFn: () => api.strategyLog(strategyId, "trades", 500), enabled: Boolean(strategyId && !isDemo) });
-  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", "all"], queryFn: () => api.strategyDemoExecutionAll(strategyId), enabled: Boolean(strategyId && isDemo), retry: false });
+  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", "all"], queryFn: () => api.strategyDemoExecutionAll(strategyId), enabled: Boolean(strategyId && isDemo), retry: 1, retryDelay: 1000 });
+  const holdingsError = isDemo ? demo.error : account.error;
+  const holdingsLoading = isDemo ? demo.isLoading : account.isLoading;
   const positions = useMemo(() => isDemo ? demoPositions(demo.data?.positions.data.positions ?? [], demo.data?.orders ?? []) : paperPositions(account.data), [account.data, demo.data, isDemo]);
   useEffect(() => { if (!positions.some((item) => item.symbol === selectedSymbol)) setSelectedSymbol(positions[0]?.symbol ?? ""); }, [positions, selectedSymbol]);
   const selected = positions.find((item) => item.symbol === selectedSymbol) ?? positions[0];
-  const toTs = Date.now();
-  const fromTs = toTs - RANGE_DAYS[range] * 86_400_000;
-  const market = useQuery({ queryKey: ["mobile", "positions", strategyId, selected?.symbol, range], queryFn: () => api.market(selected?.symbol ?? "", "1h", Math.ceil((toTs - fromTs) / 3_600_000) + 2, { from_ts_ms: fromTs, to_ts_ms: toTs }), enabled: Boolean(selected?.symbol) });
+  const marketRequest = RANGE_MARKET_REQUEST[range];
+  const market = useQuery({ queryKey: ["mobile", "positions", strategyId, selected?.symbol, range], queryFn: () => api.market(selected?.symbol ?? "", marketRequest.interval, marketRequest.lookback), enabled: Boolean(selected?.symbol) });
   const marketSymbol = market.data?.symbols.find((item) => item.symbol === selected.symbol || canonical(item.symbol) === selected.symbol);
   const markers = alignMarkers(
     isDemo
@@ -126,19 +132,20 @@ export default function StrategyPositionsScreen() {
   const refresh = () => { void Promise.all([strategy.refetch(), account.refetch(), trades.refetch(), demo.refetch(), market.refetch()]); };
   const canManualClose = isDemo && canMutate(access.data, "trade.execute");
 
-  if (strategy.isLoading) return <StatePanel description="正在读取策略持仓。" title="我的持仓" />;
-  if (strategy.isError || !strategy.data) return <StatePanel actionLabel="重试" description={(strategy.error as Error)?.message ?? "策略持仓暂不可用。"} onAction={refresh} title="我的持仓暂不可用" tone="error" />;
+  if (strategy.isLoading || holdingsLoading) return <StatePanel description="正在读取策略持仓。" state="loading" title="我的持仓" />;
+  if (strategy.isError || !strategy.data) return <StatePanel actionLabel="重试" description={(strategy.error as Error)?.message ?? "策略持仓暂不可用。"} onAction={refresh} state="error" title="我的持仓暂不可用" />;
+  if (holdingsError) return <StatePanel actionLabel="重试" description={holdingsError instanceof Error ? holdingsError.message : "持仓接口暂不可用。"} onAction={refresh} state="error" title="持仓读取失败" />;
   return <ScrollView contentContainerStyle={styles.content} refreshControl={undefined} style={styles.page}>
-    <SectionCard description={`${isDemo ? "OKX Demo 真实账户" : "纸面账户"} · ${positions.length} 个持仓`} title="持仓总览">
+    <SectionCard description={`${isDemo ? "OKX Demo 后台快照" : "纸面账户"} · ${positions.length} 个持仓${isDemo && demo.data?.sync ? ` · ${demo.data.sync.status === "stale" ? "数据较旧" : "已同步"} · ${demo.data.sync.freshness_age_s}s 前` : ""}`} title="持仓总览">
       <View style={styles.summaryGrid}><View style={styles.summaryMetric}><Text style={styles.label}>总收益</Text><Text style={[styles.summaryValue, { color: (totalPnl ?? 0) >= 0 ? palette.positive : palette.negative }]}>{formatQuote(totalPnl)}</Text></View><View style={styles.summaryMetric}><Text style={styles.label}>持仓数量</Text><Text style={styles.summaryValue}>{positions.length}</Text></View></View>
       {canManualClose ? <DangerButton label="一键强平全部策略持仓" leading={<ShieldAlert color={palette.negative} size={18} />} onPress={() => { setConfirmation(""); setPendingClose({ scope: "all" }); }} /> : isDemo ? <Text style={styles.muted}>当前角色没有交易执行权限，无法提交手动平仓。</Text> : <Text style={styles.muted}>纸面持仓可通过策略评估归因；OKX Demo 手动平仓需要真实账户快照和策略成交归属均可验证。</Text>}
     </SectionCard>
     {closeError ? <Text style={styles.error}>{closeError}</Text> : null}
     <SectionCard title="持仓列表">
-      {positions.length ? positions.map((position) => <View key={position.symbol} style={styles.positionCard}><Pressable accessibilityRole="button" onPress={() => setSelectedSymbol(position.symbol)} style={[styles.positionSelect, selected?.symbol === position.symbol && styles.selected]}><View style={styles.copy}><Text style={styles.symbol}>{position.symbol.replace("-", "/")}</Text><Text style={styles.muted}>数量 {position.quantity} · 买入价 {formatQuote(position.entryPrice)} · 当前价 {formatQuote(position.currentPrice)}</Text></View><Text style={[styles.pnl, { color: position.pnl == null || position.pnl >= 0 ? palette.positive : palette.negative }]}>{formatQuote(position.pnl)}</Text></Pressable>{canManualClose ? <DangerButton fullWidth={false} label="平仓" onPress={() => { setConfirmation(""); setPendingClose({ scope: "symbol", symbol: position.symbol }); }} /> : null}</View>) : <Text style={styles.muted}>服务端当前没有持仓事实。</Text>}
+      {positions.length ? positions.map((position) => <View key={position.symbol} style={styles.positionCard}><Pressable accessibilityRole="button" onPress={() => setSelectedSymbol(position.symbol)} style={[styles.positionSelect, selected?.symbol === position.symbol && styles.selected]}><View style={styles.copy}><Text style={styles.symbol}>{position.symbol.replace("-", "/")}</Text><Text style={styles.muted}>数量 {position.quantity} · 买入价 {formatQuote(position.entryPrice)} · 当前价 {formatQuote(position.currentPrice)}</Text></View><Text style={[styles.pnl, { color: position.pnl == null || position.pnl >= 0 ? palette.positive : palette.negative }]}>{formatQuote(position.pnl)}</Text></Pressable>{canManualClose ? <DangerButton fullWidth={false} label="平仓" onPress={() => { setConfirmation(""); setPendingClose({ scope: "symbol", symbol: position.symbol }); }} /> : null}</View>) : <Text style={styles.muted}>交易所已成功返回账户，但当前没有可用的非 USDT 现货持仓。</Text>}
     </SectionCard>
     {selected ? <SectionCard description="买入点由服务端成交记录与行情时间戳对齐，绿色点为策略买入。" title={`${selected.symbol.replace("-", "/")} K 线`}>
-      <View style={styles.rangeRow}>{(Object.keys(RANGE_DAYS) as Range[]).map((item) => <Pressable accessibilityRole="button" key={item} onPress={() => setRange(item)} style={[styles.range, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
+      <View style={styles.rangeRow}>{(Object.keys(RANGE_MARKET_REQUEST) as Range[]).map((item) => <Pressable accessibilityRole="button" key={item} onPress={() => setRange(item)} style={[styles.range, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
       {market.isError ? <Text style={styles.muted}>{(market.error as Error).message}</Text> : marketSymbol ? <CandlestickChart candles={marketSymbol.candles} height={360} indicators={marketSymbol.indicators} onWindowChange={() => undefined} tradeMarkers={markers} /> : <Text style={styles.muted}>正在读取当前币种行情。</Text>}
     </SectionCard> : null}
     <ConfirmSheet confirmDisabled={confirmation.trim().toUpperCase() !== expectedConfirmation} confirming={closeMutation.isPending} destructive message={`该操作会向 OKX Demo 提交卖出订单。确认文本：${expectedConfirmation}。只会尝试平掉已验证的策略归属持仓，不会清空共享账户其他策略资产。`} onCancel={() => !closeMutation.isPending && setPendingClose(null)} onConfirm={() => pendingClose && closeMutation.mutate(pendingClose)} title="危险操作：手动平仓" visible={Boolean(pendingClose)}><TextInput autoCapitalize="characters" onChangeText={setConfirmation} placeholder={expectedConfirmation} placeholderTextColor={palette.textMuted} style={styles.confirmInput} value={confirmation} /></ConfirmSheet>

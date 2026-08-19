@@ -10,6 +10,7 @@ import asyncio
 import ccxt.pro as ccxtpro
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from valuecell.server.config.settings import get_settings
 
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
@@ -77,7 +78,13 @@ class SandboxExchangeTradingService:
         exchange = self._exchange_for(tenant_id, credential)
         try:
             exchange.set_sandbox_mode(True)
-            raw = await exchange.fetch_balance()
+            try:
+                raw = await asyncio.wait_for(
+                    exchange.fetch_balance(),
+                    timeout=get_settings().DEMO_ACCOUNT_READ_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError as exc:
+                raise SandboxTradingError("OKX Demo balance request timed out") from exc
             totals = raw.get("total", {}) if isinstance(raw, dict) else {}
             free = raw.get("free", {}) if isinstance(raw, dict) else {}
             used = raw.get("used", {}) if isinstance(raw, dict) else {}
@@ -93,7 +100,9 @@ class SandboxExchangeTradingService:
                 mark_price: Decimal | None = Decimal("1") if currency == "USDT" else None
                 if currency != "USDT":
                     try:
-                        ticker = await exchange.fetch_ticker(f"{currency}/USDT")
+                        ticker = await asyncio.wait_for(
+                            exchange.fetch_ticker(f"{currency}/USDT"), timeout=3.0
+                        )
                         mark_price = self._decimal(
                             ticker.get("last") if isinstance(ticker, dict) else None,
                             "Ticker price unavailable",

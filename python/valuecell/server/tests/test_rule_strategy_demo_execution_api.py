@@ -6,9 +6,6 @@ from fastapi.testclient import TestClient
 from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.routers import rule_strategy as router_module
 from valuecell.server.api.routers.rule_strategy import create_rule_strategy_router
-from valuecell.server.services.rule_strategy_demo_execution_read_model import (
-    DemoExecutionReadModelError,
-)
 
 
 class StrategyService:
@@ -20,66 +17,51 @@ class StrategyService:
         }
 
 
-def test_demo_execution_endpoint_is_not_a_paper_account_fallback(monkeypatch):
+def _app() -> FastAPI:
     app = FastAPI()
     app.include_router(create_rule_strategy_router(service=StrategyService()))
     app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
         user_id="user-a", tenant_id="tenant-a"
     )
+    return app
 
-    async def blocked(*_args, **_kwargs):
-        raise DemoExecutionReadModelError("Strategy is not configured for OKX Demo execution")
 
-    monkeypatch.setattr(router_module, "get_demo_execution_read_model", blocked)
-    monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(router_module, "SandboxExchangeTradingService", lambda _db: object())
+def test_demo_execution_endpoint_reports_pending_snapshot_without_exchange_call(monkeypatch):
+    app = _app()
+    monkeypatch.setattr(router_module, "get_latest_demo_account_snapshot", lambda *_args, **_kwargs: None)
     response = TestClient(app).get("/rule-strategies/strategy-a/demo-execution")
 
-    assert response.status_code == 409
-    assert "not configured" in response.json()["detail"]
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "demo_account_snapshot_pending"
 
 
-def test_demo_execution_endpoint_paginates_orders_without_changing_summary(monkeypatch):
-    app = FastAPI()
-    app.include_router(create_rule_strategy_router(service=StrategyService()))
-    app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
-        user_id="user-a", tenant_id="tenant-a"
+def test_demo_execution_endpoint_reads_snapshot_and_local_orders_only(monkeypatch):
+    app = _app()
+    snapshot = SimpleNamespace(
+        id=1,
+        source="okx_demo",
+        total_usdt_value=1_000.0,
+        balances=[],
+        positions=[],
+        observed_at=datetime(2026, 8, 7, tzinfo=timezone.utc),
     )
-
-    async def read_model(*_args, **_kwargs):
-        return {
-            "connection_id": "conn-a",
-            "account": {
-                "data": {
-                    "source": "okx_demo",
-                    "total_usdt_value": 1_000.0,
-                    "balances": [],
-                }
-            },
-            "positions": {"data": {"source": "okx_demo", "positions": []}},
-            "orders": [{"id": f"order-{index}"} for index in range(23)],
-            "trade_summary": {"order_count": 23},
-        }
-
-    monkeypatch.setattr(router_module, "get_demo_execution_read_model", read_model)
+    orders = [
+        {"id": f"order-{index}", "strategy_id": "strategy-a", "execution_source": "rule_strategy"}
+        for index in range(23)
+    ]
+    monkeypatch.setattr(router_module, "get_latest_demo_account_snapshot", lambda *_args, **_kwargs: snapshot)
     monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(router_module, "record_demo_account_snapshot", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        router_module,
-        "list_demo_account_snapshots",
-        lambda *_args, **_kwargs: [
-            SimpleNamespace(
-                observed_at=datetime(2026, 8, 6, tzinfo=timezone.utc),
-                total_usdt_value=1_000.0,
-            ),
-            SimpleNamespace(
-                observed_at=datetime(2026, 8, 7, tzinfo=timezone.utc),
-                total_usdt_value=1_025.0,
-            ),
-        ],
-    )
-    monkeypatch.setattr(router_module, "SandboxExchangeTradingService", lambda _db: object())
+    monkeypatch.setattr(router_module, "list_demo_account_snapshots", lambda *_args, **_kwargs: [snapshot])
+    monkeypatch.setattr(router_module, "get_demo_account_sync_state", lambda *_args, **_kwargs: None)
 
+    class LocalOrders:
+        def __init__(self, _db):
+            pass
+
+        def list_orders(self, *_args, **_kwargs):
+            return orders
+
+    monkeypatch.setattr(router_module, "SandboxExchangeTradingService", LocalOrders)
     response = TestClient(app).get(
         "/rule-strategies/strategy-a/demo-execution?page=2&page_size=10"
     )
@@ -89,26 +71,10 @@ def test_demo_execution_endpoint_paginates_orders_without_changing_summary(monke
     assert [order["id"] for order in data["orders"]] == [
         f"order-{index}" for index in range(10, 20)
     ]
-    assert data["trade_summary"]["order_count"] == 23
     assert data["pagination"] == {
         "page": 2,
         "page_size": 10,
         "total_items": 23,
         "total_pages": 3,
     }
-    assert data["equity_curve"]["points"] == [
-        {
-            "ts": "2026-08-06T00:00:00Z",
-            "cumulative_pnl": 0.0,
-            "daily_pnl_quote": 0.0,
-            "equity_quote": 1_000.0,
-            "action": "wallet_snapshot",
-        },
-        {
-            "ts": "2026-08-07T00:00:00Z",
-            "cumulative_pnl": 25.0,
-            "daily_pnl_quote": 25.0,
-            "equity_quote": 1_025.0,
-            "action": "wallet_snapshot",
-        },
-    ]
+    assert data["sync"]["observed_at"] == "2026-08-07T00:00:00+00:00"

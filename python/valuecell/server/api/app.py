@@ -65,6 +65,28 @@ async def reconcile_active_tenant_intents() -> None:
         session.close()
 
 
+async def sync_demo_account_snapshots() -> None:
+    """Run the exchange-backed Demo sync outside all HTTP request paths."""
+    from ..services.rule_strategy_demo_account_sync_service import (
+        sync_demo_account_snapshots as sync_service,
+    )
+
+    session = get_database_manager().get_session()
+    try:
+        result = await sync_service(session)
+        logger.info(
+            "Demo account snapshot sync completed accounts={} synced={} failed={}",
+            result["accounts"],
+            result["synced"],
+            result["failed"],
+        )
+    except Exception as exc:
+        session.rollback()
+        logger.warning("Demo account snapshot sync deferred: {}", exc)
+    finally:
+        session.close()
+
+
 async def refresh_world_intelligence_forever(interval_s: int) -> None:
     """Continuously import WorldMonitor evidence without stopping the API on outages."""
     service = WorldMonitorIntelligenceService()
@@ -137,20 +159,7 @@ def _ensure_system_env_and_load() -> None:
                 except Exception:
                     pass
     except Exception:
-        # Do not block app creation if any step fails
         pass
-
-
-def _run_required_rule_strategy_archiving_migration() -> None:
-    """Run the fail-closed archive schema migration after table creation."""
-    from ..db.connection import get_database_manager
-    from ..db.migrations import migrate_rule_strategy_archiving
-
-    session = get_database_manager().get_session()
-    try:
-        migrate_rule_strategy_archiving(session)
-    finally:
-        session.close()
 
 
 def _run_required_execution_attribution_migration() -> None:
@@ -158,6 +167,7 @@ def _run_required_execution_attribution_migration() -> None:
     from ..db.connection import get_database_manager
     from ..db.migrations import (
         migrate_demo_daily_execution_limit,
+        migrate_rule_strategy_demo_account_sync_state,
         migrate_rule_strategy_execution_attribution,
         migrate_rule_strategy_manual_close,
         migrate_rule_strategy_validation,
@@ -175,6 +185,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_strategy_monitor_metadata(session)
         migrate_demo_daily_execution_limit(session)
         migrate_strategy_demo_account_snapshots(session)
+        migrate_strategy_demo_account_sync_state(session)
         migrate_strategy_official_test_baselines(session)
         migrate_rule_strategy_manual_close(session)
     finally:
@@ -332,9 +343,18 @@ def create_app() -> FastAPI:
                 coalesce=True,
                 max_instances=1,
             )
+            _scheduler._scheduler.add_job(
+                sync_demo_account_snapshots,
+                trigger=IntervalTrigger(seconds=settings.DEMO_ACCOUNT_SYNC_INTERVAL_S),
+                id="_scheduler_sync_demo_account_snapshots",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+            )
             # Database-only reconciliation is safe before readiness. Exchange-backed
             # monitor reviews stay in the scheduler so upstream latency cannot block API startup.
             _sync_job()
+            asyncio.create_task(sync_demo_account_snapshots())
             logger.info("Strategy scheduler started")
         except Exception as exc:
             logger.warning("Strategy scheduler initialization deferred: {}", exc)

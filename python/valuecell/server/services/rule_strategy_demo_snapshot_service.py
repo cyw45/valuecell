@@ -48,22 +48,59 @@ def record_demo_account_snapshot(
 
 
 def list_demo_account_snapshots(
-    session: Session, *, tenant_id: str, strategy_id: str
+    session: Session,
+    *,
+    tenant_id: str,
+    strategy_id: str,
+    credential_id: str | None = None,
 ) -> list[RuleStrategyDemoAccountSnapshot]:
-    """Return all retained wallet snapshots in chronological order."""
+    """Return persisted snapshots, optionally restricted to the current credential."""
+    query = session.query(RuleStrategyDemoAccountSnapshot).filter(
+        RuleStrategyDemoAccountSnapshot.tenant_id == tenant_id,
+        RuleStrategyDemoAccountSnapshot.strategy_id == strategy_id,
+    )
+    if credential_id is not None:
+        query = query.filter(RuleStrategyDemoAccountSnapshot.credential_id == credential_id)
+    return query.order_by(
+        RuleStrategyDemoAccountSnapshot.observed_at.asc(),
+        RuleStrategyDemoAccountSnapshot.id.asc(),
+    ).all()
+
+
+def get_latest_demo_account_snapshot(
+    session: Session,
+    *,
+    tenant_id: str,
+    strategy_id: str,
+    credential_id: str,
+) -> RuleStrategyDemoAccountSnapshot | None:
+    """Return the newest snapshot for the strategy's current credential."""
     return (
         session.query(RuleStrategyDemoAccountSnapshot)
-        .filter(
-            RuleStrategyDemoAccountSnapshot.tenant_id == tenant_id,
-            RuleStrategyDemoAccountSnapshot.strategy_id == strategy_id,
+        .filter_by(
+            tenant_id=tenant_id,
+            strategy_id=strategy_id,
+            credential_id=credential_id,
         )
         .order_by(
-            RuleStrategyDemoAccountSnapshot.observed_at.asc(),
-            RuleStrategyDemoAccountSnapshot.id.asc(),
+            RuleStrategyDemoAccountSnapshot.observed_at.desc(),
+            RuleStrategyDemoAccountSnapshot.id.desc(),
         )
-        .all()
+        .first()
     )
 
+
+def get_demo_account_sync_state(
+    session: Session, *, tenant_id: str, strategy_id: str
+):
+    """Return background sync metadata without contacting the exchange."""
+    from valuecell.server.db.models.rule_strategy import RuleStrategyDemoAccountSyncState
+
+    return (
+        session.query(RuleStrategyDemoAccountSyncState)
+        .filter_by(tenant_id=tenant_id, strategy_id=strategy_id)
+        .first()
+    )
 
 def get_official_test_baseline(
     session: Session, *, tenant_id: str, strategy_id: str

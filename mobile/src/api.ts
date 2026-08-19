@@ -176,10 +176,13 @@ class MobileApiClient {
     const body = (await response.json().catch(() => null)) as unknown;
     if (!response.ok) {
       const detail = errorDetail(body);
+      const message = body === null && response.status >= 500
+        ? `服务网关暂时无法完成请求（HTTP ${response.status}）。请稍后重试。`
+        : detail.message;
       if (options.authenticated && response.status === 401) {
         await this.unauthorizedHandler?.();
       }
-      throw new MobileApiError(detail.message, path, response.status, detail.code);
+      throw new MobileApiError(message, path, response.status, detail.code);
     }
     if (!isRecord(body) || !("data" in body)) {
       throw new MobileApiError("服务返回格式无效。", path, response.status);

@@ -297,6 +297,20 @@ class Settings:
         self.MARKET_DATA_REQUEST_TIMEOUT_S = _positive_float_env(
             "VALUECELL_MARKET_DATA_REQUEST_TIMEOUT_S", 20.0
         )
+        self.DEMO_ACCOUNT_READ_TIMEOUT_S = _positive_float_env(
+            "VALUECELL_DEMO_ACCOUNT_READ_TIMEOUT_S", 12.0
+        )
+        self.DEMO_ACCOUNT_SYNC_INTERVAL_S = _positive_int_env(
+            "VALUECELL_DEMO_ACCOUNT_SYNC_INTERVAL_S", 300
+        )
+        if self.DEMO_ACCOUNT_SYNC_INTERVAL_S < 60:
+            raise ValueError("VALUECELL_DEMO_ACCOUNT_SYNC_INTERVAL_S must be at least 60")
+        self.DEMO_ACCOUNT_SYNC_ATTEMPTS = _positive_int_env(
+            "VALUECELL_DEMO_ACCOUNT_SYNC_ATTEMPTS", 3
+        )
+        self.DEMO_ACCOUNT_SYNC_RETRY_DELAY_S = _positive_float_env(
+            "VALUECELL_DEMO_ACCOUNT_SYNC_RETRY_DELAY_S", 1.0
+        )
         self.MARKET_DATA_CACHE_TTL_S = _positive_float_env(
             "VALUECELL_MARKET_DATA_CACHE_TTL_S", 30.0
         )
