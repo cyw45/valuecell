@@ -1,5 +1,4 @@
 import asyncio
-from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

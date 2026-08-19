@@ -162,12 +162,24 @@ def _ensure_system_env_and_load() -> None:
         pass
 
 
+def _run_required_rule_strategy_archiving_migration() -> None:
+    """Run the archive-state migration before scheduler reconciliation."""
+    from ..db.connection import get_database_manager
+    from ..db.migrations import migrate_rule_strategy_archiving
+
+    session = get_database_manager().get_session()
+    try:
+        migrate_rule_strategy_archiving(session)
+    finally:
+        session.close()
+
+
 def _run_required_execution_attribution_migration() -> None:
     """Run required strategy state migrations before scheduler startup."""
     from ..db.connection import get_database_manager
     from ..db.migrations import (
         migrate_demo_daily_execution_limit,
-        migrate_rule_strategy_demo_account_sync_state,
+        migrate_strategy_demo_account_sync_state,
         migrate_rule_strategy_execution_attribution,
         migrate_rule_strategy_manual_close,
         migrate_rule_strategy_validation,

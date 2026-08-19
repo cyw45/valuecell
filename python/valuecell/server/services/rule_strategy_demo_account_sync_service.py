@@ -7,7 +7,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from loguru import logger
 from sqlalchemy.orm import Session
 
 from valuecell.server.config.settings import get_settings

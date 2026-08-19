@@ -17,7 +17,8 @@ class StrategyService:
         }
 
 
-def _app() -> FastAPI:
+def _app(monkeypatch) -> FastAPI:
+    monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
     app = FastAPI()
     app.include_router(create_rule_strategy_router(service=StrategyService()))
     app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
@@ -27,7 +28,7 @@ def _app() -> FastAPI:
 
 
 def test_demo_execution_endpoint_reports_pending_snapshot_without_exchange_call(monkeypatch):
-    app = _app()
+    app = _app(monkeypatch)
     monkeypatch.setattr(router_module, "get_latest_demo_account_snapshot", lambda *_args, **_kwargs: None)
     response = TestClient(app).get("/rule-strategies/strategy-a/demo-execution")
 
@@ -36,7 +37,7 @@ def test_demo_execution_endpoint_reports_pending_snapshot_without_exchange_call(
 
 
 def test_demo_execution_endpoint_reads_snapshot_and_local_orders_only(monkeypatch):
-    app = _app()
+    app = _app(monkeypatch)
     snapshot = SimpleNamespace(
         id=1,
         source="okx_demo",
