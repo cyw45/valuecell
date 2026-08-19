@@ -161,7 +161,7 @@ class RuleStrategyManualCloseRequest(BaseModel):
 
     scope: Literal["symbol", "all"]
     symbol: str | None = Field(default=None, min_length=6, max_length=32)
-    confirmation: str = Field(min_length=10, max_length=64)
+    confirmation: str = Field(min_length=4, max_length=32)
     idempotency_key: str = Field(min_length=16, max_length=128)
 
     @field_validator("symbol", mode="before")
@@ -173,16 +173,12 @@ class RuleStrategyManualCloseRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_confirmation(self) -> "RuleStrategyManualCloseRequest":
-        expected = (
-            "CLOSE ALL POSITIONS"
-            if self.scope == "all"
-            else f"CLOSE {self.symbol}"
-        )
+        expected = "确认平仓"
         if self.scope == "symbol" and self.symbol is None:
             raise ValueError("symbol is required for a symbol close")
         if self.scope == "all" and self.symbol is not None:
             raise ValueError("symbol is forbidden for an all-position close")
-        if self.confirmation.strip().upper() != expected:
+        if self.confirmation.strip() != expected:
             raise ValueError(f"confirmation must be exactly '{expected}'")
         return self
 

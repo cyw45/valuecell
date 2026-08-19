@@ -341,7 +341,7 @@ def test_manual_close_requires_exact_target_confirmation():
         {
             "scope": "symbol",
             "symbol": "btc-usdt",
-            "confirmation": "CLOSE BTC/USDT",
+            "confirmation": "确认平仓",
             "idempotency_key": "manual-close-request-0001",
         }
     )
@@ -351,7 +351,7 @@ def test_manual_close_requires_exact_target_confirmation():
         RuleStrategyManualCloseRequest.model_validate(
             {
                 "scope": "all",
-                "confirmation": "CLOSE ALL POSITION",
+                "confirmation": "确认全部平仓",
                 "idempotency_key": "manual-close-request-0002",
             }
         )

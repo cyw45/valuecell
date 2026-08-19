@@ -48,7 +48,7 @@ export default function TradeLedgerScreen() {
     <ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle={`服务端归因成交 · 第 ${page}/${totalPages} 页`} title="成交账本" />
     {trades.isError ? <StatePanel actionLabel="重试" description={(trades.error as Error).message} onAction={() => void trades.refetch()} title="成交记录暂不可用" tone="error" /> : null}
     {!trades.isError && entries.length === 0 ? <StatePanel description="没有已成交的策略订单。等待下一次服务端策略评估。" title="尚无成交" /> : null}
-    {pageEntries.map((trade, index) => <Pressable accessibilityRole="button" key={`${trade.evaluation_id ?? "trade"}-${index}`} onPress={() => trade.symbol && navigation.navigate("StrategyPositions", { strategyId: selectedId, symbol: trade.symbol })} style={styles.card}>
+    {pageEntries.map((trade, index) => <Pressable accessibilityRole="button" key={`${trade.evaluation_id ?? "trade"}-${index}`} onPress={() => trade.symbol && navigation.navigate("StrategyPositions", { strategyId: selectedId, symbol: trade.symbol, evaluationId: trade.evaluation_id })} style={styles.card}>
       <View style={styles.row}><Text style={[styles.action, trade.action === "buy" ? styles.buy : styles.sell]}>{trade.action === "buy" ? "买入" : "卖出"}</Text><Text style={styles.symbol}>{trade.symbol ?? "—"}</Text><Text style={styles.time}>{formatTimestamp(trade.evaluated_at)}</Text></View>
       <View style={styles.metrics}><Text style={styles.metric}>数量 {trade.quantity ?? "—"}</Text><Text style={styles.metric}>成交额 {formatQuote(trade.quote_amount)}</Text><Text style={styles.metric}>已实现 {formatQuote(trade.realized_pnl_quote)}</Text></View>
       <Text style={styles.reason}>{trade.reason ?? "服务端未提供成交原因。"}</Text>

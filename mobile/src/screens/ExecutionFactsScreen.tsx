@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import { useNavigation, useRoute, type NavigationProp, type RouteProp } from "@react-navigation/native";
 import { api } from "../api";
 import { StatePanel } from "../components";
 import type { WorkbenchStackParamList } from "../navigation/types";
@@ -27,7 +27,7 @@ function formatNumericQuote(value: number | string | null | undefined): string {
 export default function ExecutionFactsScreen() {
   const route = useRoute<Route>();
   const { session } = useSession();
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<NavigationProp<WorkbenchStackParamList>>();
   const { strategyId, kind } = route.params;
   const [page, setPage] = useState(1);
   const strategy = useQuery({
@@ -64,7 +64,7 @@ export default function ExecutionFactsScreen() {
 
   if (kind === "positions") return <DemoPositions positions={demo.positions.data.positions} />;
   if (kind === "balances") return <DemoBalances balances={demo.account.data.balances} />;
-  return <DemoOrders page={page} setPage={setPage} execution={demo} />;
+  return <DemoOrders page={page} setPage={setPage} execution={demo} navigation={navigation} strategyId={strategyId} />;
 }
 
 function PaperPositions({ positions }: { positions: Array<[string, { quantity: number; mark_price: number }]> }) {
@@ -79,9 +79,12 @@ function DemoBalances({ balances }: { balances: Array<{ currency: string; free: 
   return <FactsList empty={pageCopy.balances.empty} title={pageCopy.balances.title}>{balances.map((balance) => <FactRow detail={`可用 ${balance.free} · 总计 ${balance.total}`} key={balance.currency} title={balance.currency} value={formatQuote(balance.usdt_value)} />)}</FactsList>;
 }
 
-function DemoOrders({ execution, page, setPage }: { execution: RuleStrategyDemoExecution; page: number; setPage: (page: number) => void }) {
+function DemoOrders({ execution, page, setPage, navigation, strategyId }: { execution: RuleStrategyDemoExecution; page: number; setPage: (page: number) => void; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string }) {
   return <FactsList empty={pageCopy.orders.empty} title={`策略归属订单 · 第 ${execution.pagination.page}/${execution.pagination.total_pages || 1} 页`}>
-    {execution.orders.map((order) => <FactRow detail={`${orderTypeLabel(order.type)} · 请求 ${formatNumericQuote(order.requested_quote)} · ${formatTimestamp(order.updated_at)}${order.error_code ? ` · ${order.error_code}` : ""}`} key={order.id} title={`${orderSideLabel(order.side)} · ${order.symbol}`} value={orderStatusLabel(order.status)} />)}
+    {execution.orders.map((order) => <Pressable accessibilityRole="button" key={order.id} onPress={() => navigation.navigate("StrategyPositions", { strategyId, symbol: order.symbol, orderId: order.id, evaluationId: order.evaluation_id ?? undefined })} style={styles.orderRow}>
+      <FactRow detail={`${orderTypeLabel(order.type)} · 请求 ${formatNumericQuote(order.requested_quote)} · ${formatTimestamp(order.updated_at)}${order.error_code ? ` · ${order.error_code}` : ""}`} title={`${orderSideLabel(order.side)} · ${order.symbol}`} value={orderStatusLabel(order.status)} />
+      <Text style={styles.openHint}>查看买入点、K 线、条件与执行结果</Text>
+    </Pressable>)}
     {execution.pagination.total_pages > 1 ? <View style={styles.pagination}><Pressable accessibilityRole="button" disabled={page <= 1} onPress={() => setPage(Math.max(1, page - 1))} style={[styles.pageButton, page <= 1 && styles.disabled]}><Text style={styles.pageButtonText}>上一页</Text></Pressable><Pressable accessibilityRole="button" disabled={page >= execution.pagination.total_pages} onPress={() => setPage(Math.min(execution.pagination.total_pages, page + 1))} style={[styles.pageButton, page >= execution.pagination.total_pages && styles.disabled]}><Text style={styles.pageButtonText}>下一页</Text></Pressable></View> : null}
   </FactsList>;
 }
@@ -104,6 +107,8 @@ const styles = StyleSheet.create({
   row: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 62, paddingVertical: spacing.sm },
   copy: { flex: 1, gap: 3 },
   rowTitle: { color: palette.text, fontSize: 14, fontWeight: "800" },
+  orderRow: { borderTopColor: palette.border, borderTopWidth: 1, gap: spacing.xs, paddingVertical: spacing.xs },
+  openHint: { color: palette.primary, fontSize: 12, fontWeight: "800", paddingBottom: spacing.xs },
   detail: { color: palette.textMuted, fontSize: 12, lineHeight: 17 },
   value: { color: palette.text, fontSize: 12, fontWeight: "900", textAlign: "right" },
   empty: { color: palette.textMuted, fontSize: 13, paddingVertical: spacing.lg, textAlign: "center" },
