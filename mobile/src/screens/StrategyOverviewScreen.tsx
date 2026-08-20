@@ -98,7 +98,7 @@ function numberValue(value: number | string | null | undefined): number | undefi
 function demoWalletPoints(
   snapshot: RuleStrategyDemoExecution | undefined,
 ): RuleStrategyPnlPoint[] {
-  return (snapshot?.equity_curve?.points ?? []).flatMap((point) => {
+  return (snapshot?.wallet_equity_curve?.points ?? []).flatMap((point) => {
     const toNumber = (value: number | string | null | undefined) =>
       typeof value === "string" ? Number(value) : value;
     const equity = toNumber(point.equity_quote ?? point.equity);

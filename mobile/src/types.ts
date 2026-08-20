@@ -1116,7 +1116,10 @@ export interface RuleStrategyDemoExecution {
   pagination: { page: number; page_size: number; total_items: number; total_pages: number };
   trade_summary?: DemoTradeSummary | null;
   pnl: RuleStrategyDemoExecutionPnl;
+  /** Strategy-attributed cumulative PnL curve. */
   equity_curve?: DemoEquityCurve | null;
+  /** Exchange-connection wallet equity curve; never strategy PnL. */
+  wallet_equity_curve?: DemoEquityCurve | null;
   checked_at: string;
   sync?: {
     status: "healthy" | "stale";
