@@ -392,11 +392,7 @@ export default function DashboardPage() {
   const demoCheckedAt = demoExecution
     ? demoExecutionCheckedAtLabel(demoExecution)
     : undefined;
-  const demoCurveMode = demoEquityCurve.some(
-    (point) => point.equity_quote !== undefined,
-  )
-    ? "equity"
-    : "pnl";
+  const demoCurveMode = "pnl" as const;
   const demoCheckedAtTime = demoCheckedAt
     ? new Date(demoCheckedAt).toLocaleTimeString("zh-CN")
     : "等待策略账户同步";

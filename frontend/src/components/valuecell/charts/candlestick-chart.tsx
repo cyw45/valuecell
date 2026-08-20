@@ -137,11 +137,19 @@ function CandlestickChart({
             : undefined,
       },
     ];
+    const lowPrice = Math.min(...data.map((item) => item.low));
+    const highPrice = Math.max(...data.map((item) => item.high));
     for (const marker of tradeMarkers) {
+      if (!Number.isFinite(marker.price) || marker.price <= 0 || marker.price < lowPrice || marker.price > highPrice) continue;
+      const markerIndex = data.findIndex(
+        (item) => item.time === marker.time || Date.parse(item.time) === Date.parse(marker.time),
+      );
+      if (markerIndex < 0) continue;
       series.push({
-        name: marker.label ?? (marker.side === "buy" ? "买入" : "卖出"),
         type: "scatter",
-        data: [[TimeUtils.formatUTC(marker.time, dateFormat), marker.price]],
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        data: [[markerIndex, marker.price]],
         symbol: "circle",
         symbolSize: 11,
         itemStyle: { color: marker.side === "buy" ? "#10b981" : "#f43f5e" },

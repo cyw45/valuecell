@@ -216,6 +216,54 @@ def _pnl_and_curve(orders: list[dict[str, Any]], positions: dict[str, Any], chec
     }
 
 
+def build_strategy_daily_pnl_curve(
+    snapshots: list[Any],
+    orders: list[dict[str, Any]],
+    *,
+    started_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Mark strategy-owned fills against each persisted wallet snapshot.
+
+    Shared wallet equity is not strategy PnL. Rebuild the strategy inventory at
+    each snapshot timestamp, then use that snapshot's asset marks.
+    """
+    closes: dict[Any, tuple[datetime, Decimal]] = {}
+    for snapshot in snapshots:
+        observed_at = _timestamp_sort_key(snapshot.observed_at)
+        if started_at is not None and observed_at < _timestamp_sort_key(started_at):
+            continue
+        eligible_orders = [
+            order
+            for order in orders
+            if _timestamp_sort_key(order.get("filled_at") or order.get("created_at")) <= observed_at
+        ]
+        pnl, _ = _pnl_and_curve(
+            eligible_orders,
+            {"positions": list(snapshot.positions or [])},
+            observed_at.isoformat(),
+        )
+        total = _decimal(pnl.get("total"))
+        if pnl.get("status") != "available" or total is None:
+            continue
+        day = observed_at.date()
+        previous = closes.get(day)
+        if previous is None or observed_at >= previous[0]:
+            closes[day] = (observed_at, total)
+    points: list[dict[str, Any]] = []
+    previous_total = Decimal(0)
+    for observed_at, total in sorted(closes.values(), key=lambda item: item[0]):
+        points.append(
+            {
+                "ts": observed_at.isoformat(),
+                "cumulative_pnl": float(total),
+                "daily_pnl_quote": float(total - previous_total),
+                "action": "strategy_mark_to_market",
+            }
+        )
+        previous_total = total
+    return points
+
+
 def build_demo_execution_read_model(
     strategy: dict[str, Any],
     account: dict[str, Any],

@@ -47,6 +47,7 @@ from valuecell.server.services.rule_strategy_text_import_job_service import (
 )
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     build_demo_execution_read_model,
+    build_strategy_daily_pnl_curve,
 )
 from valuecell.server.services.rule_strategy_pnl_service import (
     build_daily_pnl_points,
@@ -865,7 +866,18 @@ def create_rule_strategy_router(
             "consecutive_failures": sync_state.consecutive_failures if sync_state else 0,
             "last_error_code": sync_state.last_error_code if sync_state else None,
         }
+        strategy_curve_points = build_strategy_daily_pnl_curve(
+            snapshots,
+            data["orders"],
+            started_at=baseline.started_at if baseline is not None else None,
+        )
         data["equity_curve"] = {
+            "status": "available" if strategy_curve_points else "unavailable",
+            "scope": "strategy_attributed_persisted_wallet_marks",
+            "reason_code": None if strategy_curve_points else "strategy_pnl_history_unavailable",
+            "points": strategy_curve_points,
+        }
+        data["wallet_equity_curve"] = {
             "status": "available" if curve_points else "unavailable",
             "scope": "persisted_exchange_account_wallet_snapshots",
             "reason_code": None if curve_points else "no_wallet_snapshots",

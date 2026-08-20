@@ -89,6 +89,7 @@ export interface RuleStrategyDemoExecution {
   trade_summary?: DemoTradeSummary | null;
   pnl: RuleStrategyDemoExecutionPnl;
   equity_curve?: DemoEquityCurve | null;
+  wallet_equity_curve?: DemoEquityCurve | null;
   checked_at: string;
 }
 
