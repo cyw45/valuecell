@@ -33,6 +33,40 @@ RULE_STRATEGY_ARCHIVING_MIGRATION_VERSION = "20260801_rule_strategy_archiving_v1
 # Stable, namespaced advisory-lock key for the duration of the migration transaction.
 RULE_STRATEGY_ARCHIVING_MIGRATION_LOCK_KEY = 7720250720
 
+EXECUTION_BATCH_MIGRATION_VERSION = "20260820_rule_strategy_execution_batches_v1"
+EXECUTION_BATCH_MIGRATION_LOCK_KEY = 7720250722
+
+
+def migrate_rule_strategy_execution_batches(session: Session) -> bool:
+    """Install batch lifecycle and nullable attribution columns idempotently."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(f"execution batch migration does not support {dialect!r}")
+    if dialect == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": EXECUTION_BATCH_MIGRATION_LOCK_KEY})
+    session.execute(text("CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)"))
+    if session.execute(text("SELECT 1 FROM schema_migrations WHERE version=:version"), {"version": EXECUTION_BATCH_MIGRATION_VERSION}).first():
+        return False
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS rule_strategy_execution_batches (
+        batch_id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+        strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE CASCADE,
+        strategy_name_snapshot VARCHAR(200) NOT NULL, execution_generation INTEGER NOT NULL,
+        status VARCHAR(16) NOT NULL DEFAULT 'running', started_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        stopped_at {ts}, config_snapshot JSON NOT NULL)"""))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_rule_strategy_batches_tenant_strategy_started ON rule_strategy_execution_batches (tenant_id, strategy_id, started_at DESC)"))
+    additions = {"rule_strategies": {"current_batch_id": "VARCHAR(36)"}, "rule_strategy_evaluation_journal": {"batch_id": "VARCHAR(36)"}, "rule_strategy_execution_intents": {"batch_id": "VARCHAR(36)"}, "sandbox_exchange_orders": {"batch_id": "VARCHAR(36)"}}
+    for table, columns in additions.items():
+        existing = {row[1] for row in session.execute(text(f"PRAGMA table_info({table})")).fetchall()} if dialect == "sqlite" else set()
+        for name, definition in columns.items():
+            if dialect == "postgresql":
+                session.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}"))
+            elif name not in existing:
+                session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+    session.execute(text("INSERT INTO schema_migrations (version) VALUES (:version)"), {"version": EXECUTION_BATCH_MIGRATION_VERSION})
+    session.commit()
+    return True
+
 
 def migrate_rule_strategy_archiving(session: Session) -> bool:
     """Install archive-state DDL exactly once, failing closed on errors."""

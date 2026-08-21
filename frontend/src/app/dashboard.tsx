@@ -27,7 +27,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
 import {
   useRuleStrategy,
@@ -324,6 +324,8 @@ export default function DashboardPage() {
   const { resolvedTheme, setTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
   const [strategyId, , strategiesQuery] = useActiveRuleStrategyId();
+  const [searchParams] = useSearchParams();
+  const selectedBatchId = searchParams.get("batch_id");
   const strategyQuery = useRuleStrategy(strategyId);
   const { data: ruleStrategy, isError: ruleStrategyError } = strategyQuery;
   const monitorStateQuery = useRuleStrategyMonitorState(strategyId || undefined);
@@ -343,6 +345,7 @@ export default function DashboardPage() {
     isOkxDemo,
     demoOrdersPage,
     10,
+    selectedBatchId,
   );
   const {
     data: demoExecution,
@@ -367,7 +370,7 @@ export default function DashboardPage() {
   const downloadAllDemoOrders = async () => {
     if (!strategyId || exportStrategy.isPending) return;
     try {
-      const workbook = await exportStrategy.mutateAsync({ strategyId });
+      const workbook = await exportStrategy.mutateAsync({ strategyId, batchId: selectedBatchId ?? undefined });
       const objectUrl = URL.createObjectURL(workbook.blob);
       const filename = workbook.filename?.toLowerCase().endsWith(".xlsx")
         ? workbook.filename
@@ -401,13 +404,19 @@ export default function DashboardPage() {
     : 0;
   const pnlCurveQuery = useRuleStrategyPnlCurve(
     strategyExecutionModeIsDemo === false ? strategyId || undefined : undefined,
+    selectedBatchId,
   );
   const pnlCurve = pnlCurveQuery.data ?? [];
   const tradesQuery = useRuleStrategyTrades(
     strategyExecutionModeIsDemo === false ? strategyId || undefined : undefined,
+    true,
+    selectedBatchId,
   );
   const trades = tradesQuery.data ?? [];
-  const evaluationsQuery = useRuleStrategyEvaluations(strategyId || undefined);
+  const evaluationsQuery = useRuleStrategyEvaluations(
+    strategyId || undefined,
+    selectedBatchId,
+  );
   const evaluations = evaluationsQuery.data ?? [];
   const trackedSymbols = ruleStrategy?.config.symbols ?? [];
   const activeSymbols = isOkxDemo

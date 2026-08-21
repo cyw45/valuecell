@@ -26,6 +26,7 @@ class RuleStrategy(Base):
     status = Column(String(20), nullable=False, default="stopped", index=True)
     paper_mode = Column(Boolean, nullable=False, default=True)
     execution_generation = Column(Integer, nullable=False, default=1, server_default="1")
+    current_batch_id = Column(String(36), nullable=True, index=True)
     config = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
@@ -33,6 +34,27 @@ class RuleStrategy(Base):
 
     __table_args__ = (
         CheckConstraint("execution_generation >= 1", name="ck_rule_strategies_execution_generation"),
+    )
+
+
+class RuleStrategyExecutionBatch(Base):
+    """One immutable start/stop execution interval for a strategy."""
+
+    __tablename__ = "rule_strategy_execution_batches"
+
+    batch_id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False, index=True)
+    strategy_id = Column(String(100), ForeignKey("rule_strategies.strategy_id", ondelete="CASCADE"), nullable=False, index=True)
+    strategy_name_snapshot = Column(String(200), nullable=False)
+    execution_generation = Column(Integer, nullable=False)
+    status = Column(String(16), nullable=False, default="running", index=True)
+    started_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
+    stopped_at = Column(DateTime(timezone=True), nullable=True)
+    config_snapshot = Column(JSON, nullable=False)
+
+    __table_args__ = (
+        Index("ix_rule_strategy_batches_tenant_strategy_started", "tenant_id", "strategy_id", started_at.desc()),
+        CheckConstraint("execution_generation >= 1", name="ck_rule_strategy_batch_generation"),
     )
 
 
@@ -45,6 +67,7 @@ class RuleStrategyEvaluationJournal(Base):
     evaluation_id = Column(String(100), unique=True, nullable=False, index=True)
     strategy_id = Column(String(100), ForeignKey("rule_strategies.strategy_id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(String(36), nullable=False, index=True)
+    batch_id = Column(String(36), nullable=True, index=True)
     result = Column(JSON, nullable=False)
     signals = Column(JSON, nullable=False, default=list)
     trades = Column(JSON, nullable=False, default=list)
@@ -72,6 +95,7 @@ class RuleStrategyExecutionIntent(Base):
     execution_generation = Column(Integer, nullable=False)
     execution_source = Column(String(32), nullable=False, default="rule_strategy")
     tenant_id = Column(String(36), ForeignKey("tenants.id", ondelete="RESTRICT"), nullable=False)
+    batch_id = Column(String(36), nullable=True, index=True)
     credential_id = Column(String(36), ForeignKey("tenant_credentials.id", ondelete="RESTRICT"), nullable=True)
     idempotency_key = Column(String(128), nullable=False)
     symbol = Column(String(32), nullable=False)

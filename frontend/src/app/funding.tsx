@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router";
 import { Landmark, LockKeyhole } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "react-i18next";
@@ -35,12 +36,14 @@ export default function FundingPage() {
   const { t } = useTranslation();
   const { resolvedTheme } = useTheme();
   const [strategyId] = useActiveRuleStrategyId();
+  const [searchParams] = useSearchParams();
+  const batchId = searchParams.get("batch_id");
   const {
     data: funding,
     isLoading,
     isError,
-  } = useRuleStrategyFunding(strategyId);
-  const { data: pnlCurve } = useRuleStrategyPnlCurve(strategyId || undefined);
+  } = useRuleStrategyFunding(strategyId, batchId);
+  const { data: pnlCurve } = useRuleStrategyPnlCurve(strategyId || undefined, batchId);
   const fundingEntries = funding ?? [];
   const pnlPoints = pnlCurve ?? [];
   const hasFunding = fundingEntries.length > 0;

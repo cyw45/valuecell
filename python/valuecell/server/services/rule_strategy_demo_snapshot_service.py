@@ -53,6 +53,8 @@ def list_demo_account_snapshots(
     tenant_id: str,
     strategy_id: str,
     credential_id: str | None = None,
+    started_at: datetime | None = None,
+    stopped_at: datetime | None = None,
 ) -> list[RuleStrategyDemoAccountSnapshot]:
     """Return persisted snapshots, optionally restricted to the current credential."""
     query = session.query(RuleStrategyDemoAccountSnapshot).filter(
@@ -61,6 +63,10 @@ def list_demo_account_snapshots(
     )
     if credential_id is not None:
         query = query.filter(RuleStrategyDemoAccountSnapshot.credential_id == credential_id)
+    if started_at is not None:
+        query = query.filter(RuleStrategyDemoAccountSnapshot.observed_at >= started_at)
+    if stopped_at is not None:
+        query = query.filter(RuleStrategyDemoAccountSnapshot.observed_at <= stopped_at)
     return query.order_by(
         RuleStrategyDemoAccountSnapshot.observed_at.asc(),
         RuleStrategyDemoAccountSnapshot.id.asc(),
@@ -73,21 +79,23 @@ def get_latest_demo_account_snapshot(
     tenant_id: str,
     strategy_id: str,
     credential_id: str,
+    started_at: datetime | None = None,
+    stopped_at: datetime | None = None,
 ) -> RuleStrategyDemoAccountSnapshot | None:
     """Return the newest snapshot for the strategy's current credential."""
-    return (
-        session.query(RuleStrategyDemoAccountSnapshot)
-        .filter_by(
-            tenant_id=tenant_id,
-            strategy_id=strategy_id,
-            credential_id=credential_id,
-        )
-        .order_by(
-            RuleStrategyDemoAccountSnapshot.observed_at.desc(),
-            RuleStrategyDemoAccountSnapshot.id.desc(),
-        )
-        .first()
+    query = session.query(RuleStrategyDemoAccountSnapshot).filter_by(
+        tenant_id=tenant_id,
+        strategy_id=strategy_id,
+        credential_id=credential_id,
     )
+    if started_at is not None:
+        query = query.filter(RuleStrategyDemoAccountSnapshot.observed_at >= started_at)
+    if stopped_at is not None:
+        query = query.filter(RuleStrategyDemoAccountSnapshot.observed_at <= stopped_at)
+    return query.order_by(
+        RuleStrategyDemoAccountSnapshot.observed_at.desc(),
+        RuleStrategyDemoAccountSnapshot.id.desc(),
+    ).first()
 
 
 def get_demo_account_sync_state(

@@ -54,6 +54,7 @@ class SandboxExchangeOrder(Base):
         ForeignKey("rule_strategies.strategy_id", ondelete="RESTRICT"),
         nullable=True,
     )
+    batch_id = Column(String(36), nullable=True, index=True)
     evaluation_id = Column(
         String(100),
         ForeignKey(

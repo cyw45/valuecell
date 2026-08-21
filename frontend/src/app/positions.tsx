@@ -88,14 +88,15 @@ export default function PositionsPage() {
   const routeSymbol = searchParams.get("symbol") ?? "";
   const orderId = searchParams.get("orderId");
   const evaluationId = searchParams.get("evaluationId");
+  const batchId = searchParams.get("batch_id");
   const [selectedSymbol, setSelectedSymbol] = useState(routeSymbol);
   const [range, setRange] = useState<Range>("1m");
   const strategy = useRuleStrategy(strategyId || undefined);
   const isDemo = strategy.data?.config.execution.environment === "okx_demo";
-  const account = useRuleStrategyAccount(strategy.data && !isDemo ? strategyId || undefined : undefined);
-  const demo = useRuleStrategyDemoExecution(strategyId || undefined, isDemo, 1, 100);
-  const trades = useRuleStrategyTrades(strategyId || undefined, !isDemo);
-  const evaluations = useRuleStrategyEvaluations(strategyId || undefined);
+  const account = useRuleStrategyAccount(strategy.data && !isDemo ? strategyId || undefined : undefined, batchId);
+  const demo = useRuleStrategyDemoExecution(strategyId || undefined, isDemo, 1, 100, batchId);
+  const trades = useRuleStrategyTrades(strategyId || undefined, !isDemo, batchId);
+  const evaluations = useRuleStrategyEvaluations(strategyId || undefined, batchId);
   const positions = useMemo<PositionDetail[]>(() => {
     if (isDemo) {
       return (demo.data?.positions.data.positions ?? []).map((position) => {

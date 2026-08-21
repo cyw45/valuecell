@@ -51,6 +51,7 @@ class RuleStrategyExportService:
         tenant_id: str,
         from_date: date | None = None,
         to_date: date | None = None,
+        batch_id: str | None = None,
     ) -> tuple[bytes, str]:
         """Return a sanitized workbook and safe attachment filename.
 
@@ -61,12 +62,16 @@ class RuleStrategyExportService:
             raise ValueError("from_date must be on or before to_date")
 
         strategy = self._strategy_service.get(strategy_id, tenant_id)
+        batch_capable = hasattr(self._repository, "get_batch")
+        batch = self._strategy_service.resolve_batch(strategy_id, tenant_id, batch_id)
         start_at, end_at_exclusive = _utc_bounds(from_date, to_date)
         journals = self._journals(
             strategy_id,
             tenant_id,
             start_at,
             end_at_exclusive,
+            getattr(batch, "batch_id", None) if batch_capable else None,
+            batch_capable,
         )
         evaluation_ids = {
             str(_field(journal, "evaluation_id"))
@@ -80,7 +85,7 @@ class RuleStrategyExportService:
         )
 
         sheets = [
-            ("导出说明", self._description_rows(strategy, from_date, to_date)),
+            ("导出说明", self._description_rows(strategy, from_date, to_date, batch)),
             ("策略参数", self._parameter_rows(strategy)),
             ("成交明细", self._trade_rows(journals)),
             ("资金变化", self._fund_rows(journals)),
@@ -95,7 +100,11 @@ class RuleStrategyExportService:
         tenant_id: str,
         start_at: datetime | None,
         end_at_exclusive: datetime | None,
+        batch_id: str | None,
+        batch_capable: bool,
     ) -> list[Any]:
+        if batch_capable and batch_id is None:
+            return []
         reader = getattr(self._repository, "get_evaluations_for_export", None)
         if callable(reader):
             raw_journals = reader(
@@ -118,6 +127,12 @@ class RuleStrategyExportService:
             if (
                 _field(journal, "tenant_id") != tenant_id
                 or _field(journal, "strategy_id") != strategy_id
+            ):
+                continue
+            if (
+                batch_id is not None
+                and batch_capable
+                and _field(journal, "batch_id") != batch_id
             ):
                 continue
             recorded_at = _as_utc(_field(journal, "created_at"))
@@ -174,11 +189,14 @@ class RuleStrategyExportService:
         strategy: Mapping[str, Any],
         from_date: date | None,
         to_date: date | None,
+        batch: Any | None,
     ) -> list[list[Any]]:
         return [
             ["项目", "内容"],
             ["策略 ID", strategy.get("strategy_id")],
             ["策略名称", strategy.get("name")],
+            ["执行批次 ID", _field(batch, "batch_id") or "无当前批次"],
+            ["执行批次状态", _field(batch, "status") or "无"],
             ["导出日期范围 (UTC)", _range_label(from_date, to_date)],
             ["日期解释", "筛选按 UTC 日历日执行，起始日和结束日均包含在内。"],
             ["数据来源", "策略参数来自服务端配置；其他工作表来自持久化评估日志和执行记录。"],

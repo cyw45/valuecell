@@ -246,12 +246,34 @@ export interface RuleStrategy {
   name: string;
   description: string | null;
   status: RuleStrategyStatus;
-  mode: "paper";
+  execution_generation: number;
+  current_batch_id: string | null;
+  mode: "paper" | "okx_demo";
   config: RuleStrategyConfig;
   account: RuleStrategyPaperAccount;
   created_at?: string;
   updated_at?: string;
   archived_at: string | null;
+}
+
+export interface RuleStrategyExecutionBatch {
+  batch_id: string;
+  strategy_id: string;
+  strategy_name: string;
+  execution_generation: number;
+  status: "running" | "stopped" | "archived";
+  started_at: string;
+  stopped_at: string | null;
+  config_snapshot: RuleStrategyConfig;
+}
+
+export interface RuleStrategyExecutionBatchPage {
+  items: RuleStrategyExecutionBatch[];
+  current_batch_id: string | null;
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
 }
 
 export interface RuleStrategyCondition {

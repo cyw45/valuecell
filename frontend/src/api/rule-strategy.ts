@@ -13,6 +13,7 @@ import type {
   RuleStrategyAdvisory,
   RuleStrategyEvaluation,
   RuleStrategyEvaluationHistoryEntry,
+  RuleStrategyExecutionBatchPage,
   RuleStrategyFundingLogEntry,
   RuleStrategyLog,
   RuleStrategyLogEntry,
@@ -34,16 +35,32 @@ const ruleStrategyLogKey = (
   tenantId: string,
   strategyId: string,
   logType: "signals" | "trades" | "funding",
-) => [...ruleStrategyKey(tenantId, strategyId), logType] as const;
+  batchId: string | null = null,
+) => [...ruleStrategyKey(tenantId, strategyId), logType, batchId ?? "current"] as const;
+
+export function useRuleStrategyBatches(strategyId?: string) {
+  const tenantId = useSaaSSession().tenantId;
+  return useQuery({
+    queryKey: [...ruleStrategyKey(tenantId, strategyId ?? ""), "batches"],
+    queryFn: () => apiClient.get<ApiResponse<RuleStrategyExecutionBatchPage>>(
+      `/rule-strategies/${strategyId}/batches?page=1&page_size=100`,
+      { requiresAuth: true },
+    ),
+    select: (response) => response.data,
+    enabled: Boolean(strategyId && tenantId),
+  });
+};
 const ruleStrategyDemoExecutionKey = (
   tenantId: string,
   strategyId: string,
   page: number,
   pageSize: number,
+  batchId: string | null,
 ) =>
   [
     ...ruleStrategyKey(tenantId, strategyId),
     "demo-execution",
+    batchId ?? "current",
     page,
     pageSize,
   ] as const;
@@ -90,6 +107,7 @@ export function useRuleStrategy(strategyId?: string) {
 }
 export type RuleStrategyExportRequest = {
   strategyId: string;
+  batchId?: string;
   fromDate?: string;
   toDate?: string;
 };
@@ -97,8 +115,9 @@ export type RuleStrategyExportRequest = {
 /** Downloads a tenant-authorized strategy workbook as a browser attachment. */
 export function useExportRuleStrategy() {
   return useMutation({
-    mutationFn: ({ strategyId, fromDate, toDate }: RuleStrategyExportRequest) => {
+    mutationFn: ({ strategyId, batchId, fromDate, toDate }: RuleStrategyExportRequest) => {
       const query = new URLSearchParams();
+      if (batchId) query.set("batch_id", batchId);
       if (fromDate) query.set("from_date", fromDate);
       if (toDate) query.set("to_date", toDate);
       const suffix = query.size > 0 ? `?${query}` : "";
@@ -116,6 +135,7 @@ export function useRuleStrategyDemoExecution(
   enabled = true,
   page = 1,
   pageSize = 10,
+  batchId: string | null = null,
 ) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
@@ -124,10 +144,11 @@ export function useRuleStrategyDemoExecution(
       strategyId ?? "",
       page,
       pageSize,
+      batchId,
     ),
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyDemoExecution>>(
-        `/rule-strategies/${strategyId}/demo-execution?page=${page}&page_size=${pageSize}`,
+        `/rule-strategies/${strategyId}/demo-execution?page=${page}&page_size=${pageSize}${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
@@ -285,16 +306,20 @@ export function useEvaluateRuleStrategy(strategyId?: string) {
   });
 }
 
-export function useRuleStrategyEvaluations(strategyId?: string) {
+export function useRuleStrategyEvaluations(
+  strategyId?: string,
+  batchId: string | null = null,
+) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
     queryKey: [
       ...ruleStrategyKey(tenantId, strategyId ?? ""),
       "evaluations",
+      batchId,
     ] as const,
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyEvaluationHistoryEntry[]>>(
-        `/rule-strategies/${strategyId}/evaluations?limit=100`,
+        `/rule-strategies/${strategyId}/evaluations?limit=100${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
@@ -361,13 +386,14 @@ function useRuleStrategyLog<T>(
   strategyId: string | undefined,
   logType: "signals" | "trades" | "funding",
   enabled = true,
+  batchId: string | null = null,
 ) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
-    queryKey: ruleStrategyLogKey(tenantId, strategyId ?? "", logType),
+    queryKey: ruleStrategyLogKey(tenantId, strategyId ?? "", logType, batchId),
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyLog<T>>>(
-        `/rule-strategies/${strategyId}/${logType}?limit=100`,
+        `/rule-strategies/${strategyId}/${logType}?limit=100${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data.entries,
@@ -377,42 +403,59 @@ function useRuleStrategyLog<T>(
 export function useRuleStrategySignals(strategyId?: string) {
   return useRuleStrategyLog<RuleStrategyLogEntry>(strategyId, "signals");
 }
-export function useRuleStrategyTrades(strategyId?: string, enabled = true) {
+export function useRuleStrategyTrades(strategyId?: string, enabled = true, batchId: string | null = null) {
   return useRuleStrategyLog<RuleStrategyTradeLogEntry>(
     strategyId,
     "trades",
     enabled,
+    batchId,
   );
 }
-export function useRuleStrategyFunding(strategyId?: string) {
-  return useRuleStrategyLog<RuleStrategyFundingLogEntry>(strategyId, "funding");
+export function useRuleStrategyFunding(
+  strategyId?: string,
+  batchId: string | null = null,
+) {
+  return useRuleStrategyLog<RuleStrategyFundingLogEntry>(
+    strategyId,
+    "funding",
+    true,
+    batchId,
+  );
 }
-export function useRuleStrategyPnlCurve(strategyId?: string) {
+export function useRuleStrategyPnlCurve(
+  strategyId?: string,
+  batchId: string | null = null,
+) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
     queryKey: [
       ...ruleStrategyKey(tenantId, strategyId ?? ""),
       "pnl-curve",
+      batchId,
     ] as const,
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyPnlPoint[]>>(
-        `/rule-strategies/${strategyId}/pnl-curve`,
+        `/rule-strategies/${strategyId}/pnl-curve${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ""}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
   });
 }
-export function useRuleStrategyAccount(strategyId?: string) {
+export function useRuleStrategyAccount(
+  strategyId?: string,
+  batchId: string | null = null,
+) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
     queryKey: [
       ...ruleStrategyKey(tenantId, strategyId ?? ""),
       "account",
+      batchId,
     ] as const,
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategy["account"]>>(
-        `/rule-strategies/${strategyId}/account`,
+        `/rule-strategies/${strategyId}/account${batchId ? `?batch_id=${encodeURIComponent(batchId)}` : ""}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,

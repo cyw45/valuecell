@@ -217,7 +217,12 @@ class SandboxExchangeTradingService:
             )
             # Scheduler already owns this lock. Other callers acquire it here.
             strategy = strategy_query.first() if fenced else strategy_query.with_for_update().first()
-            if strategy is None or strategy.status != "running" or strategy.execution_generation != intent.execution_generation:
+            if (
+                strategy is None
+                or strategy.status != "running"
+                or strategy.execution_generation != intent.execution_generation
+                or getattr(strategy, "current_batch_id", None) != getattr(intent, "batch_id", None)
+            ):
                 intent.status = "stale"
                 intent.terminal_at = datetime.now(timezone.utc)
                 intent.error_code = "stale_generation"
@@ -254,6 +259,7 @@ class SandboxExchangeTradingService:
                     "execution_generation": intent.execution_generation,
                     "execution_source": intent.execution_source,
                     "execution_intent_id": intent.id,
+                    "batch_id": intent.batch_id,
                 }
                 if intent is not None
                 else {}
@@ -496,7 +502,7 @@ class SandboxExchangeTradingService:
                     continue
                 order = self._order_by_client_id(tenant_id, intent.idempotency_key)
                 if order is None:
-                    order = SandboxExchangeOrder(tenant_id=tenant_id, credential_id=intent.credential_id, provider=credential.provider, client_order_id=intent.idempotency_key, symbol=intent.symbol, side=intent.side, order_type=intent.order_type, requested_quote=intent.requested_quote, status="submitted", sandbox=True, strategy_id=intent.strategy_id, evaluation_id=intent.evaluation_id, execution_generation=intent.execution_generation, execution_source=intent.execution_source, execution_intent_id=intent.id)
+                    order = SandboxExchangeOrder(tenant_id=tenant_id, credential_id=intent.credential_id, provider=credential.provider, client_order_id=intent.idempotency_key, symbol=intent.symbol, side=intent.side, order_type=intent.order_type, requested_quote=intent.requested_quote, status="submitted", sandbox=True, strategy_id=intent.strategy_id, batch_id=intent.batch_id, evaluation_id=intent.evaluation_id, execution_generation=intent.execution_generation, execution_source=intent.execution_source, execution_intent_id=intent.id)
                     self.db.add(order)
                 order.status = self._normalise_status(raw.get("status") or "submitted")
                 order.exchange_order_id = str(raw["id"]) if raw.get("id") is not None else None
@@ -519,10 +525,20 @@ class SandboxExchangeTradingService:
                 await self._close(exchange)
         return results
 
-    def list_orders(self, tenant_id: str, credential_id: str | None = None) -> list[dict[str, Any]]:
+    def list_orders(
+        self,
+        tenant_id: str,
+        credential_id: str | None = None,
+        strategy_id: str | None = None,
+        batch_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         query = self.db.query(SandboxExchangeOrder).filter_by(tenant_id=tenant_id)
         if credential_id:
             query = query.filter_by(credential_id=credential_id)
+        if strategy_id:
+            query = query.filter_by(strategy_id=strategy_id)
+        if batch_id:
+            query = query.filter_by(batch_id=batch_id)
         orders = query.order_by(SandboxExchangeOrder.created_at.desc()).all()
         intent_ids = [order.execution_intent_id for order in orders if order.execution_intent_id]
         messages = {

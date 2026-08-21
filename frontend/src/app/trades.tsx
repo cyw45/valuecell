@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import {
   useExportRuleStrategy,
   useRuleStrategy,
+  useRuleStrategyBatches,
   useRuleStrategyDemoExecution,
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
@@ -54,6 +55,8 @@ export default function TradesPage() {
   const [demoOrdersPage, setDemoOrdersPage] = useState(1);
   const exportStrategy = useExportRuleStrategy();
   const strategyQuery = useRuleStrategy(strategyId);
+  const batchesQuery = useRuleStrategyBatches(strategyId);
+  const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const source = selectTradesSource(
     strategyQuery.data !== undefined,
     strategyQuery.data?.config.execution?.environment,
@@ -61,16 +64,24 @@ export default function TradesPage() {
   const paperTradesQuery = useRuleStrategyTrades(
     strategyId,
     source === "paper",
+    selectedBatchId,
   );
   const demoExecutionQuery = useRuleStrategyDemoExecution(
     strategyId,
     source === "okx_demo",
     demoOrdersPage,
     10,
+    selectedBatchId,
   );
   useEffect(() => {
     setDemoOrdersPage(1);
+    setSelectedBatchId(null);
   }, [strategyId]);
+  useEffect(() => {
+    if (!selectedBatchId && batchesQuery.data?.current_batch_id) {
+      setSelectedBatchId(batchesQuery.data.current_batch_id);
+    }
+  }, [batchesQuery.data?.current_batch_id, selectedBatchId]);
   const selectedOrderId = searchParams.get("orderId");
   const paperTrades = paperTradesQuery.data ?? [];
   const demoOrders = demoExecutionQuery.data?.orders ?? [];
@@ -86,7 +97,10 @@ export default function TradesPage() {
   const downloadAllDemoOrders = async () => {
     if (!strategyId || exportStrategy.isPending) return;
     try {
-      const workbook = await exportStrategy.mutateAsync({ strategyId });
+      const workbook = await exportStrategy.mutateAsync({
+        strategyId,
+        batchId: selectedBatchId ?? undefined,
+      });
       const objectUrl = URL.createObjectURL(workbook.blob);
       const filename = workbook.filename?.toLowerCase().endsWith(".xlsx")
         ? workbook.filename
@@ -134,6 +148,27 @@ export default function TradesPage() {
               : t("saas.operations.trades.subtitle")}
           </p>
         </header>
+
+        {strategyId ? (
+          <label className="flex flex-wrap items-center gap-3 rounded-lg border bg-background p-3 text-sm font-medium">
+            执行批次
+            <select
+              className="min-w-72 rounded-md border bg-background px-3 py-2 font-normal"
+              onChange={(event) => {
+                setSelectedBatchId(event.target.value || null);
+                setDemoOrdersPage(1);
+              }}
+              value={selectedBatchId ?? ""}
+            >
+              <option value="">尚未启动新的执行批次</option>
+              {(batchesQuery.data?.items ?? []).map((batch) => (
+                <option key={batch.batch_id} value={batch.batch_id}>
+                  {batch.status === "running" ? "运行中" : "已归档，未删除"} · {formatDate(batch.started_at)}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
 
         {!strategyId ? (
           <EmptyState
@@ -197,7 +232,7 @@ export default function TradesPage() {
                     {demoOrders.map((order) => (
                       <TableRow className={selectedOrderId === order.id ? "bg-sky-500/10" : ""} key={order.id}>
                         <TableCell className="whitespace-nowrap">{formatDate(order.created_at)}</TableCell>
-                        <TableCell><Link className="font-medium text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(order.symbol.replace("/", "-"))}&orderId=${encodeURIComponent(order.id)}${order.evaluation_id ? `&evaluationId=${encodeURIComponent(order.evaluation_id)}` : ""}`}>{order.symbol}</Link></TableCell>
+                        <TableCell><Link className="font-medium text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(order.symbol.replace("/", "-"))}&orderId=${encodeURIComponent(order.id)}${selectedBatchId ? `&batch_id=${encodeURIComponent(selectedBatchId)}` : ""}${order.evaluation_id ? `&evaluationId=${encodeURIComponent(order.evaluation_id)}` : ""}`}>{order.symbol}</Link></TableCell>
                         <TableCell className="uppercase">{order.side}</TableCell>
                         <TableCell>{order.type}</TableCell>
                         <TableCell><Badge variant="outline">{order.status}</Badge></TableCell>

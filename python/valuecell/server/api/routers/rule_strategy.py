@@ -449,6 +449,36 @@ def create_rule_strategy_router(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    @router.get(
+        "/{strategy_id}/batches",
+        response_model=SuccessResponse[dict[str, Any]],
+    )
+    async def list_rule_strategy_batches(
+        strategy_id: str,
+        status: Literal["all", "running", "stopped", "archived"] = Query(default="all"),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=20, ge=1, le=100),
+        from_datetime: datetime | None = Query(default=None),
+        to_datetime: datetime | None = Query(default=None),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+    ) -> SuccessResponse[dict[str, Any]]:
+        require_strategy_read(principal)
+        if from_datetime and to_datetime and from_datetime >= to_datetime:
+            raise HTTPException(status_code=422, detail="from_datetime must be before to_datetime")
+        try:
+            data = rule_service.batches(
+                strategy_id,
+                principal.tenant_id,
+                status=status,
+                page=page,
+                page_size=page_size,
+                from_datetime=from_datetime,
+                to_datetime=to_datetime,
+            )
+        except RuleStrategyNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Execution batches retrieved")
+
     @router.get("/{strategy_id}", response_model=SuccessResponse[dict[str, Any]])
     async def get_rule_strategy(
         strategy_id: str,
@@ -689,11 +719,14 @@ def create_rule_strategy_router(
     async def get_rule_strategy_evaluations(
         strategy_id: str,
         limit: int = Query(default=100, ge=1, le=500),
+        batch_id: str | None = Query(default=None),
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[list[dict[str, Any]]]:
         require_strategy_read(principal)
         try:
-            data = rule_service.evaluations(strategy_id, principal.tenant_id, limit)
+            data = rule_service.evaluations(
+                strategy_id, principal.tenant_id, limit, batch_id=batch_id
+            )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(
@@ -706,6 +739,7 @@ def create_rule_strategy_router(
     )
     async def export_rule_strategy(
         strategy_id: str,
+        batch_id: str | None = Query(default=None),
         from_date: date | None = Query(default=None),
         to_date: date | None = Query(default=None),
         principal: CurrentPrincipal = Depends(get_current_principal),
@@ -723,6 +757,7 @@ def create_rule_strategy_router(
                 principal.tenant_id,
                 from_date,
                 to_date,
+                batch_id,
             )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -738,6 +773,7 @@ def create_rule_strategy_router(
     )
     async def get_rule_strategy_pnl_curve(
         strategy_id: str,
+        batch_id: str | None = Query(default=None),
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[list[dict[str, Any]]]:
         require_strategy_read(principal)
@@ -745,19 +781,38 @@ def create_rule_strategy_router(
         # capital and timestamp for the curve's baseline.
         try:
             strategy = rule_service.get(strategy_id, principal.tenant_id)
+            resolve_batch = getattr(rule_service, "resolve_batch", None)
+            batch_capable = callable(resolve_batch) and hasattr(
+                rule_service.repository, "get_batch"
+            )
+            batch = None
+            if batch_capable:
+                assert resolve_batch is not None
+                batch = resolve_batch(strategy_id, principal.tenant_id, batch_id)
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        initial_capital = float(strategy["config"]["initial_capital_quote"])
+        if batch_capable and batch is None:
+            return SuccessResponse.create(data=[], msg="Daily PnL curve retrieved")
+        selected_batch_id = getattr(batch, "batch_id", None)
+        baseline_config = getattr(batch, "config_snapshot", None) or strategy["config"]
+        initial_capital = float(baseline_config["initial_capital_quote"])
         export_reader = getattr(
             rule_service.repository, "get_evaluations_for_export", None
         )
         journals = (
-            export_reader(strategy_id, principal.tenant_id)
+            [
+                journal
+                for journal in export_reader(strategy_id, principal.tenant_id)
+                if selected_batch_id is None
+                or getattr(journal, "batch_id", None) == selected_batch_id
+            ]
             if export_reader is not None
             else reversed(
                 rule_service.repository.get_evaluations(
-                    strategy_id, principal.tenant_id, limit=500
+                    strategy_id,
+                    principal.tenant_id,
+                    limit=500,
+                    **({"batch_id": selected_batch_id} if selected_batch_id else {}),
                 )
             )
         )
@@ -768,7 +823,7 @@ def create_rule_strategy_router(
         ]
         points = build_daily_pnl_points(
             initial_capital,
-            strategy["created_at"],
+            getattr(batch, "started_at", None) or strategy["created_at"],
             observations,
         )
         return SuccessResponse.create(data=points, msg="Daily PnL curve retrieved")
@@ -778,6 +833,7 @@ def create_rule_strategy_router(
     )
     async def get_rule_strategy_demo_execution(
         strategy_id: str,
+        batch_id: str | None = Query(default=None),
         principal: CurrentPrincipal = Depends(get_current_principal),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=10, ge=1, le=100),
@@ -787,13 +843,42 @@ def create_rule_strategy_router(
         require_strategy_read(principal)
         try:
             strategy = rule_service.get(strategy_id, principal.tenant_id)
+            resolve_batch = getattr(rule_service, "resolve_batch", None)
+            batch_capable = callable(resolve_batch)
+            if batch_capable and batch_id is None and strategy.get("status") != "running":
+                empty_checked_at = datetime.now(timezone.utc).isoformat()
+                return SuccessResponse.create(
+                    data={
+                        "source": "okx_demo_spot",
+                        "strategy_id": strategy.get("strategy_id"),
+                        "connection_id": None,
+                        "account": {"scope": "exchange_connection_shared_account", "data": {"source": "okx_demo", "balances": [], "total_usdt_value": None, "checked_at": empty_checked_at}},
+                        "positions": {"scope": "exchange_connection_shared_spot_positions", "data": {"source": "okx_demo", "positions": [], "checked_at": empty_checked_at}},
+                        "orders": [],
+                        "trade_summary": {"total_orders": 0, "filled_orders": 0, "open_orders": 0},
+                        "pnl": {"status": "unavailable", "reason_code": "no_current_execution_batch"},
+                        "equity_curve": {"status": "unavailable", "points": [], "reason_code": "no_current_execution_batch"},
+                        "checked_at": empty_checked_at,
+                        "batch": None,
+                        "sync": {"status": "unavailable", "observed_at": None, "freshness_age_s": None},
+                        "wallet_equity_curve": {"status": "unavailable", "points": [], "reason_code": "no_current_execution_batch"},
+                        "pagination": {"page": page, "page_size": page_size, "total_items": 0, "total_pages": 1},
+                    },
+                    msg="OKX Demo strategy execution snapshot retrieved",
+                )
+            batch = (
+                resolve_batch(strategy_id, principal.tenant_id, batch_id)
+                if batch_capable
+                else None
+            )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
         baseline = get_official_test_baseline(
             db, tenant_id=principal.tenant_id, strategy_id=strategy_id
         )
-        execution = (strategy.get("config") or {}).get("execution") or {}
+        selected_config = getattr(batch, "config_snapshot", None) or strategy.get("config") or {}
+        execution = selected_config.get("execution") or {}
         connection_id = execution.get("sandbox_connection_id")
         if not isinstance(connection_id, str) or not connection_id:
             raise HTTPException(
@@ -808,6 +893,8 @@ def create_rule_strategy_router(
             tenant_id=principal.tenant_id,
             strategy_id=strategy_id,
             credential_id=connection_id,
+            started_at=getattr(batch, "started_at", None),
+            stopped_at=getattr(batch, "stopped_at", None),
         )
         if snapshot is None:
             raise HTTPException(
@@ -833,8 +920,15 @@ def create_rule_strategy_router(
             "checked_at": observed_at.isoformat(),
         }
         # list_orders reads local rows only; it does not refresh the exchange.
-        orders = SandboxExchangeTradingService(db).list_orders(
-            principal.tenant_id, connection_id
+        orders = (
+            SandboxExchangeTradingService(db).list_orders(
+                principal.tenant_id,
+                connection_id,
+                strategy_id=strategy_id,
+                batch_id=getattr(batch, "batch_id", None),
+            )
+            if batch is not None or not batch_capable
+            else []
         )
         data = build_demo_execution_read_model(
             strategy,
@@ -843,11 +937,14 @@ def create_rule_strategy_router(
             orders,
             started_at=baseline.started_at if baseline is not None else None,
         )
+        data["batch"] = rule_service._batch_data(batch) if batch is not None else None
         snapshots = list_demo_account_snapshots(
             db,
             tenant_id=principal.tenant_id,
             strategy_id=strategy_id,
             credential_id=connection_id,
+            started_at=getattr(batch, "started_at", None),
+            stopped_at=getattr(batch, "stopped_at", None),
         )
         curve_points = build_demo_daily_curve(
             snapshots,
@@ -936,11 +1033,14 @@ def create_rule_strategy_router(
     )
     async def get_rule_strategy_account(
         strategy_id: str,
+        batch_id: str | None = Query(default=None),
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[dict[str, Any]]:
         require_strategy_read(principal)
         try:
-            data = rule_service.account(strategy_id, principal.tenant_id)
+            data = rule_service.account(
+                strategy_id, principal.tenant_id, batch_id=batch_id
+            )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Paper account retrieved")
@@ -952,13 +1052,16 @@ def create_rule_strategy_router(
         strategy_id: str,
         log_type: str,
         limit: int = Query(default=100, ge=1, le=500),
+        batch_id: str | None = Query(default=None),
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[dict[str, Any]]:
         require_strategy_read(principal)
         if log_type not in {"signals", "trades", "funding"}:
             raise HTTPException(status_code=404, detail="Log type was not found")
         try:
-            data = rule_service.logs(strategy_id, principal.tenant_id, log_type, limit)
+            data = rule_service.logs(
+                strategy_id, principal.tenant_id, log_type, limit, batch_id=batch_id
+            )
         except RuleStrategyNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg=f"Paper {log_type} log retrieved")

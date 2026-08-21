@@ -118,6 +118,7 @@ class RuleStrategyExecutionCoordinator:
         strategy_id: str,
         evaluation_id: str,
         execution_generation: int,
+        batch_id: str | None = None,
         request: RuleStrategyOrderRequest,
         requested_quote: Decimal,
     ) -> RuleStrategyExecutionIntent:
@@ -128,6 +129,7 @@ class RuleStrategyExecutionCoordinator:
             strategy_id=strategy_id,
             evaluation_id=evaluation_id,
             execution_generation=execution_generation,
+            batch_id=batch_id,
             execution_source="rule_strategy",
             credential_id=request.credential_id,
             idempotency_key=request.client_order_id,

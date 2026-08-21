@@ -20,6 +20,7 @@ from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyEvaluationJournal,
+    RuleStrategyExecutionBatch,
     RuleStrategyExecutionIntent,
 )
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
@@ -510,9 +511,10 @@ async def test_fetch_order_status_syncs_attributed_execution_to_evaluation_api_s
     monkeypatch.setattr(credential_module, "get_settings", lambda: SettingsFixture())
     session = sessionmaker(bind=engine)()
     try:
-        strategy = RuleStrategy(strategy_id="rule-sync", tenant_id="tenant-a", name="sync", status="running", config={})
+        strategy = RuleStrategy(strategy_id="rule-sync", tenant_id="tenant-a", name="sync", status="running", current_batch_id="batch-sync", config={})
+        batch = RuleStrategyExecutionBatch(batch_id="batch-sync", strategy_id="rule-sync", tenant_id="tenant-a", strategy_name_snapshot="sync", execution_generation=1, status="running", config_snapshot={})
         journal = RuleStrategyEvaluationJournal(
-            evaluation_id="eval-sync", strategy_id="rule-sync", tenant_id="tenant-a",
+            evaluation_id="eval-sync", strategy_id="rule-sync", tenant_id="tenant-a", batch_id="batch-sync",
             result={"action": "buy", "execution": {"execution": "okx_demo_submitted", "execution_ledger": "okx_demo", "paper_fill": False}},
         )
         credential = TenantCredential(
@@ -520,11 +522,11 @@ async def test_fetch_order_status_syncs_attributed_execution_to_evaluation_api_s
             provider="okx", label="sync", encrypted_payload="ciphertext", nonce="nonce",
             metadata_json={"sandbox": True, "market_type": "spot"}, revoked=False,
         )
-        session.add_all([strategy, journal, credential])
+        session.add_all([strategy, batch, journal, credential])
         session.flush()
         intent = RuleStrategyExecutionIntent(
             id="intent-sync", strategy_id="rule-sync", evaluation_id="eval-sync", execution_generation=1,
-            execution_source="rule_strategy", tenant_id="tenant-a", credential_id="credential-sync",
+            execution_source="rule_strategy", tenant_id="tenant-a", batch_id="batch-sync", credential_id="credential-sync",
             idempotency_key="sync-client-order", symbol="BTC/USDT", side="buy", order_type="market",
             requested_quote="100", status="open",
         )
@@ -535,7 +537,7 @@ async def test_fetch_order_status_syncs_attributed_execution_to_evaluation_api_s
             client_order_id="sync-client-order", symbol="BTC/USDT", side="buy", order_type="market",
             requested_quote="100", status="open", exchange_order_id="venue-order",
             strategy_id="rule-sync", evaluation_id="eval-sync", execution_generation=1,
-            execution_source="rule_strategy", execution_intent_id="intent-sync",
+            execution_source="rule_strategy", execution_intent_id="intent-sync", batch_id="batch-sync",
         ))
         session.commit()
 

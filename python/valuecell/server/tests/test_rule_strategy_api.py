@@ -94,6 +94,71 @@ class InMemoryRuleStrategyRepository:
         return self.monitor
 
 
+def test_historical_account_bypasses_current_durable_account_state():
+    class BatchRepository(InMemoryRuleStrategyRepository):
+        def __init__(self):
+            super().__init__()
+            self.batch = SimpleNamespace(
+                batch_id="batch-old",
+                strategy_id=STRATEGY_ID,
+                tenant_id=FIXED_PRINCIPAL.tenant_id,
+                strategy_name_snapshot="old",
+                execution_generation=2,
+                status="stopped",
+                started_at=CREATED_AT,
+                stopped_at=CREATED_AT,
+                config_snapshot={**_config(), "initial_capital_quote": 1_000},
+            )
+
+        def get_batch(self, batch_id, strategy_id, tenant_id):
+            return self.batch if batch_id == self.batch.batch_id else None
+
+        def get_account_state(self, strategy_id, tenant_id):
+            return SimpleNamespace(
+                allocation_quote=2_000,
+                quote_balance=1_900,
+                positions={},
+                realized_pnl_quote=-100,
+                unrealized_pnl_quote=0,
+                equity_quote=1_900,
+            ), SimpleNamespace()
+
+        def get_latest_account_evaluations(self, strategy_id, tenant_id, batch_id=None):
+            assert batch_id == "batch-old"
+            return [
+                SimpleNamespace(
+                    result={
+                        "account": {
+                            "initial_capital_quote": 1_000,
+                            "quote_balance": 1_125,
+                            "positions": {},
+                            "realized_pnl_quote": 125,
+                            "unrealized_pnl_quote": 0,
+                            "equity_quote": 1_125,
+                        }
+                    }
+                )
+            ]
+
+    repository = BatchRepository()
+    strategy = SimpleNamespace(
+        strategy_id=STRATEGY_ID,
+        tenant_id=FIXED_PRINCIPAL.tenant_id,
+        name="current",
+        status="running",
+        current_batch_id="batch-current",
+        config={**_config(), "initial_capital_quote": 2_000},
+    )
+    repository.strategy = strategy
+
+    account = RuleStrategyService(repository=repository).account(
+        STRATEGY_ID, FIXED_PRINCIPAL.tenant_id, batch_id="batch-old"
+    )
+
+    assert account["initial_capital_quote"] == 1_000
+    assert account["equity_quote"] == 1_125
+
+
 class LeaseContendedRuleStrategyRepository(InMemoryRuleStrategyRepository):
     def claim_monitor_lease(self, *args, **kwargs):
         return []

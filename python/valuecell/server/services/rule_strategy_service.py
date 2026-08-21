@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -272,14 +274,84 @@ class RuleStrategyService:
                 "策略至少需要一个已准入或持仓保留的监控标的。",
             )
 
-        def apply(current: RuleStrategy) -> None:
-            current.status = "running"
-            current.execution_generation = (current.execution_generation or 1) + 1
-
-        return self._locked_mutate(strategy_id, tenant_id, apply)
+        try:
+            create_batch = getattr(self.repository, "create_execution_batch", None)
+            if create_batch is None:
+                strategy = self._require_strategy(strategy_id, tenant_id)
+                strategy.status = "running"
+                strategy.execution_generation = (strategy.execution_generation or 1) + 1
+                strategy.current_batch_id = f"legacy-{strategy.execution_generation}"
+                strategy = self.repository.update(strategy)
+                batch = SimpleNamespace(
+                    batch_id=strategy.current_batch_id,
+                    strategy_id=strategy_id,
+                    strategy_name_snapshot=strategy.name,
+                    execution_generation=strategy.execution_generation,
+                    status="running",
+                    started_at=datetime.now(timezone.utc),
+                    stopped_at=None,
+                    config_snapshot=dict(strategy.config or {}),
+                )
+                return {
+                    **self._strategy_data(strategy),
+                    "batch": self._batch_data(batch),
+                }
+            batch = create_batch(strategy_id, tenant_id)
+        except RuntimeError as exc:
+            if str(exc) == "strategy_already_running":
+                raise RuleStrategyStartAdmissionError("strategy_already_running", "策略正在运行，不能重复启动。") from exc
+            raise
+        except LookupError as exc:
+            raise RuleStrategyNotFoundError(f"Rule strategy '{strategy_id}' was not found") from exc
+        return {
+            **self.get(strategy_id, tenant_id),
+            "batch": self._batch_data(batch),
+        }
 
     def stop(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
-        return self._set_status(strategy_id, tenant_id, "stopped")
+        self._require_strategy(strategy_id, tenant_id)
+        try:
+            stop_batch = getattr(self.repository, "stop_execution_batch", None)
+            if stop_batch is None:
+                return {**self._set_status(strategy_id, tenant_id, "stopped"), "batch": None}
+            batch = stop_batch(strategy_id, tenant_id)
+        except LookupError as exc:
+            raise RuleStrategyNotFoundError(f"Rule strategy '{strategy_id}' was not found") from exc
+        return {**self.get(strategy_id, tenant_id), "batch": self._batch_data(batch) if batch else None}
+
+    @staticmethod
+    def _batch_data(batch: Any) -> dict[str, Any]:
+        return {
+            "batch_id": batch.batch_id,
+            "strategy_id": batch.strategy_id,
+            "strategy_name": batch.strategy_name_snapshot,
+            "execution_generation": batch.execution_generation,
+            "status": batch.status,
+            "started_at": batch.started_at,
+            "stopped_at": batch.stopped_at,
+            "config_snapshot": batch.config_snapshot,
+        }
+
+    def batches(self, strategy_id: str, tenant_id: str, **filters: Any) -> dict[str, Any]:
+        strategy = self._require_strategy(strategy_id, tenant_id)
+        rows, total = self.repository.list_batches(strategy_id, tenant_id, **filters)
+        page = int(filters.get("page", 1)); page_size = int(filters.get("page_size", 20))
+        return {"items": [self._batch_data(row) for row in rows], "current_batch_id": getattr(strategy, "current_batch_id", None), "page": page, "page_size": page_size, "total_items": total, "total_pages": max(1, (total + page_size - 1) // page_size)}
+
+    def resolve_batch(self, strategy_id: str, tenant_id: str, batch_id: str | None) -> Any | None:
+        strategy = self._require_strategy(strategy_id, tenant_id)
+        selected = batch_id or getattr(strategy, "current_batch_id", None)
+        if not selected:
+            return None
+        getter = getattr(self.repository, "get_batch", None)
+        if getter is None:
+            if selected != getattr(strategy, "current_batch_id", None):
+                raise RuleStrategyNotFoundError("Execution batch was not found")
+            return SimpleNamespace(batch_id=selected)
+        batch = getter(selected, strategy_id, tenant_id)
+        if batch is None:
+            raise RuleStrategyNotFoundError("Execution batch was not found")
+        return batch
 
     def delete(self, strategy_id: str, tenant_id: str) -> bool:
         """Delete unaudited strategies; archive audited strategies and return True."""
@@ -350,6 +422,7 @@ class RuleStrategyService:
                 evaluation_id=f"evaluation_{uuid4().hex}",
                 tenant_id=tenant_id,
                 strategy_id=strategy_id,
+                batch_id=getattr(strategy, "current_batch_id", None),
                 result=result_data,
                 signals=[
                     condition.model_dump(mode="json") for condition in result.conditions
@@ -520,14 +593,29 @@ class RuleStrategyService:
         return output
 
     def evaluations(
-        self, strategy_id: str, tenant_id: str, limit: int
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        limit: int,
+        batch_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return complete, durable explanations for each paper evaluation."""
-        self._require_strategy(strategy_id, tenant_id)
+        """Return durable explanations for one explicit or current batch."""
+        legacy_repository = not hasattr(self.repository, "get_batch")
+        batch = self.resolve_batch(strategy_id, tenant_id, batch_id)
+        if batch is None and not legacy_repository:
+            return []
         entries: list[dict[str, Any]] = []
-        for journal in self.repository.get_evaluations(
-            strategy_id, tenant_id, limit=limit
-        ):
+        reader = self.repository.get_evaluations
+        if legacy_repository:
+            journals = reader(strategy_id, tenant_id, limit=limit)
+        else:
+            journals = reader(
+                strategy_id,
+                tenant_id,
+                limit=limit,
+                batch_id=getattr(batch, "batch_id"),
+            )
+        for journal in journals:
             result = journal.result or {}
             funnel_data = self._evaluation_funnel(result, journal.trades or [])
             entries.append(
@@ -740,9 +828,28 @@ class RuleStrategyService:
             "condition_summary": summary,
         }
 
-    def account(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
+    def account(
+        self, strategy_id: str, tenant_id: str, batch_id: str | None = None
+    ) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
+        if batch_id is not None:
+            batch = self.resolve_batch(strategy_id, tenant_id, batch_id)
+            if batch is None:
+                raise RuleStrategyNotFoundError("Execution batch was not found")
+            config = RuleStrategyConfig.model_validate(batch.config_snapshot)
+            return self._account_from_history(
+                strategy,
+                tenant_id,
+                config,
+                batch_id=batch.batch_id,
+            ).model_dump(mode="json")
         config = RuleStrategyConfig.model_validate(strategy.config)
+        if batch_id is None and hasattr(self.repository, "get_batch") and getattr(strategy, "current_batch_id", None) is None:
+            return RuleStrategyPaperAccount(
+                initial_capital_quote=config.initial_capital_quote,
+                quote_balance=config.initial_capital_quote,
+                equity_quote=config.initial_capital_quote,
+            ).model_dump(mode="json")
         return self._current_paper_account(strategy, tenant_id, config).model_dump(
             mode="json"
         )
@@ -839,18 +946,38 @@ class RuleStrategyService:
         return state_writer(journal, account_row, risk, event)
 
     def _account_from_history(
-        self, strategy: RuleStrategy, tenant_id: str, config: RuleStrategyConfig
+        self,
+        strategy: RuleStrategy,
+        tenant_id: str,
+        config: RuleStrategyConfig,
+        *,
+        batch_id: str | None = None,
     ) -> RuleStrategyPaperAccount:
         # Account recovery is deliberately independent from bounded diagnostic
         # history. More than 100 diagnostics must not reset a durable ledger.
         account_query = getattr(self.repository, "get_latest_account_evaluations", None)
-        journals = (
-            account_query(strategy.strategy_id, tenant_id)
-            if account_query is not None
-            else self.repository.get_evaluations(
-                strategy.strategy_id, tenant_id, limit=100_000
-            )
+        selected_batch_id = (
+            batch_id if batch_id is not None else getattr(strategy, "current_batch_id", None)
         )
+        if hasattr(self.repository, "get_batch") and selected_batch_id is None:
+            journals = []
+        elif account_query is not None:
+            try:
+                journals = account_query(strategy.strategy_id, tenant_id, selected_batch_id)
+            except TypeError:
+                journals = account_query(strategy.strategy_id, tenant_id)
+        else:
+            try:
+                journals = self.repository.get_evaluations(
+                    strategy.strategy_id,
+                    tenant_id,
+                    limit=100_000,
+                    batch_id=selected_batch_id,
+                )
+            except TypeError:
+                journals = self.repository.get_evaluations(
+                    strategy.strategy_id, tenant_id, limit=100_000
+                )
         required_fields = {
             "initial_capital_quote",
             "quote_balance",
@@ -900,6 +1027,9 @@ class RuleStrategyService:
             evaluation_id=f"evaluation_{uuid4().hex}",
             tenant_id=tenant_id,
             strategy_id=strategy_id,
+            batch_id=getattr(
+                self._require_strategy(strategy_id, tenant_id), "current_batch_id", None
+            ),
             result=result_data,
             signals=result_data["conditions"],
             trades=self._trade_entries(result_data, fill),
@@ -1123,13 +1253,29 @@ class RuleStrategyService:
         ), fill
 
     def logs(
-        self, strategy_id: str, tenant_id: str, log_type: str, limit: int
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        log_type: str,
+        limit: int,
+        batch_id: str | None = None,
     ) -> dict[str, Any]:
-        self._require_strategy(strategy_id, tenant_id)
+        legacy_repository = not hasattr(self.repository, "get_batch")
+        batch = self.resolve_batch(strategy_id, tenant_id, batch_id)
+        if batch is None and not legacy_repository:
+            return {"strategy_id": strategy_id, "mode": "paper", "entries": []}
         entries: list[dict[str, Any]] = []
-        for journal in self.repository.get_evaluations(
-            strategy_id, tenant_id, limit=limit
-        ):
+        reader = self.repository.get_evaluations
+        if legacy_repository:
+            journals = reader(strategy_id, tenant_id, limit=limit)
+        else:
+            journals = reader(
+                strategy_id,
+                tenant_id,
+                limit=limit,
+                batch_id=getattr(batch, "batch_id"),
+            )
+        for journal in journals:
             raw_entries = getattr(journal, log_type)
             entries.extend(
                 {

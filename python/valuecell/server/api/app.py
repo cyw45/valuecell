@@ -181,6 +181,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_demo_daily_execution_limit,
         migrate_strategy_demo_account_sync_state,
         migrate_rule_strategy_execution_attribution,
+        migrate_rule_strategy_execution_batches,
         migrate_rule_strategy_manual_close,
         migrate_rule_strategy_validation,
         migrate_strategy_demo_account_snapshots,
@@ -192,6 +193,7 @@ def _run_required_execution_attribution_migration() -> None:
     session = get_database_manager().get_session()
     try:
         migrate_rule_strategy_execution_attribution(session)
+        migrate_rule_strategy_execution_batches(session)
         migrate_strategy_product_state(session)
         migrate_rule_strategy_validation(session)
         migrate_strategy_monitor_metadata(session)

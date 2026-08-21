@@ -968,6 +968,7 @@ class StrategyScheduler:
                     execution_generation=strategy.execution_generation,
                     execution_source="rule_strategy",
                     tenant_id=tenant_id,
+                    batch_id=getattr(strategy, "current_batch_id", None),
                     credential_id=fresh_execution.sandbox_connection_id,
                     idempotency_key=key,
                     symbol=symbol.replace("-", "/"),
@@ -1016,6 +1017,7 @@ class StrategyScheduler:
                 strategy is None
                 or strategy.status != "running"
                 or strategy.execution_generation != intent.execution_generation
+                or getattr(strategy, "current_batch_id", None) != intent.batch_id
             ):
                 intent.status = "stale"
                 intent.error_code = "stale_generation"

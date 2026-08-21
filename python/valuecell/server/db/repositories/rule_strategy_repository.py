@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 from typing import Optional
 
 from sqlalchemy import desc, or_, true
@@ -12,6 +13,7 @@ from ..connection import get_database_manager
 from ..models.rule_strategy import (
     RuleStrategy,
     RuleStrategyAccount,
+    RuleStrategyExecutionBatch,
     RuleStrategyEvaluationJournal,
     RuleStrategyEvent,
     RuleStrategyExecutionIntent,
@@ -133,6 +135,73 @@ class RuleStrategyRepository:
             if self.db_session is None:
                 session.close()
 
+    def create_execution_batch(self, strategy_id: str, tenant_id: str) -> RuleStrategyExecutionBatch:
+        """Atomically fence a running strategy and create its next batch."""
+        session = self._get_session()
+        try:
+            strategy = session.query(RuleStrategy).filter_by(strategy_id=strategy_id, tenant_id=tenant_id).with_for_update().first()
+            if strategy is None:
+                raise LookupError("strategy_not_found")
+            if strategy.status == "running":
+                raise RuntimeError("strategy_already_running")
+            strategy.execution_generation = (strategy.execution_generation or 1) + 1
+            batch = RuleStrategyExecutionBatch(
+                batch_id=str(uuid4()), tenant_id=tenant_id, strategy_id=strategy_id,
+                strategy_name_snapshot=strategy.name, execution_generation=strategy.execution_generation,
+                status="running", config_snapshot=dict(strategy.config or {}),
+            )
+            session.add(batch)
+            session.flush()
+            strategy.status = "running"
+            strategy.current_batch_id = batch.batch_id
+            session.commit()
+            session.refresh(strategy); session.refresh(batch)
+            session.expunge(strategy); session.expunge(batch)
+            return batch
+        except Exception:
+            session.rollback(); raise
+        finally:
+            if self.db_session is None: session.close()
+
+    def stop_execution_batch(self, strategy_id: str, tenant_id: str) -> RuleStrategyExecutionBatch | None:
+        session = self._get_session()
+        try:
+            strategy = session.query(RuleStrategy).filter_by(strategy_id=strategy_id, tenant_id=tenant_id).with_for_update().first()
+            if strategy is None: raise LookupError("strategy_not_found")
+            batch = session.query(RuleStrategyExecutionBatch).filter_by(batch_id=strategy.current_batch_id, tenant_id=tenant_id, strategy_id=strategy_id, status="running").with_for_update().first()
+            if batch is not None:
+                batch.status = "stopped"; batch.stopped_at = datetime.now(timezone.utc)
+            strategy.status = "stopped"; strategy.current_batch_id = None
+            session.commit()
+            if batch is not None: session.refresh(batch); session.expunge(batch)
+            return batch
+        except Exception:
+            session.rollback(); raise
+        finally:
+            if self.db_session is None: session.close()
+
+    def get_batch(self, batch_id: str, strategy_id: str, tenant_id: str) -> RuleStrategyExecutionBatch | None:
+        session = self._get_session()
+        try:
+            row = session.query(RuleStrategyExecutionBatch).filter_by(batch_id=batch_id, strategy_id=strategy_id, tenant_id=tenant_id).first()
+            if row is not None: session.expunge(row)
+            return row
+        finally:
+            if self.db_session is None: session.close()
+
+    def list_batches(self, strategy_id: str, tenant_id: str, *, status: str = "all", page: int = 1, page_size: int = 20, from_datetime: datetime | None = None, to_datetime: datetime | None = None) -> tuple[list[RuleStrategyExecutionBatch], int]:
+        session = self._get_session()
+        try:
+            query = session.query(RuleStrategyExecutionBatch).filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+            if status != "all": query = query.filter(RuleStrategyExecutionBatch.status == status)
+            if from_datetime is not None: query = query.filter(RuleStrategyExecutionBatch.started_at >= from_datetime)
+            if to_datetime is not None: query = query.filter(RuleStrategyExecutionBatch.started_at < to_datetime)
+            total = query.count(); rows = query.order_by(desc(RuleStrategyExecutionBatch.started_at)).offset((page-1)*page_size).limit(page_size).all()
+            for row in rows: session.expunge(row)
+            return rows, total
+        finally:
+            if self.db_session is None: session.close()
+
     def append_evaluation(
         self, journal: RuleStrategyEvaluationJournal
     ) -> RuleStrategyEvaluationJournal:
@@ -151,16 +220,18 @@ class RuleStrategyRepository:
                 session.close()
 
     def get_evaluations(
-        self, strategy_id: str, tenant_id: str, limit: int = 100
+        self, strategy_id: str, tenant_id: str, limit: int = 100, batch_id: str | None = None
     ) -> list[RuleStrategyEvaluationJournal]:
         session = self._get_session()
         try:
+            query = session.query(RuleStrategyEvaluationJournal).filter(
+                RuleStrategyEvaluationJournal.strategy_id == strategy_id,
+                RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+            )
+            if batch_id is not None:
+                query = query.filter(RuleStrategyEvaluationJournal.batch_id == batch_id)
             journals = (
-                session.query(RuleStrategyEvaluationJournal)
-                .filter(
-                    RuleStrategyEvaluationJournal.strategy_id == strategy_id,
-                    RuleStrategyEvaluationJournal.tenant_id == tenant_id,
-                )
+                query
                 .order_by(desc(RuleStrategyEvaluationJournal.created_at))
                 .limit(limit)
                 .all()
@@ -281,7 +352,7 @@ class RuleStrategyRepository:
                 session.close()
 
     def get_latest_account_evaluations(
-        self, strategy_id: str, tenant_id: str
+        self, strategy_id: str, tenant_id: str, batch_id: str | None = None
     ) -> list[RuleStrategyEvaluationJournal]:
         """Return bounded complete paper-account journals newest-first."""
         session = self._get_session()
@@ -300,6 +371,7 @@ class RuleStrategyRepository:
                 .filter(
                     RuleStrategyEvaluationJournal.strategy_id == strategy_id,
                     RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+                    *([RuleStrategyEvaluationJournal.batch_id == batch_id] if batch_id else []),
                     *(account[field].as_string().is_not(None) for field in required_fields),
                 )
                 .order_by(desc(RuleStrategyEvaluationJournal.created_at))
