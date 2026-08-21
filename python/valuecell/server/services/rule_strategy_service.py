@@ -79,6 +79,7 @@ class RuleStrategyService:
         self.repository = repository or RuleStrategyRepository()
         self.engine = engine or RuleEngine()
         self.market_service = market_service or get_crypto_market_service()
+
     def create(
         self,
         tenant_id: str,
@@ -299,10 +300,14 @@ class RuleStrategyService:
             batch = create_batch(strategy_id, tenant_id)
         except RuntimeError as exc:
             if str(exc) == "strategy_already_running":
-                raise RuleStrategyStartAdmissionError("strategy_already_running", "策略正在运行，不能重复启动。") from exc
+                raise RuleStrategyStartAdmissionError(
+                    "strategy_already_running", "策略正在运行，不能重复启动。"
+                ) from exc
             raise
         except LookupError as exc:
-            raise RuleStrategyNotFoundError(f"Rule strategy '{strategy_id}' was not found") from exc
+            raise RuleStrategyNotFoundError(
+                f"Rule strategy '{strategy_id}' was not found"
+            ) from exc
         return {
             **self.get(strategy_id, tenant_id),
             "batch": self._batch_data(batch),
@@ -313,11 +318,19 @@ class RuleStrategyService:
         try:
             stop_batch = getattr(self.repository, "stop_execution_batch", None)
             if stop_batch is None:
-                return {**self._set_status(strategy_id, tenant_id, "stopped"), "batch": None}
+                return {
+                    **self._set_status(strategy_id, tenant_id, "stopped"),
+                    "batch": None,
+                }
             batch = stop_batch(strategy_id, tenant_id)
         except LookupError as exc:
-            raise RuleStrategyNotFoundError(f"Rule strategy '{strategy_id}' was not found") from exc
-        return {**self.get(strategy_id, tenant_id), "batch": self._batch_data(batch) if batch else None}
+            raise RuleStrategyNotFoundError(
+                f"Rule strategy '{strategy_id}' was not found"
+            ) from exc
+        return {
+            **self.get(strategy_id, tenant_id),
+            "batch": self._batch_data(batch) if batch else None,
+        }
 
     @staticmethod
     def _batch_data(batch: Any) -> dict[str, Any]:
@@ -332,13 +345,25 @@ class RuleStrategyService:
             "config_snapshot": batch.config_snapshot,
         }
 
-    def batches(self, strategy_id: str, tenant_id: str, **filters: Any) -> dict[str, Any]:
+    def batches(
+        self, strategy_id: str, tenant_id: str, **filters: Any
+    ) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
         rows, total = self.repository.list_batches(strategy_id, tenant_id, **filters)
-        page = int(filters.get("page", 1)); page_size = int(filters.get("page_size", 20))
-        return {"items": [self._batch_data(row) for row in rows], "current_batch_id": getattr(strategy, "current_batch_id", None), "page": page, "page_size": page_size, "total_items": total, "total_pages": max(1, (total + page_size - 1) // page_size)}
+        page = int(filters.get("page", 1))
+        page_size = int(filters.get("page_size", 20))
+        return {
+            "items": [self._batch_data(row) for row in rows],
+            "current_batch_id": getattr(strategy, "current_batch_id", None),
+            "page": page,
+            "page_size": page_size,
+            "total_items": total,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
 
-    def resolve_batch(self, strategy_id: str, tenant_id: str, batch_id: str | None) -> Any | None:
+    def resolve_batch(
+        self, strategy_id: str, tenant_id: str, batch_id: str | None
+    ) -> Any | None:
         strategy = self._require_strategy(strategy_id, tenant_id)
         selected = batch_id or getattr(strategy, "current_batch_id", None)
         if not selected:
@@ -504,10 +529,14 @@ class RuleStrategyService:
             evaluated.append((market, result_data))
 
         sell_items = [
-            item for item in evaluated if item[1]["action"] in {"sell", "reduce", "close"}
+            item
+            for item in evaluated
+            if item[1]["action"] in {"sell", "reduce", "close"}
         ]
         remaining_items = [
-            item for item in evaluated if item[1]["action"] not in {"sell", "reduce", "close"}
+            item
+            for item in evaluated
+            if item[1]["action"] not in {"sell", "reduce", "close"}
         ]
         output: list[dict[str, Any]] = []
 
@@ -517,7 +546,9 @@ class RuleStrategyService:
         if is_demo:
             for market, result_data in evaluated:
                 if not isinstance(market, RuleStrategyEngineMarketSnapshot):
-                    raise ValueError("OKX Demo evaluation requires synced account facts")
+                    raise ValueError(
+                        "OKX Demo evaluation requires synced account facts"
+                    )
                 result_data["execution_ledger"] = "external"
                 result_data["paper_fill"] = False
                 output.append(
@@ -678,14 +709,18 @@ class RuleStrategyService:
         indicator_conditions = [
             item for item in conditions if item.get("category") == condition_category
         ]
-        risk_conditions = [item for item in conditions if item.get("category") == "risk"]
+        risk_conditions = [
+            item for item in conditions if item.get("category") == "risk"
+        ]
         is_sell = result.get("action") == "sell"
         confirmation = {} if is_sell else (result.get("entry_confirmation") or {})
         total = int(confirmation.get("enabled", len(indicator_conditions)))
         available = int(
             confirmation.get(
                 "available",
-                sum(item.get("state") != "unavailable" for item in indicator_conditions),
+                sum(
+                    item.get("state") != "unavailable" for item in indicator_conditions
+                ),
             )
         )
         matched = int(
@@ -753,10 +788,16 @@ class RuleStrategyService:
         risk_blocked = any(item.get("state") == "blocked" for item in risk_conditions)
         if risk_blocked:
             set_stage(
-                "conditions", "passed", f"条件满足 {matched}/{total}，需要 {required} 项。"
+                "conditions",
+                "passed",
+                f"条件满足 {matched}/{total}，需要 {required} 项。",
             )
             detail = next(
-                (item.get("detail") for item in risk_conditions if item.get("state") == "blocked"),
+                (
+                    item.get("detail")
+                    for item in risk_conditions
+                    if item.get("state") == "blocked"
+                ),
                 "风控未通过。",
             )
             set_stage("risk", "blocked", detail)
@@ -844,7 +885,11 @@ class RuleStrategyService:
                 batch_id=batch.batch_id,
             ).model_dump(mode="json")
         config = RuleStrategyConfig.model_validate(strategy.config)
-        if batch_id is None and hasattr(self.repository, "get_batch") and getattr(strategy, "current_batch_id", None) is None:
+        if (
+            batch_id is None
+            and hasattr(self.repository, "get_batch")
+            and getattr(strategy, "current_batch_id", None) is None
+        ):
             return RuleStrategyPaperAccount(
                 initial_capital_quote=config.initial_capital_quote,
                 quote_balance=config.initial_capital_quote,
@@ -957,13 +1002,17 @@ class RuleStrategyService:
         # history. More than 100 diagnostics must not reset a durable ledger.
         account_query = getattr(self.repository, "get_latest_account_evaluations", None)
         selected_batch_id = (
-            batch_id if batch_id is not None else getattr(strategy, "current_batch_id", None)
+            batch_id
+            if batch_id is not None
+            else getattr(strategy, "current_batch_id", None)
         )
         if hasattr(self.repository, "get_batch") and selected_batch_id is None:
             journals = []
         elif account_query is not None:
             try:
-                journals = account_query(strategy.strategy_id, tenant_id, selected_batch_id)
+                journals = account_query(
+                    strategy.strategy_id, tenant_id, selected_batch_id
+                )
             except TypeError:
                 journals = account_query(strategy.strategy_id, tenant_id)
         else:
@@ -1190,7 +1239,9 @@ class RuleStrategyService:
                 requested_quote = float(result["sizing"].get("requested_quote", 0.0))
                 quantity = min(
                     existing.quantity,
-                    requested_quote / market.price if requested_quote > 0 else existing.quantity,
+                    requested_quote / market.price
+                    if requested_quote > 0
+                    else existing.quantity,
                 )
             else:
                 quantity = existing.quantity
@@ -1293,6 +1344,7 @@ class RuleStrategyService:
         def apply(strategy: RuleStrategy) -> None:
             strategy.status = status
             strategy.execution_generation = (strategy.execution_generation or 1) + 1
+
         return self._locked_mutate(strategy_id, tenant_id, apply)
 
     @staticmethod
@@ -1310,7 +1362,9 @@ class RuleStrategyService:
 
     @staticmethod
     def _apply_update(
-        strategy: RuleStrategy, name: str | None, description: str | None,
+        strategy: RuleStrategy,
+        name: str | None,
+        description: str | None,
         config: RuleStrategyConfig | None,
     ) -> None:
         if name is not None:
@@ -1321,7 +1375,9 @@ class RuleStrategyService:
             strategy.config = config.model_dump(mode="json")
             strategy.execution_generation = (strategy.execution_generation or 1) + 1
 
-    def _locked_mutate(self, strategy_id: str, tenant_id: str, apply: Any) -> dict[str, Any]:
+    def _locked_mutate(
+        self, strategy_id: str, tenant_id: str, apply: Any
+    ) -> dict[str, Any]:
         """Control-plane changes share the RuleStrategy lock with dispatch.
 
         Production repositories use a database transaction and row lock.  The
@@ -1338,11 +1394,16 @@ class RuleStrategyService:
         session = configured_session or get_database_manager().get_session()
         owns_session = configured_session is None
         try:
-            strategy = session.query(RuleStrategy).filter_by(
-                strategy_id=strategy_id, tenant_id=tenant_id
-            ).with_for_update().first()
+            strategy = (
+                session.query(RuleStrategy)
+                .filter_by(strategy_id=strategy_id, tenant_id=tenant_id)
+                .with_for_update()
+                .first()
+            )
             if strategy is None:
-                raise RuleStrategyNotFoundError(f"Rule strategy '{strategy_id}' was not found")
+                raise RuleStrategyNotFoundError(
+                    f"Rule strategy '{strategy_id}' was not found"
+                )
             apply(strategy)
             session.commit()
             session.refresh(strategy)
