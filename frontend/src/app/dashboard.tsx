@@ -46,6 +46,7 @@ import {
 } from "@/app/dashboard-funnel";
 import {
   buildDemoEquityCurve,
+  buildStrategyHoldingRows,
   demoOrderStatusLabel,
   demoPnlPresentation,
   demoPurchaseStatePresentation,
@@ -354,6 +355,7 @@ export default function DashboardPage() {
   } = demoExecutionQuery;
   const demoBalance = demoExecution?.account.data;
   const demoPositions = demoExecution?.positions.data.positions ?? [];
+  const strategyPositions = demoExecution?.strategy_positions ?? [];
   const demoOrders = demoExecution?.orders ?? [];
   const demoOrdersPagination = demoExecution?.pagination;
   useEffect(() => {
@@ -590,15 +592,23 @@ export default function DashboardPage() {
   const holdingRows = useMemo(
     () =>
       isOkxDemo
-        ? demoPositions.map((position) => ({
+        ? strategyPositions.map((position) => ({
             symbol: position.symbol.replace("/", "-"),
             position: {
-              quantity: position.quantity,
-              entry_price: position.entry_price ?? null,
-              mark_price: position.mark_price,
+              quantity: Number(position.quantity),
+              entry_price:
+                position.entry_price == null ? null : Number(position.entry_price),
+              mark_price:
+                position.mark_price == null ? null : Number(position.mark_price),
             },
-            value: position.notional_usdt,
-            profit: position.unrealized_pnl_usdt,
+            value:
+              position.notional_usdt == null
+                ? null
+                : Number(position.notional_usdt),
+            profit:
+              position.unrealized_pnl_usdt == null
+                ? null
+                : Number(position.unrealized_pnl_usdt),
           }))
         : Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
             const value = position.quantity * position.mark_price;
@@ -606,7 +616,7 @@ export default function DashboardPage() {
               position.quantity * (position.mark_price - position.entry_price);
             return { symbol, position, value, profit };
           }),
-    [account?.positions, demoPositions, isOkxDemo],
+    [account?.positions, isOkxDemo, strategyPositions],
   );
   const pnl =
     (account?.realized_pnl_quote ?? 0) + (account?.unrealized_pnl_quote ?? 0);
@@ -918,7 +928,7 @@ export default function DashboardPage() {
             value={`${holdingRows.length} / ${ruleStrategy?.config.risk.max_positions ?? 0}`}
             detail={
               isOkxDemo
-                ? `策略归属订单 ${demoOrders.length} 笔 · 共享账户持仓 ${holdingRows.length} 个 · ${demoCheckedAtTime}`
+                ? `策略持仓 ${holdingRows.length} 个 · 共享账户资产 ${demoPositions.length} 个 · ${demoCheckedAtTime}`
                 : `已成交 ${trades.length} 笔模拟交易，扫描 ${trackedSymbols.length} 个币种`
             }
             trend="neutral"
@@ -974,7 +984,7 @@ export default function DashboardPage() {
             </div>
             <p className="terminal-number mt-2 font-semibold text-lg">
               {holdingRows.length}{" "}
-              <span className="text-muted-foreground text-xs">个当前持仓</span>
+              <span className="text-muted-foreground text-xs">个策略持仓</span>
             </p>
             <p className="mt-1 text-muted-foreground text-xs">
               各币种独立评估，持仓数不参与额度分配
@@ -1447,11 +1457,11 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between border-border/70 border-b px-5 py-4">
               <div>
                 <h2 className="font-semibold">
-                  {isOkxDemo ? "OKX 共享账户持仓" : "符合策略的持仓"}
+                  {isOkxDemo ? "策略归属持仓" : "符合策略的持仓"}
                 </h2>
                 <p className="mt-0.5 text-muted-foreground text-xs">
                   {isOkxDemo
-                    ? "来自同一 OKX Demo 连接的账户级现货持仓，不代表也不等于本策略持仓；缺失成本或估值不显示为 0"
+                    ? "仅统计本策略已成交买卖形成的净持仓；共享 OKX Demo 账户的其他资产不会计入此处"
                     : "已根据信号建立的模拟持仓"}
                 </p>
               </div>
@@ -1465,7 +1475,7 @@ export default function DashboardPage() {
                     暂时没有符合条件的持仓
                   </p>
                   <p className="mt-1 text-muted-foreground text-xs">
-                    策略在入场信号成交后会将币种展示在这里。
+                    策略买入订单成交后才会产生策略持仓；账户资产请查看账户余额。
                   </p>
                 </div>
               ) : (

@@ -36,6 +36,7 @@ def test_demo_read_model_excludes_manual_and_other_strategy_orders():
     )
 
     assert result["source"] == "okx_demo_spot"
+    assert result["strategy_positions"] == []
     assert result["orders"] == [
         {"id": "ours", "strategy_id": "strategy-a", "execution_source": "rule_strategy"}
     ]
@@ -79,6 +80,16 @@ def test_demo_read_model_calculates_attributed_moving_average_pnl():
     assert result["trade_summary"]["submission_unknown_orders"] == 1
     assert result["trade_summary"]["latest_status"] == "submission_unknown"
     assert result["trade_summary"]["latest_order"]["id"] == "unknown"
+    assert result["strategy_positions"] == [
+        {
+            "symbol": "BTC/USDT",
+            "quantity": "2",
+            "entry_price": "106.6666666666666666666666666",
+            "mark_price": "130",
+            "notional_usdt": "260",
+            "unrealized_pnl_usdt": "46.6666666666666666666666667",
+        }
+    ]
     assert result["pnl"]["status"] == "available"
     assert result["pnl"]["position_quantity"] == "2"
     assert result["pnl"]["realized"] == "33.3333333333333333333333333"
@@ -170,6 +181,7 @@ def test_demo_purchase_state_and_counts_keep_partial_fills_distinct():
     assert result["trade_summary"]["purchase_state"] == "partially_filled"
     assert result["trade_summary"]["filled_order_count"] == 0
     assert result["trade_summary"]["partially_filled_order_count"] == 1
+    assert result["strategy_positions"][0]["quantity"] == "0.5"
 
 
 def test_demo_partial_pnl_never_exposes_a_complete_total_or_curve():

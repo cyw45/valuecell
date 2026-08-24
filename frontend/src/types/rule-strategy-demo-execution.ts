@@ -73,12 +73,22 @@ export interface DemoEquityCurve {
   points?: DemoEquityCurvePoint[] | null;
 }
 
+export interface StrategyDemoPosition {
+  symbol: string;
+  quantity: string | number;
+  entry_price: string | number | null;
+  mark_price: string | number | null;
+  notional_usdt: string | number | null;
+  unrealized_pnl_usdt: string | number | null;
+}
+
 export interface RuleStrategyDemoExecution {
   source: "okx_demo_spot";
   strategy_id: string;
   connection_id: string | null;
   account: RuleStrategyDemoExecutionAccount;
   positions: RuleStrategyDemoExecutionPositions;
+  strategy_positions: StrategyDemoPosition[];
   orders: SandboxOrder[];
   pagination: {
     page: number;

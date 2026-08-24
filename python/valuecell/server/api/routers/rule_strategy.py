@@ -854,6 +854,7 @@ def create_rule_strategy_router(
                         "connection_id": None,
                         "account": {"scope": "exchange_connection_shared_account", "data": {"source": "okx_demo", "balances": [], "total_usdt_value": None, "checked_at": empty_checked_at}},
                         "positions": {"scope": "exchange_connection_shared_spot_positions", "data": {"source": "okx_demo", "positions": [], "checked_at": empty_checked_at}},
+                        "strategy_positions": [],
                         "orders": [],
                         "trade_summary": {"total_orders": 0, "filled_orders": 0, "open_orders": 0},
                         "pnl": {"status": "unavailable", "reason_code": "no_current_execution_batch"},

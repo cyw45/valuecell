@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildDemoEquityCurve,
+  buildStrategyHoldingRows,
   demoOrderStatusLabel,
   demoPnlPresentation,
   demoPurchaseStatePresentation,
@@ -30,6 +31,70 @@ test("null amounts are never rendered as zero", () => {
   assert.equal(formatOptionalAmount(undefined), "—");
   assert.equal(formatOptionalAmount(0), "0.00");
   assert.equal(formatOptionalAmount("12.5"), "12.50");
+});
+
+test("strategy holdings exclude unrelated shared-account assets", () => {
+  const rows = buildStrategyHoldingRows([], [
+    {
+      symbol: "BTC/USDT",
+      base_currency: "BTC",
+      quantity: 9,
+      available_quantity: 9,
+      frozen_quantity: 0,
+      mark_price: 110,
+      notional_usdt: 990,
+      unrealized_pnl_usdt: 0,
+    },
+  ]);
+  assert.deepEqual(rows, []);
+});
+
+test("strategy holdings use confirmed net fills and shared marks only", () => {
+  const baseOrder = {
+    id: "order-1",
+    credential_id: "connection-1",
+    provider: "okx" as const,
+    client_order_id: "client-1",
+    symbol: "BTC/USDT",
+    side: "buy" as const,
+    type: "market" as const,
+    requested_quote: 100,
+    filled_quantity: 1,
+    average_fill_price: 100,
+    status: "filled",
+    sandbox: true as const,
+    created_at: "2026-08-24T00:00:00Z",
+    updated_at: "2026-08-24T00:00:00Z",
+  };
+  const rows = buildStrategyHoldingRows(
+    [
+      baseOrder,
+      {
+        ...baseOrder,
+        id: "order-2",
+        side: "sell",
+        filled_quantity: 0.25,
+        average_fill_price: 105,
+        created_at: "2026-08-24T01:00:00Z",
+      },
+    ],
+    [
+      {
+        symbol: "BTC/USDT",
+        base_currency: "BTC",
+        quantity: 9,
+        available_quantity: 9,
+        frozen_quantity: 0,
+        mark_price: 110,
+        notional_usdt: 990,
+        unrealized_pnl_usdt: 0,
+      },
+    ],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].position.quantity, 0.75);
+  assert.equal(rows[0].position.entry_price, 100);
+  assert.equal(rows[0].value, 82.5);
 });
 
 test("available and partial pnl values are displayed", () => {

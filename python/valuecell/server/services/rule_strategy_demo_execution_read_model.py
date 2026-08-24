@@ -101,7 +101,7 @@ def strategy_inventory_by_symbol(
     fills = [
         item
         for item in orders
-        if item.get("status") == "filled"
+        if item.get("status") in {"filled", "partial", "partially_filled"}
         and (_decimal(item.get("filled_quantity")) or 0) > 0
         and (
             started_at is None
@@ -292,11 +292,34 @@ def build_demo_execution_read_model(
     ]
     checked_at = positions.get("checked_at") or account.get("checked_at") or datetime.now(timezone.utc).isoformat()
     pnl, equity_curve = _pnl_and_curve(strategy_orders, positions, checked_at)
+    inventory = strategy_inventory_by_symbol(strategy_orders, started_at=started_at)
+    marks = {
+        item.get("symbol"): _decimal(item.get("mark_price"))
+        for item in positions.get("positions", [])
+        if isinstance(item, dict)
+    }
+    strategy_positions = []
+    for symbol, (quantity, cost) in inventory.items():
+        if quantity <= 0:
+            continue
+        mark_price = marks.get(symbol)
+        value = quantity * mark_price if mark_price is not None else None
+        strategy_positions.append(
+            {
+                "symbol": symbol,
+                "quantity": str(quantity),
+                "entry_price": str(cost / quantity),
+                "mark_price": str(mark_price) if mark_price is not None else None,
+                "notional_usdt": str(value) if value is not None else None,
+                "unrealized_pnl_usdt": str(value - cost) if value is not None else None,
+            }
+        )
     return {
         "source": "okx_demo_spot", "strategy_id": strategy_id,
         "connection_id": execution.get("sandbox_connection_id"),
         "account": {"scope": "exchange_connection_shared_account", "data": account},
         "positions": {"scope": "exchange_connection_shared_spot_positions", "data": positions},
+        "strategy_positions": strategy_positions,
         "orders": strategy_orders, "trade_summary": _trade_summary(strategy_orders),
         "pnl": pnl, "equity_curve": equity_curve, "checked_at": checked_at,
     }

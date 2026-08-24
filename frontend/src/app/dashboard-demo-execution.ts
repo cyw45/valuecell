@@ -3,6 +3,7 @@ import type {
   DemoPurchaseState,
   RuleStrategyDemoExecutionPnl,
 } from "@/types/rule-strategy-demo-execution";
+import type { SandboxOrder, SandboxPosition } from "@/types/sandbox-exchange";
 
 const numberFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -13,6 +14,79 @@ export function formatOptionalAmount(value?: string | number | null): string {
   if (value === null || value === undefined || value === "") return "—";
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numberFormatter.format(numeric) : "—";
+}
+
+export type StrategyHoldingRow = {
+  symbol: string;
+  position: {
+    quantity: number;
+    entry_price: number | null;
+    mark_price: number | null;
+  };
+  value: number | null;
+  profit: number | null;
+};
+
+/** Build holdings from this strategy's confirmed fills, never from shared-wallet assets. */
+export function buildStrategyHoldingRows(
+  orders: SandboxOrder[],
+  sharedPositions: SandboxPosition[],
+): StrategyHoldingRow[] {
+  const inventory = new Map<string, { quantity: number; cost: number }>();
+  const fills = orders
+    .filter(
+      (order) =>
+        ["filled", "partial", "partially_filled"].includes(order.status) &&
+        Number(order.filled_quantity) > 0,
+    )
+    .sort(
+      (a, b) =>
+        Date.parse(a.filled_at ?? a.created_at) -
+        Date.parse(b.filled_at ?? b.created_at),
+    );
+  for (const order of fills) {
+    const quantity = Number(order.filled_quantity);
+    const price = Number(order.average_fill_price);
+    if (
+      !order.symbol ||
+      !Number.isFinite(quantity) ||
+      quantity <= 0 ||
+      !Number.isFinite(price)
+    )
+      continue;
+    const current = inventory.get(order.symbol) ?? { quantity: 0, cost: 0 };
+    if (order.side === "buy") {
+      inventory.set(order.symbol, {
+        quantity: current.quantity + quantity,
+        cost: current.cost + quantity * price,
+      });
+    } else if (order.side === "sell" && current.quantity > 0) {
+      const sold = Math.min(quantity, current.quantity);
+      inventory.set(order.symbol, {
+        quantity: current.quantity - sold,
+        cost: current.cost - sold * (current.cost / current.quantity),
+      });
+    }
+  }
+  const marks = new Map(
+    sharedPositions.map((position) => [position.symbol, position]),
+  );
+  return Array.from(inventory.entries())
+    .filter(([, item]) => item.quantity > 1e-12)
+    .map(([symbol, item]) => {
+      const markPrice = marks.get(symbol)?.mark_price ?? null;
+      const value = markPrice == null ? null : item.quantity * markPrice;
+      return {
+        symbol: symbol.replace("/", "-"),
+        position: {
+          quantity: item.quantity,
+          entry_price: item.cost / item.quantity,
+          mark_price: markPrice,
+        },
+        value,
+        profit: value == null ? null : value - item.cost,
+      };
+    });
 }
 
 export function demoPurchaseStatePresentation(state?: DemoPurchaseState | null) {
