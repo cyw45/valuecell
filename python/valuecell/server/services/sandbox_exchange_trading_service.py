@@ -235,6 +235,24 @@ class SandboxExchangeTradingService:
         if existing is not None:
             return self._order_metadata(existing)
         credential = self._active_sandbox_credential(tenant_id, credential_id)
+        if side == "sell" and await self._sell_is_dust(
+            tenant_id, credential, symbol, quote_amount, price, submission_timeout_s
+        ):
+            # Read-only venue preflight proved there is no executable order, so
+            # retain neither a trade record nor an outbox item to reconcile.
+            if intent is not None:
+                self.db.delete(intent)
+                if fenced:
+                    self.db.flush()
+                else:
+                    self.db.commit()
+            return {
+                "id": None,
+                "status": "ignored_dust",
+                "symbol": symbol,
+                "side": side,
+                "sandbox": True,
+            }
         quantity = None
         if order_type == "limit":
             if price is None:
@@ -415,6 +433,53 @@ class SandboxExchangeTradingService:
         self.db.commit()
         self.db.refresh(order)
         return self._order_metadata(order)
+
+    async def _sell_is_dust(
+        self,
+        tenant_id: str,
+        credential: TenantCredential,
+        symbol: str,
+        quote_amount: Decimal,
+        price: Decimal | None,
+        timeout_s: float | None,
+    ) -> bool:
+        """Check venue minima using read-only calls before creating an order row."""
+        exchange = self._exchange_for(tenant_id, credential)
+        try:
+            exchange.set_sandbox_mode(True)
+            markets = await self._await_preflight(exchange.load_markets(), timeout_s)
+            market = markets.get(symbol) if isinstance(markets, dict) else None
+            if not isinstance(market, dict):
+                return False
+            base = str(market.get("base") or "")
+            if not base:
+                return False
+            raw_balance = await self._await_preflight(exchange.fetch_balance(), timeout_s)
+            free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
+            available = self._decimal_or_zero(free.get(base))
+            limits = market.get("limits") or {}
+            min_amount = self._decimal_or_zero((limits.get("amount") or {}).get("min"))
+            if available <= 0 or (min_amount > 0 and available < min_amount):
+                return True
+            min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
+            if min_cost <= 0:
+                return False
+            if price is None:
+                ticker = await self._await_preflight(exchange.fetch_ticker(symbol), timeout_s)
+                effective_price = self._decimal(
+                    ticker.get("last") if isinstance(ticker, dict) else None,
+                    "Ticker price unavailable",
+                )
+            else:
+                effective_price = price
+            nominal_quantity = quote_amount / effective_price
+            return min(available, nominal_quantity) * effective_price < min_cost
+        except Exception:
+            # Never hide data or configuration errors as dust. Let the existing
+            # audited order path expose those deterministic failures.
+            return False
+        finally:
+            await self._close(exchange)
 
     async def fetch_order_status(self, tenant_id: str, order_id: str) -> dict[str, Any]:
         """Refresh one submitted sandbox order, always through testnet before private fetch."""

@@ -1063,6 +1063,13 @@ class StrategyScheduler:
                 fenced=True,
                 submission_timeout_s=_DEMO_SUBMISSION_TIMEOUT_S,
             )
+            if order.get("status") == "ignored_dust":
+                return {
+                    "execution": "ignored_dust",
+                    "sandbox": True,
+                    "status": "ignored_dust",
+                    "reason": "available balance is below the exchange minimum",
+                }
             return {
                 "execution": "okx_demo_submitted"
                 if order.get("status") not in {"failed", "rejected", "stale"}
