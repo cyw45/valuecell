@@ -924,6 +924,7 @@ class StrategyScheduler:
                 reserved_cost(row)
                 for row in intents
                 if row.status in active_statuses
+                and getattr(row, "side", None) == "buy"
             )
             daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
             daily_total = sum(
@@ -975,6 +976,7 @@ class StrategyScheduler:
                     side=action,
                     order_type="market",
                     requested_quote=str(requested_quote),
+                    execution_target="okx_demo",
                     status="pending",
                     request_payload={"candle_timestamp_ms": candle_timestamp_ms},
                 )

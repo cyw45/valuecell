@@ -364,7 +364,7 @@ async def test_okx_demo_execution_blocks_when_strategy_total_limit_is_reached(
         }
     )
     session = DurableSession(
-        config, [SimpleNamespace(requested_quote="100", status="open")]
+        config, [SimpleNamespace(requested_quote="100", side="buy", status="open")]
     )
     monkeypatch.setattr(
         strategy_scheduler,
@@ -384,6 +384,61 @@ async def test_okx_demo_execution_blocks_when_strategy_total_limit_is_reached(
     )
     assert result["execution"] == "blocked"
     assert "total limit" in result["reason"]
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_total_limit_does_not_count_exit_sell_intents(monkeypatch):
+    config = RuleStrategyConfig.model_validate(
+        {
+            "symbols": ["BTC-USDT"],
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "okx-demo-connection",
+                "max_order_quote_amount": 100,
+                "max_total_quote_amount": 150,
+            },
+        }
+    )
+    session = DurableSession(
+        config,
+        [
+            SimpleNamespace(
+                requested_quote="100",
+                request_payload={"order_cost": "100"},
+                side="sell",
+                status="submission_unknown",
+                created_at=datetime.now(timezone.utc),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        strategy_scheduler,
+        "get_database_manager",
+        lambda: SimpleNamespace(get_session=lambda: session),
+    )
+
+    class FakeService:
+        def __init__(self, _session):
+            pass
+
+        async def submit_order(self, *_args, **_kwargs):
+            return {"id": "demo-order", "status": "open", "sandbox": True}
+
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", FakeService)
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a",
+        "rule-a",
+        config,
+        "BTC-USDT",
+        "buy",
+        Decimal("100"),
+        Decimal("50000"),
+        1234,
+        "eval-a",
+    )
+
+    assert result["execution"] == "okx_demo_submitted"
+    assert session.intent_by_evaluation["eval-a"].execution_target == "okx_demo"
 
 
 @pytest.mark.asyncio
