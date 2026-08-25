@@ -16,12 +16,13 @@ function formatValue(value: unknown): string {
   }
 }
 
-/**
- * Preserve the preferred entry/exit grouping when present, but never hide
- * conditions merely because a future strategy uses a new code/category.
- */
+/** Return every durable condition emitted by the strategy evaluation. */
 export function decisionConditions(order: SandboxOrder): DecisionCondition[] {
-  const conditions = order.decision_conditions ?? [];
+  return order.decision_conditions ?? [];
+}
+
+function summaryConditions(order: SandboxOrder): DecisionCondition[] {
+  const conditions = decisionConditions(order);
   const prefix = order.side === "buy" ? "program.entry." : "program.exit.";
   const preferred = conditions.filter((condition) => condition.code?.startsWith(prefix));
   return preferred.length > 0 ? preferred : conditions;
@@ -35,7 +36,7 @@ export function formatConditionValues(values?: Record<string, unknown>): string 
 }
 
 export function decisionLabel(order: SandboxOrder): string {
-  const conditions = decisionConditions(order);
+  const conditions = summaryConditions(order);
   const triggered = conditions.filter((condition) => condition.state === "triggered");
   if (triggered.length > 0) {
     return `${order.side === "buy" ? "买入" : "卖出"}：${triggered

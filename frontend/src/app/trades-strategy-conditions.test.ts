@@ -50,11 +50,23 @@ test("all runtime strategy condition categories remain displayable", () => {
   assert.match(decisionLabel(order), /动态 Alpha 条件/);
 });
 
-test("condition values render unknown scalar, nested, and array fields", () => {
-  const rendered = formatConditionValues(order.decision_conditions?.[0].values);
-  assert.match(rendered, /score=88\.5/);
-  assert.match(rendered, /thresholds=/);
-  assert.match(rendered, /minimum/);
-  assert.match(rendered, /confirmations=/);
-  assert.match(rendered, /volume/);
+test("all eight runtime conditions remain visible when strategy adds a new category", () => {
+  const eightConditionOrder: SandboxOrder = {
+    ...order,
+    decision_conditions: [
+      ...(order.decision_conditions ?? []),
+      ...Array.from({ length: 6 }, (_, index) => ({
+        code: `custom.condition.${index + 1}`,
+        label: `动态条件 ${index + 1}`,
+        category: "future_strategy",
+        state: "not_triggered",
+        values: { threshold: index + 1, nested: { enabled: true } },
+      })),
+    ],
+  };
+  assert.equal(decisionConditions(eightConditionOrder).length, 8);
+  assert.deepEqual(
+    decisionConditions(eightConditionOrder).slice(-1)[0]?.values,
+    { threshold: 6, nested: { enabled: true } },
+  );
 });
