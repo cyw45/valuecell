@@ -615,9 +615,25 @@ class SandboxExchangeTradingService:
             if intent.error_message
         } if intent_ids else {}
         result = []
+        evaluation_ids = [order.evaluation_id for order in orders if order.evaluation_id]
+        journals = {
+            journal.evaluation_id: journal.result
+            for journal in self.db.query(RuleStrategyEvaluationJournal).filter(
+                RuleStrategyEvaluationJournal.tenant_id == tenant_id,
+                RuleStrategyEvaluationJournal.evaluation_id.in_(evaluation_ids),
+            ).all()
+        } if evaluation_ids else {}
         for order in orders:
             item = self._order_metadata(order)
             item["error_message"] = messages.get(order.execution_intent_id)
+            result_data = journals.get(order.evaluation_id) or {}
+            item["decision_reason_code"] = result_data.get("reason_code")
+            item["decision_reason"] = result_data.get("reason")
+            item["decision_conditions"] = [
+                condition for condition in (result_data.get("conditions") or [])
+                if isinstance(condition, dict)
+                and condition.get("category") in {"exit", "indicator", "risk"}
+            ]
             result.append(item)
         return result
 

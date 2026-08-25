@@ -35,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
+import type { SandboxOrder } from "@/types/sandbox-exchange";
 import {
   demoOrderAveragePriceLabel,
   demoOrderFilledQuantityLabel,
@@ -46,6 +47,30 @@ function formatDate(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+function decisionConditions(order: SandboxOrder) {
+  const prefix = order.side === "buy" ? "program.entry" : "program.exit";
+  return (order.decision_conditions ?? []).filter(
+    (condition) => condition.code?.startsWith(`${prefix}.`),
+  );
+}
+
+function conditionValues(values?: Record<string, unknown>): string {
+  if (!values) return "";
+  const shown = Object.entries(values)
+    .filter(([key]) => ["left", "right", "previous_left", "previous_right", "comparator", "direction"].includes(key))
+    .map(([key, value]) => `${key}=${typeof value === "number" ? Number(value.toPrecision(8)) : String(value)}`);
+  return shown.length > 0 ? `（${shown.join("，")}）` : "";
+}
+
+function decisionLabel(order: SandboxOrder): string {
+  const conditions = decisionConditions(order);
+  const triggered = conditions.filter((condition) => condition.state === "triggered");
+  if (triggered.length > 0) {
+    return `${order.side === "buy" ? "买入" : "卖出"}：${triggered.map((condition) => condition.label || condition.code || "策略条件").join("；")}`;
+  }
+  return order.decision_reason || order.decision_reason_code || "未记录策略原因";
 }
 
 export default function TradesPage() {
@@ -226,6 +251,7 @@ export default function TradesPage() {
                       <TableHead className="text-right">委托金额</TableHead>
                       <TableHead className="text-right">已成交量</TableHead>
                       <TableHead className="text-right">成交均价</TableHead>
+                      <TableHead>策略依据</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -239,6 +265,14 @@ export default function TradesPage() {
                         <TableCell className="text-right tabular-nums">{order.requested_quote} USDT</TableCell>
                         <TableCell className="text-right tabular-nums">{demoOrderFilledQuantityLabel(order)}</TableCell>
                         <TableCell className="text-right tabular-nums">{demoOrderAveragePriceLabel(order)}</TableCell>
+                        <TableCell className="max-w-96 whitespace-normal text-xs">
+                          <div className="font-medium">{decisionLabel(order)}</div>
+                          {decisionConditions(order).map((condition) => (
+                            <div className="text-muted-foreground" key={`${order.id}-${condition.code}`}>
+                              {condition.label || condition.code}：{condition.state === "triggered" ? "满足" : condition.state === "not_triggered" ? "不满足" : "不可用"}{conditionValues(condition.values)}
+                            </div>
+                          ))}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

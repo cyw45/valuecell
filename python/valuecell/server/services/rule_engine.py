@@ -140,6 +140,11 @@ class RuleEngine:
         exit_result: bool | None = False
         if program.exit is not None:
             exit_result, exit_values = self._program_condition(request, program.exit)
+            # Keep every exit leaf in the durable evaluation evidence. The
+            # aggregate `passed` count alone cannot explain a live order.
+            conditions.extend(
+                self._program_leaf_checks(request, program.exit, "program.exit")
+            )
             conditions.append(
                 self._program_check("program.exit", "exit", exit_result, exit_values)
             )

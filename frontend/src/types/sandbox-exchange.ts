@@ -95,6 +95,16 @@ export interface SandboxOrder {
   execution_generation?: number | null;
   execution_source?: string | null;
   execution_intent_id?: string | null;
+  decision_reason_code?: string | null;
+  decision_reason?: string | null;
+  decision_conditions?: Array<{
+    code?: string;
+    label?: string | null;
+    category?: string;
+    state?: string;
+    detail?: string;
+    values?: Record<string, unknown>;
+  }>;
   filled_at?: string | null;
   created_at: string;
   updated_at: string;
