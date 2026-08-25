@@ -35,7 +35,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
-import type { SandboxOrder } from "@/types/sandbox-exchange";
+import {
+  decisionConditions,
+  decisionLabel,
+  formatConditionValues,
+} from "./trades-strategy-conditions";
 import {
   demoOrderAveragePriceLabel,
   demoOrderFilledQuantityLabel,
@@ -49,29 +53,6 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function decisionConditions(order: SandboxOrder) {
-  const prefix = order.side === "buy" ? "program.entry" : "program.exit";
-  return (order.decision_conditions ?? []).filter(
-    (condition) => condition.code?.startsWith(`${prefix}.`),
-  );
-}
-
-function conditionValues(values?: Record<string, unknown>): string {
-  if (!values) return "";
-  const shown = Object.entries(values)
-    .filter(([key]) => ["left", "right", "previous_left", "previous_right", "comparator", "direction"].includes(key))
-    .map(([key, value]) => `${key}=${typeof value === "number" ? Number(value.toPrecision(8)) : String(value)}`);
-  return shown.length > 0 ? `（${shown.join("，")}）` : "";
-}
-
-function decisionLabel(order: SandboxOrder): string {
-  const conditions = decisionConditions(order);
-  const triggered = conditions.filter((condition) => condition.state === "triggered");
-  if (triggered.length > 0) {
-    return `${order.side === "buy" ? "买入" : "卖出"}：${triggered.map((condition) => condition.label || condition.code || "策略条件").join("；")}`;
-  }
-  return order.decision_reason || order.decision_reason_code || "未记录策略原因";
-}
 
 export default function TradesPage() {
   const { t } = useTranslation();
@@ -175,7 +156,7 @@ export default function TradesPage() {
         </header>
 
         {strategyId ? (
-          <label className="flex flex-wrap items-center gap-3 rounded-lg border bg-background p-3 text-sm font-medium">
+          <label className="flex flex-wrap items-center gap-3 rounded-lg border bg-background p-3 font-medium text-sm">
             执行批次
             <select
               className="min-w-72 rounded-md border bg-background px-3 py-2 font-normal"
@@ -269,7 +250,7 @@ export default function TradesPage() {
                           <div className="font-medium">{decisionLabel(order)}</div>
                           {decisionConditions(order).map((condition) => (
                             <div className="text-muted-foreground" key={`${order.id}-${condition.code}`}>
-                              {condition.label || condition.code}：{condition.state === "triggered" ? "满足" : condition.state === "not_triggered" ? "不满足" : "不可用"}{conditionValues(condition.values)}
+                              {condition.label || condition.code}：{condition.state === "triggered" ? "满足" : condition.state === "not_triggered" ? "不满足" : "不可用"}{formatConditionValues(condition.values)}
                             </div>
                           ))}
                         </TableCell>

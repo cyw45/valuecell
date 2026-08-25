@@ -632,7 +632,6 @@ class SandboxExchangeTradingService:
             item["decision_conditions"] = [
                 condition for condition in (result_data.get("conditions") or [])
                 if isinstance(condition, dict)
-                and condition.get("category") in {"exit", "indicator", "risk"}
             ]
             result.append(item)
         return result
