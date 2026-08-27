@@ -63,6 +63,7 @@ export default function TradesPage() {
   const strategyQuery = useRuleStrategy(strategyId);
   const batchesQuery = useRuleStrategyBatches(strategyId);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
+  const allHistory = selectedBatchId === "__all__";
   const source = selectTradesSource(
     strategyQuery.data !== undefined,
     strategyQuery.data?.config.execution?.environment,
@@ -77,7 +78,8 @@ export default function TradesPage() {
     source === "okx_demo",
     demoOrdersPage,
     10,
-    selectedBatchId,
+    allHistory ? null : selectedBatchId,
+    allHistory,
   );
   useEffect(() => {
     setDemoOrdersPage(1);
@@ -105,7 +107,7 @@ export default function TradesPage() {
     try {
       const workbook = await exportStrategy.mutateAsync({
         strategyId,
-        batchId: selectedBatchId ?? undefined,
+        batchId: allHistory ? undefined : selectedBatchId ?? undefined,
       });
       const objectUrl = URL.createObjectURL(workbook.blob);
       const filename = workbook.filename?.toLowerCase().endsWith(".xlsx")
@@ -166,7 +168,8 @@ export default function TradesPage() {
               }}
               value={selectedBatchId ?? ""}
             >
-              <option value="">尚未启动新的执行批次</option>
+              <option value="__all__">全部历史订单（跨执行批次）</option>
+              <option value="">当前执行批次</option>
               {(batchesQuery.data?.items ?? []).map((batch) => (
                 <option key={batch.batch_id} value={batch.batch_id}>
                   {batch.status === "running" ? "运行中" : "已归档，未删除"} · {formatDate(batch.started_at)}
@@ -248,11 +251,15 @@ export default function TradesPage() {
                         <TableCell className="text-right tabular-nums">{demoOrderAveragePriceLabel(order)}</TableCell>
                         <TableCell className="max-w-96 whitespace-normal text-xs">
                           <div className="font-medium">{decisionLabel(order)}</div>
-                          {decisionConditions(order).map((condition) => (
-                            <div className="text-muted-foreground" key={`${order.id}-${condition.code}`}>
-                              {condition.label || condition.code}：{condition.state === "triggered" ? "满足" : condition.state === "not_triggered" ? "不满足" : "不可用"}{formatConditionValues(condition.values)}
-                            </div>
-                          ))}
+                          {decisionConditions(order).length === 0 ? (
+                            <div className="text-muted-foreground">未找到该订单对应的持久化条件记录，未使用当前策略反推。</div>
+                          ) : (
+                            decisionConditions(order).map((condition) => (
+                              <div className="text-muted-foreground" key={`${order.id}-${condition.code}`}>
+                                {condition.label || condition.code}：{condition.state === "triggered" ? "满足" : condition.state === "not_triggered" ? "不满足" : "不可用"}{formatConditionValues(condition.values)}
+                              </div>
+                            ))
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

@@ -834,6 +834,7 @@ def create_rule_strategy_router(
     async def get_rule_strategy_demo_execution(
         strategy_id: str,
         batch_id: str | None = Query(default=None),
+        all_history: bool = Query(default=False),
         principal: CurrentPrincipal = Depends(get_current_principal),
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=10, ge=1, le=100),
@@ -845,7 +846,12 @@ def create_rule_strategy_router(
             strategy = rule_service.get(strategy_id, principal.tenant_id)
             resolve_batch = getattr(rule_service, "resolve_batch", None)
             batch_capable = callable(resolve_batch)
-            if batch_capable and batch_id is None and strategy.get("status") != "running":
+            if (
+                batch_capable
+                and batch_id is None
+                and not all_history
+                and strategy.get("status") != "running"
+            ):
                 empty_checked_at = datetime.now(timezone.utc).isoformat()
                 return SuccessResponse.create(
                     data={
@@ -868,7 +874,9 @@ def create_rule_strategy_router(
                     msg="OKX Demo strategy execution snapshot retrieved",
                 )
             batch = (
-                resolve_batch(strategy_id, principal.tenant_id, batch_id)
+                None
+                if all_history
+                else resolve_batch(strategy_id, principal.tenant_id, batch_id)
                 if batch_capable
                 else None
             )
@@ -928,7 +936,7 @@ def create_rule_strategy_router(
                 strategy_id=strategy_id,
                 batch_id=getattr(batch, "batch_id", None),
             )
-            if batch is not None or not batch_capable
+            if all_history or batch is not None or not batch_capable
             else []
         )
         data = build_demo_execution_read_model(

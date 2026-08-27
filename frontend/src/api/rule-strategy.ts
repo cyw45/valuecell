@@ -56,11 +56,11 @@ const ruleStrategyDemoExecutionKey = (
   page: number,
   pageSize: number,
   batchId: string | null,
-) =>
-  [
+  allHistory: boolean,
+) => [
     ...ruleStrategyKey(tenantId, strategyId),
     "demo-execution",
-    batchId ?? "current",
+    allHistory ? "all-history" : batchId ?? "current",
     page,
     pageSize,
   ] as const;
@@ -136,6 +136,7 @@ export function useRuleStrategyDemoExecution(
   page = 1,
   pageSize = 10,
   batchId: string | null = null,
+  allHistory = false,
 ) {
   const tenantId = useSaaSSession().tenantId;
   return useQuery({
@@ -145,10 +146,11 @@ export function useRuleStrategyDemoExecution(
       page,
       pageSize,
       batchId,
+      allHistory,
     ),
     queryFn: () =>
       apiClient.get<ApiResponse<RuleStrategyDemoExecution>>(
-        `/rule-strategies/${strategyId}/demo-execution?page=${page}&page_size=${pageSize}${batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
+        `/rule-strategies/${strategyId}/demo-execution?page=${page}&page_size=${pageSize}${allHistory ? "&all_history=true" : batchId ? `&batch_id=${encodeURIComponent(batchId)}` : ""}`,
         { requiresAuth: true },
       ),
     select: (response) => response.data,

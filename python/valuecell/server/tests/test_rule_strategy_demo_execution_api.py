@@ -9,6 +9,9 @@ from valuecell.server.api.routers.rule_strategy import create_rule_strategy_rout
 
 
 class StrategyService:
+    def __init__(self):
+        self.resolve_batch_calls = 0
+
     def get(self, strategy_id, tenant_id):
         assert (strategy_id, tenant_id) == ("strategy-a", "tenant-a")
         return {
@@ -64,7 +67,7 @@ def test_demo_execution_endpoint_reads_snapshot_and_local_orders_only(monkeypatc
 
     monkeypatch.setattr(router_module, "SandboxExchangeTradingService", LocalOrders)
     response = TestClient(app).get(
-        "/rule-strategies/strategy-a/demo-execution?page=2&page_size=10"
+        "/rule-strategies/strategy-a/demo-execution?page=2&page_size=10&all_history=true"
     )
 
     assert response.status_code == 200
