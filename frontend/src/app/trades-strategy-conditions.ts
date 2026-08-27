@@ -18,7 +18,12 @@ function formatValue(value: unknown): string {
 
 /** Return every durable condition emitted by the strategy evaluation. */
 export function decisionConditions(order: SandboxOrder): DecisionCondition[] {
-  return order.decision_conditions ?? [];
+  const conditions = order.decision_conditions ?? [];
+  const prefix = order.side === "buy" ? "program.entry." : "program.exit.";
+  const directionalLeaves = conditions.filter((condition) =>
+    condition.code?.startsWith(prefix),
+  );
+  return directionalLeaves.length > 0 ? directionalLeaves : conditions;
 }
 
 function summaryConditions(order: SandboxOrder): DecisionCondition[] {
@@ -30,6 +35,22 @@ function summaryConditions(order: SandboxOrder): DecisionCondition[] {
 
 export function formatConditionValues(values?: Record<string, unknown>): string {
   if (!values || Object.keys(values).length === 0) return "";
+  const comparator = values.comparator;
+  if (
+    "left" in values &&
+    "right" in values &&
+    typeof comparator === "string"
+  ) {
+    const symbols: Record<string, string> = {
+      gt: ">",
+      gte: "≥",
+      lt: "<",
+      lte: "≤",
+      eq: "=",
+      neq: "≠",
+    };
+    return `（实际值 ${formatValue(values.left)} ${symbols[comparator] ?? comparator} 目标值 ${formatValue(values.right)}）`;
+  }
   return `（${Object.entries(values)
     .map(([key, value]) => `${key}=${formatValue(value)}`)
     .join("，")}）`;

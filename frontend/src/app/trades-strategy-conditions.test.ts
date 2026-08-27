@@ -70,3 +70,32 @@ test("all eight runtime conditions remain visible when strategy adds a new categ
     { threshold: 6, nested: { enabled: true } },
   );
 });
+
+test("program orders show only their directional leaf conditions", () => {
+  const sellOrder: SandboxOrder = {
+    ...order,
+    side: "sell",
+    decision_conditions: [
+      { code: "program.entry.1", label: "15m收盘价 > 15mMA20", state: "triggered", values: {} },
+      { code: "program.exit.1", label: "1h收盘价 < 1hMA20", state: "triggered", values: {} },
+      { code: "program.exit.2", label: "15mRSI14 > 80", state: "triggered", values: {} },
+      { code: "program.exit", label: "exit", state: "triggered", values: { passed: 2 } },
+    ],
+  };
+
+  assert.deepEqual(
+    decisionConditions(sellOrder).map((condition) => condition.code),
+    ["program.exit.1", "program.exit.2"],
+  );
+});
+
+test("comparison values render as an explicit actual-value judgment", () => {
+  assert.equal(
+    formatConditionValues({ left: 84.125, comparator: "gt", right: 80 }),
+    "（实际值 84.125 > 目标值 80）",
+  );
+  assert.equal(
+    formatConditionValues({ left: 11.544, comparator: "lt", right: 11.54495 }),
+    "（实际值 11.544 < 目标值 11.54495）",
+  );
+});

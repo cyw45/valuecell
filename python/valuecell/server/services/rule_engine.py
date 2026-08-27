@@ -400,7 +400,11 @@ class RuleEngine:
             return self._program_leaf_checks(request, condition.arg, f"{path}.not")
         result, values = self._program_condition(request, condition)
         if isinstance(condition, ProgramCompareCondition):
-            label = f"{self._program_ref_label(condition.left)} {condition.comparator} {self._program_ref_label(condition.right)}"
+            comparator = {
+                "gt": ">", "gte": "≥", "lt": "<", "lte": "≤", "eq": "=", "neq": "≠",
+            }[condition.comparator]
+            label = f"{self._program_ref_label(condition.left)} {comparator} {self._program_ref_label(condition.right)}"
+            values = {**values, "comparator": comparator}
         elif isinstance(condition, ProgramCrossCondition):
             label = f"{self._program_ref_label(condition.left)} 向{condition.direction}穿越 {self._program_ref_label(condition.right)}"
         else:

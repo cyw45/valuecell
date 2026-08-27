@@ -58,6 +58,42 @@ def _condition(result, code: str):
     return next(condition for condition in result.conditions if condition.code == code)
 
 
+def test_program_rsi_exit_above_80_records_explicit_judgment():
+    closes = [100.0 + index for index in range(15)]
+    result = _evaluate(
+        closes,
+        config={
+            "interval": "15m",
+            "program": {
+                "schema_version": 2,
+                "entry": {
+                    "op": "compare",
+                    "left": {"kind": "price", "interval": "15m", "source": "close"},
+                    "comparator": "gt",
+                    "right": {"kind": "constant", "value": 0},
+                },
+                "exit": {
+                    "op": "compare",
+                    "left": {
+                        "kind": "indicator",
+                        "name": "rsi",
+                        "interval": "15m",
+                        "period": 14,
+                    },
+                    "comparator": "gt",
+                    "right": {"kind": "constant", "value": 80},
+                },
+            },
+        },
+        market={"position": {"quantity": 1.0, "entry_price": 100.0}},
+    )
+
+    assert result.action == "sell"
+    exit_check = _condition(result, "program.exit")
+    assert exit_check.label == "15mRSI14 > 80.0"
+    assert exit_check.values == {"left": 100.0, "right": 80.0, "comparator": ">"}
+
+
 @pytest.mark.parametrize(
     ("closes", "position", "expected_action", "expected_reason"),
     [
@@ -649,7 +685,7 @@ def test_program_v2_combines_multi_timeframe_indicator_logic():
         "program.entry.3",
         "program.entry.4",
     ]
-    assert entry_conditions[1].label == "4hSLOPE25 gt 0.0"
+    assert entry_conditions[1].label == "4hSLOPE25 > 0.0"
     assert all(condition.state == "triggered" for condition in entry_conditions)
 
 
@@ -676,7 +712,7 @@ def test_program_v2_supports_roc_with_rsl_label():
 
     condition = _condition(result, "program.entry")
     assert result.action == "buy"
-    assert condition.label == "1hRSL2 gte 10.0"
+    assert condition.label == "1hRSL2 ≥ 10.0"
     assert condition.values["left"] == pytest.approx(10.0)
     assert condition.state == "triggered"
 
