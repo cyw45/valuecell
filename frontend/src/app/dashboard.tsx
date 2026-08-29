@@ -930,7 +930,7 @@ export default function DashboardPage() {
                           <p className={cn("mt-2 font-semibold text-lg tabular-nums", metric.tone)}>
                             {metric.value} <span className="font-normal text-xs">USDT</span>
                           </p>
-                          <p className="mt-1 text-muted-foreground text-[11px]">{metric.detail}</p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">{metric.detail}</p>
                         </div>
                       ))}
                     </div>
@@ -984,11 +984,11 @@ export default function DashboardPage() {
                                   <TableCell>
                                     <div className="flex min-w-32 flex-col gap-1">
                                       <span className="font-medium">{allocation.kind}</span>
-                                      <span className="font-mono text-muted-foreground text-[10px]" title={allocation.strategy_id}>
+                                      <span className="font-mono text-[10px] text-muted-foreground" title={allocation.strategy_id}>
                                         {allocation.strategy_id}
                                       </span>
                                       {allocation.strategy_id === strategyId ? (
-                                        <Badge className="w-fit border-sky-500/30 bg-sky-500/10 text-sky-600 text-[10px] dark:text-sky-300" variant="outline">
+                                        <Badge className="w-fit border-sky-500/30 bg-sky-500/10 text-[10px] text-sky-600 dark:text-sky-300" variant="outline">
                                           当前选择
                                         </Badge>
                                       ) : null}

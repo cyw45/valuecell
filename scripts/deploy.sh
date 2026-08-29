@@ -133,9 +133,9 @@ if (( !SKIP_TESTS )); then
   fi
   if (( FRONTEND_CHANGED )); then
     log "running frontend gates"
-    run bun --cwd frontend run typecheck
-    run bun --cwd frontend run lint
-    run bun --cwd frontend run build
+    run bun run --cwd frontend typecheck
+    run bun run --cwd frontend lint
+    run bun run --cwd frontend build
   fi
 else
   log "WARNING: local test gates skipped"
