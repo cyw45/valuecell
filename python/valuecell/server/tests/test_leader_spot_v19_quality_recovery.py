@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from valuecell.server.api.schemas.leader_spot_v19_quality import (

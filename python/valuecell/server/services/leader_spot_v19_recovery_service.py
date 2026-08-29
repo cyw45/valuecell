@@ -9,7 +9,6 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from valuecell.server.api.schemas.leader_spot_v19_quality import (
-    LeaderSpotV19RecoveryObservation,
     LeaderSpotV19RecoveryVenue,
 )
 from valuecell.server.db.models.leader_spot_v19 import LeaderSpotV19Event

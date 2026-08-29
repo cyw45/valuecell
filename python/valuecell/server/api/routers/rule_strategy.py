@@ -393,6 +393,7 @@ def create_rule_strategy_router(
             if strategy_id
             else rule_service.repository.list(principal.tenant_id)
         )
+        facts = []
         for strategy in strategies:
             effective_batch_id = batch_id or getattr(strategy, "current_batch_id", None)
             if effective_batch_id is None:

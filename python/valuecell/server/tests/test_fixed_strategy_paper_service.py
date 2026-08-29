@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from types import SimpleNamespace
+
 
 from valuecell.server.api.schemas.fixed_strategy import FixedCandle, FixedEngineInput
 from valuecell.server.services.fixed_strategy_paper_service import FixedPaperEvaluationService

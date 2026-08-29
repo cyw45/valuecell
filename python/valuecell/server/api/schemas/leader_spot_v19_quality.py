@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Literal, Protocol, Sequence
+from typing import Literal, Protocol
 
 from pydantic import Field, model_validator
 

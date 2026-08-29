@@ -221,6 +221,7 @@ class RuleStrategyService:
             paper_mode=scope == "paper_virtual",
             config=config.model_dump(mode="json"),
         )
+        creator = getattr(self.repository, "create_with_current_state", None)
         if creator is None:
             strategy = self.repository.create(strategy)
         else:

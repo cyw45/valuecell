@@ -112,7 +112,8 @@ class LeaderSpotV19ExitEngine:
     def _ema(values, period):
         multiplier = 2 / (period + 1)
         result = values[0]
-        for value in values[1:]: result += (value - result) * multiplier
+        for value in values[1:]:
+            result += (value - result) * multiplier
         return result
 
     def _trend_exit(self, config, position, current_profit):
