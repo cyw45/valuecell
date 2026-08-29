@@ -119,6 +119,7 @@ class RuleStrategyExecutionCoordinator:
         evaluation_id: str,
         execution_generation: int,
         batch_id: str | None = None,
+        reservation_id: str | None = None,
         request: RuleStrategyOrderRequest,
         requested_quote: Decimal,
     ) -> RuleStrategyExecutionIntent:
@@ -130,6 +131,7 @@ class RuleStrategyExecutionCoordinator:
             evaluation_id=evaluation_id,
             execution_generation=execution_generation,
             batch_id=batch_id,
+            reservation_id=reservation_id,
             execution_source="rule_strategy",
             credential_id=request.credential_id,
             idempotency_key=request.client_order_id,
@@ -148,6 +150,7 @@ class RuleStrategyExecutionCoordinator:
                 "side": request.side,
                 "leg_kind": request.leg_kind,
                 "decision_price": str(request.decision_price),
+                "reservation_id": reservation_id,
             },
         )
         self.session.add(intent)

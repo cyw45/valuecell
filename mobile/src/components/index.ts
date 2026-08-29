@@ -8,4 +8,5 @@ export { PrimaryButton, type PrimaryButtonProps } from "./PrimaryButton";
 export { ScreenHeader, type ScreenHeaderProps } from "./ScreenHeader";
 export { SectionCard, type SectionCardProps } from "./SectionCard";
 export { StrategyEvaluationPanel, type StrategyEvaluationPanelProps } from "./StrategyEvaluationPanel";
+export { TradeDecisionConditions, type TradeDecisionCondition } from "./TradeDecisionConditions";
 export { StatePanel, type StatePanelProps } from "./StatePanel";

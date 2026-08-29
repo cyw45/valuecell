@@ -62,12 +62,15 @@ function paperPositions(account?: { positions: Record<string, RuleStrategyPaperP
   });
 }
 
-function demoPositions(positions: Array<{ symbol: string; quantity: number; mark_price: number | null; notional_usdt: number | null }>, orders: SandboxOrder[]): PositionView[] {
+function demoPositions(
+  positions: Array<{ symbol: string; quantity: number | string; entry_price: number | string | null; mark_price: number | string | null; notional_usdt: number | string | null; unrealized_pnl_usdt: number | string | null }>,
+): PositionView[] {
   return positions.map((position) => {
-    const entryPrice = entryFromOrders(orders, position.symbol);
+    const entryPrice = numberValue(position.entry_price);
     const currentPrice = numberValue(position.mark_price);
     const value = numberValue(position.notional_usdt);
-    return { symbol: canonical(position.symbol), quantity: position.quantity, entryPrice, currentPrice, value, pnl: entryPrice != null && currentPrice != null ? position.quantity * (currentPrice - entryPrice) : null };
+    const quantity = numberValue(position.quantity) ?? 0;
+    return { symbol: canonical(position.symbol), quantity, entryPrice, currentPrice, value, pnl: numberValue(position.unrealized_pnl_usdt) };
   });
 }
 
@@ -100,6 +103,7 @@ export default function StrategyPositionsScreen() {
   const { session } = useSession();
   const queryClient = useQueryClient();
   const strategyId = route.params.strategyId;
+  const batchId = route.params.batchId;
   const [selectedSymbol, setSelectedSymbol] = useState(route.params.symbol ?? "");
   const [range, setRange] = useState<Range>("1m");
   const [pendingClose, setPendingClose] = useState<PendingClose>(null);
@@ -108,13 +112,13 @@ export default function StrategyPositionsScreen() {
   const strategy = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId], queryFn: () => api.strategy(strategyId), enabled: Boolean(session && strategyId) });
   const isDemo = strategy.data?.config.execution.environment === "okx_demo";
   const access = useQuery({ queryKey: ["mobile", session?.tenantId, "access"], queryFn: api.access, enabled: Boolean(session) });
-  const account = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account"], queryFn: () => api.strategyAccount(strategyId), enabled: Boolean(strategyId && strategy.data && !isDemo) });
-  const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 500], queryFn: () => api.strategyLog(strategyId, "trades", 500), enabled: Boolean(strategyId && !isDemo) });
-  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", "all"], queryFn: () => api.strategyDemoExecutionAll(strategyId), enabled: Boolean(strategyId && isDemo), retry: 1, retryDelay: 1000 });
-  const evaluations = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "evaluations", 100], queryFn: () => api.strategyEvaluations(strategyId, 100), enabled: Boolean(strategyId && (route.params.evaluationId || route.params.orderId)) });
+  const account = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account", batchId ?? "current"], queryFn: () => api.strategyAccount(strategyId, batchId), enabled: Boolean(strategyId && strategy.data && !isDemo) });
+  const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 500, batchId ?? "current"], queryFn: () => api.strategyLog(strategyId, "trades", 500, batchId), enabled: Boolean(strategyId && !isDemo) });
+  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", "all", batchId ?? "current"], queryFn: () => api.strategyDemoExecutionAll(strategyId, 100, batchId), enabled: Boolean(strategyId && isDemo), retry: 1, retryDelay: 1000 });
+  const evaluations = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "evaluations", 100, batchId ?? "current"], queryFn: () => api.strategyEvaluations(strategyId, 100, batchId), enabled: Boolean(strategyId && (route.params.evaluationId || route.params.orderId)) });
   const holdingsError = isDemo ? demo.error : account.error;
   const holdingsLoading = isDemo ? demo.isLoading : account.isLoading;
-  const positions = useMemo(() => isDemo ? demoPositions(demo.data?.positions.data.positions ?? [], demo.data?.orders ?? []) : paperPositions(account.data), [account.data, demo.data, isDemo]);
+  const positions = useMemo(() => isDemo ? demoPositions(demo.data?.strategy_positions ?? []) : paperPositions(account.data), [account.data, demo.data, isDemo]);
   useEffect(() => { if (!selectedSymbol && positions[0]?.symbol) setSelectedSymbol(positions[0].symbol); }, [positions, selectedSymbol]);
   const selectedOrder = demo.data?.orders.find((order) => order.id === route.params.orderId);
   const selectedEvaluation = evaluations.data?.find((evaluation) => evaluation.evaluation_id === route.params.evaluationId || evaluation.evaluation_id === selectedOrder?.evaluation_id);

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   ActivityIndicator,
   Pressable,
@@ -9,14 +9,11 @@ import {
   Text,
   View,
 } from "react-native";
-import { Boxes, ChevronRight, Download, Landmark, LineChart, ListFilter, Pause, Pencil, Play, ReceiptText, RefreshCw, ShieldAlert, Trash2, Wallet } from "lucide-react-native";
+import { Boxes, ChevronRight, LineChart, ListFilter, ReceiptText, RefreshCw, ShieldAlert, Wallet } from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { api } from "../api";
-import { accessGate, canMutate } from "../access";
-import { StrategyExportPanel } from "../components/StrategyExportPanel";
 import {
   BottomSheetSelector,
-  ConfirmSheet,
   EquityCurveChart,
   ListRow,
   MetricCard,
@@ -66,6 +63,29 @@ const RISK_LABELS: Record<string, string> = {
   only_reduce: "仅允许减仓",
   blocked: "已阻断",
   halted: "已暂停",
+};
+const ALLOCATION_LABELS: Record<string, string> = {
+  available: "可分配",
+  reserved: "已预留",
+  occupied: "已占用",
+  partially_released: "部分释放",
+  released: "已释放",
+  blocked: "已阻断",
+};
+const SYNC_STATUS_LABELS: Record<string, string> = {
+  healthy: "钱包同步正常",
+  stale: "钱包数据已过期",
+  unavailable: "钱包数据不可用",
+};
+const ATTRIBUTION_STATUS_LABELS: Record<string, string> = {
+  complete: "策略归因完整",
+  partial: "策略归因部分完整",
+  unavailable: "策略归因不可用",
+};
+const allocationStateLabel = (state: string) => ALLOCATION_LABELS[state] ?? "状态未知";
+const ratioLabel = (value: number | string | null | undefined): string => {
+  const number = numberValue(value);
+  return typeof number === "number" ? `${(number * 100).toFixed(1)}%` : "—";
 };
 const displayMonitorState = (state: string) => MONITOR_LABELS[state] ?? "未知状态";
 const displayRiskState = (state?: string | null) => (state ? RISK_LABELS[state] ?? "未知状态" : "同步中");
@@ -123,29 +143,6 @@ export default function StrategyOverviewScreen() {
   const { session } = useSession();
   const [selectedId, setSelectedId] = useState("");
   const [selectorVisible, setSelectorVisible] = useState(false);
-  const queryClient = useQueryClient();
-  const [exportStrategyId, setExportStrategyId] = useState<string | null>(null);
-  const [pendingOperation, setPendingOperation] = useState<{
-    action: "start" | "stop" | "archive";
-    strategyId: string;
-  } | null>(null);
-  const [operationError, setOperationError] = useState<string | null>(null);
-  const access = useQuery({
-    queryKey: ["mobile", session?.tenantId, "access"],
-    queryFn: api.access,
-    enabled: Boolean(session),
-  });
-  const lifecycle = useMutation({
-    mutationFn: async ({ action, strategyId }: { action: "start" | "stop" | "archive"; strategyId: string }) => {
-      if (action === "start") return api.startStrategy(strategyId);
-      if (action === "stop") return api.stopStrategy(strategyId);
-      return api.archiveStrategy(strategyId);
-    },
-    onSuccess: async (saved) => {
-      await queryClient.invalidateQueries({ queryKey: ["mobile", session?.tenantId, "strategies"] });
-      await queryClient.invalidateQueries({ queryKey: ["mobile", session?.tenantId, "strategy", saved.strategy_id] });
-    },
-  });
   const strategies = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategies"],
     queryFn: () => api.strategies(false),
@@ -179,6 +176,18 @@ export default function StrategyOverviewScreen() {
   );
   const strategy = strategies.data?.find((item) => item.strategy_id === activeId);
   const isDemo = strategy?.config.execution.environment === "okx_demo";
+  const credentialId = strategy?.config.execution.sandbox_connection_id
+    ?? strategies.data?.find(
+      (item) => item.config.execution.environment === "okx_demo" && item.config.execution.sandbox_connection_id,
+    )?.config.execution.sandbox_connection_id
+    ?? null;
+  const sharedAccount = useQuery({
+    queryKey: ["mobile", session?.tenantId, "shared-account-summary", credentialId ?? ""],
+    queryFn: () => api.sharedAccountSummary(credentialId as string),
+    enabled: Boolean(credentialId),
+    retry: false,
+    refetchInterval: 15_000,
+  });
   const account = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "account"],
     queryFn: () => api.strategyAccount(activeId),
@@ -222,14 +231,14 @@ export default function StrategyOverviewScreen() {
     queryFn: () => api.strategyRiskState(activeId),
     enabled: Boolean(activeId),
   });
-
   const refresh = () => {
     if (isDemo) {
-      void Promise.all([strategies.refetch(), evaluations.refetch(), demo.refetch(), monitorState.refetch(), riskState.refetch()]);
+      void Promise.all([strategies.refetch(), sharedAccount.refetch(), evaluations.refetch(), demo.refetch(), monitorState.refetch(), riskState.refetch()]);
       return;
     }
     void Promise.all([
       strategies.refetch(),
+      sharedAccount.refetch(),
       account.refetch(),
       pnl.refetch(),
       evaluations.refetch(),
@@ -241,26 +250,6 @@ export default function StrategyOverviewScreen() {
     setSelectedId(strategyId);
     setSelectorVisible(false);
     if (session) void saveActiveStrategyId(session.userId, session.tenantId, strategyId);
-  };
-  const managementGate = accessGate(access.data, "strategy.manage");
-  const canManage = canMutate(access.data, "strategy.manage");
-  const operationStrategy = pendingOperation
-    ? (strategies.data ?? []).find(
-        (item) => item.strategy_id === pendingOperation.strategyId,
-      )
-    : undefined;
-  const confirmOperation = async () => {
-    if (!pendingOperation || !operationStrategy) return;
-    try {
-      await lifecycle.mutateAsync(pendingOperation);
-      if (pendingOperation.action === "archive" && activeId === operationStrategy.strategy_id) {
-        selectStrategy("");
-      }
-      setPendingOperation(null);
-      setOperationError(null);
-    } catch (error) {
-      setOperationError(error instanceof Error ? error.message : "服务未完成本次策略操作。");
-    }
   };
 
   if (strategies.isLoading) {
@@ -287,6 +276,9 @@ export default function StrategyOverviewScreen() {
     : paperAccount
       ? paperPositionValue(paperAccount.positions)
       : undefined;
+  const sharedData = sharedAccount.data;
+  const sharedAllocations = sharedData?.allocator.allocations ?? [];
+  const selectedAllocation = sharedAllocations.find((item) => item.strategy_id === activeId);
   const latestEvaluation = evaluations.data?.[0];
   const activeConditionState = latestEvaluation
     ? primaryConditionState(latestEvaluation.conditions)
@@ -310,6 +302,7 @@ export default function StrategyOverviewScreen() {
           onRefresh={refresh}
           refreshing={
             strategies.isRefetching ||
+            sharedAccount.isRefetching ||
             account.isRefetching ||
             evaluations.isRefetching ||
             demo.isRefetching
@@ -348,6 +341,34 @@ export default function StrategyOverviewScreen() {
         <MetricCard caption="服务端账户快照累计" label="收益 / 亏损" style={styles.metric} tone={typeof totalPnl === "number" && totalPnl >= 0 ? "positive" : "warning"} value={formatNumericQuote(totalPnl)} />
       </View>
 
+
+      <SectionCard description={credentialId ? `连接 ${credentialId.slice(0, 8)}… · 钱包与策略归因分开统计` : "当前策略未配置 OKX Sandbox 连接。"} title="共享账户总览">
+        {!credentialId ? <StatePanel description="配置 OKX Sandbox 连接后，这里会显示钱包权益、allocator 占用与策略归因。" title="缺少 Sandbox 连接" /> : null}
+        {credentialId && sharedAccount.isLoading ? <StatePanel description="正在读取 OKX 钱包与共享 allocator 快照。" state="loading" title="正在同步共享账户" /> : null}
+        {credentialId && sharedAccount.isError ? <StatePanel actionLabel="重试" description={(sharedAccount.error as Error).message} onAction={() => void sharedAccount.refetch()} title="共享账户暂不可用" tone="error" /> : null}
+        {credentialId && sharedData ? <>
+          <View style={styles.stateRows}>
+            <Text style={styles.stateText}>{SYNC_STATUS_LABELS[sharedData.wallet.sync_status] ?? "钱包状态未知"} · {ATTRIBUTION_STATUS_LABELS[sharedData.wallet.attribution_status] ?? "归因状态未知"}</Text>
+            <Text style={styles.muted}>钱包观测 {formatTimestamp(sharedData.wallet.observed_at)} · allocator 观测 {formatTimestamp(sharedData.allocator.observed_at)}</Text>
+            {!sharedData.data_complete ? <Text style={styles.incompleteText}>数据不完整：{sharedData.incomplete_reason ?? "部分共享账户事实尚未就绪"}</Text> : null}
+          </View>
+          <View style={styles.metricGrid}>
+            <MetricCard caption="OKX Sandbox 钱包事实" label="钱包权益" style={styles.metric} value={formatNumericQuote(sharedData.wallet.total_equity_quote)} />
+            <MetricCard caption="钱包当前可用余额" label="可用资金" style={styles.metric} value={formatNumericQuote(sharedData.wallet.available_quote)} />
+            <MetricCard caption="所有策略归因的累计结果" label="策略归因 PnL" style={styles.metric} tone={typeof sharedData.strategy_pnl_total_quote === "number" && sharedData.strategy_pnl_total_quote >= 0 ? "positive" : "warning"} value={formatNumericQuote(sharedData.strategy_pnl_total_quote)} />
+            <MetricCard caption="allocator 已分配待使用" label="已预留" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reserved_quote)} />
+            <MetricCard caption="allocator 当前名义占用" label="已占用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.occupied_notional_quote)} />
+            <MetricCard caption="可重新分配的 allocator 余额" label="可复用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reusable_quote)} />
+            <MetricCard caption="占用 / allocator 分母" label="账户利用率" style={styles.metric} tone={sharedData.allocator.account_utilization_ratio > 0.9 ? "warning" : "default"} value={ratioLabel(sharedData.allocator.account_utilization_ratio)} />
+          </View>
+          <View style={styles.allocationRows}>
+            <Text style={styles.allocationHeading}>策略分配矩阵</Text>
+            {sharedAllocations.length > 0 ? sharedAllocations.map((allocation) => <ListRow key={allocation.strategy_id} subtitle={`${allocationStateLabel(allocation.allocation_state)} · 预留 ${formatNumericQuote(allocation.reserved_quote)} · 占用 ${formatNumericQuote(allocation.occupied_quote)}`} title={allocation.strategy_id === activeId ? `${strategy.name} · 当前选择` : allocation.strategy_id} trailing={<View style={styles.allocationTrailing}><Text style={[styles.linkValue, allocation.net_pnl_quote != null && allocation.net_pnl_quote >= 0 ? styles.positiveText : styles.negativeText]}>{formatNumericQuote(allocation.net_pnl_quote)}</Text><Text style={styles.allocationPnlLabel}>净 PnL</Text></View>} />) : <Text style={styles.muted}>服务端尚未返回策略分配事实。</Text>}
+          </View>
+          {!selectedAllocation ? <Text style={styles.incompleteText}>当前策略暂无共享分配记录；上方钱包事实不代表当前策略资金。</Text> : null}
+        </> : null}
+        {credentialId && !sharedAccount.isLoading && !sharedAccount.isError && !sharedData ? <StatePanel description="服务端未返回共享账户快照。" title="共享账户数据不可用" /> : null}
+      </SectionCard>
 
       <SectionCard actionLabel={remainingSymbolCount > 0 ? `全部 ${strategy.config.symbols.length} 个` : undefined} description="默认只显示前三个；完整观察池在独立页面中检索和查看。" onAction={remainingSymbolCount > 0 ? () => navigation.navigate("StrategySymbols", { strategyId: activeId }) : undefined} title="观察标的">
         <View style={styles.symbols}>
@@ -412,44 +433,6 @@ export default function StrategyOverviewScreen() {
           <ListRow accessibilityLabel="查看监控池和风险" leading={<ShieldAlert color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "risk" })} subtitle="查看监控池状态和账户级风险原因" title="监控池与风险" />
         </View>
       </SectionCard>
-      <SectionCard
-        actionLabel="新增策略"
-        description="选择策略后，资金、执行、交易、分析、权益和监控信息会同步切换。"
-        onAction={() => navigation.navigate("策略", { screen: "StrategyEditor" })}
-        title="策略管理"
-      >
-        {!managementGate.mutationAllowed && access.data ? <Text style={styles.muted}>{managementGate.message ?? "当前角色仅具备策略查看权限。"}</Text> : null}
-        {operationError ? <Text style={styles.operationError}>{operationError}</Text> : null}
-        <View style={styles.managerCards}>
-          {(strategies.data ?? []).map((item) => {
-            const selected = item.strategy_id === activeId;
-            const running = item.status === "running";
-            return (
-              <View key={item.strategy_id} style={[styles.managerCard, selected && styles.managerCardSelected]}>
-                <Pressable
-                  accessibilityLabel={`选择策略 ${item.name}`}
-                  accessibilityRole="button"
-                  onPress={() => selectStrategy(item.strategy_id)}
-                  style={({ pressed }) => [styles.managerSelect, pressed && styles.pressed]}
-                >
-                  <View style={styles.rowCopy}>
-                    <Text numberOfLines={1} style={styles.positionSymbol}>{item.name}</Text>
-                    <Text numberOfLines={1} style={styles.muted}>{item.config.symbols.join(" · ")} · {item.config.interval} 周期</Text>
-                  </View>
-                  <Text style={[styles.managerStatus, running ? styles.managerRunning : styles.managerStopped]}>{strategyStatusLabel(item.status, item.archived_at)}</Text>
-                </Pressable>
-                <View style={styles.managerActions}>
-                  <Pressable accessibilityLabel={`编辑策略 ${item.name}`} accessibilityRole="button" onPress={() => navigation.navigate("策略", { screen: "StrategyEditor", params: { strategyId: item.strategy_id } })} style={({ pressed }) => [styles.managerAction, pressed && styles.pressed]}><Pencil color={palette.primary} size={16} /><Text style={styles.managerActionText}>编辑</Text></Pressable>
-                  {canManage ? <Pressable accessibilityLabel={`${running ? "停止" : "启动"}策略 ${item.name}`} accessibilityRole="button" disabled={lifecycle.isPending} onPress={() => setPendingOperation({ action: running ? "stop" : "start", strategyId: item.strategy_id })} style={({ pressed }) => [styles.managerAction, running && styles.managerStopAction, lifecycle.isPending && styles.disabled, pressed && !lifecycle.isPending && styles.pressed]}>{running ? <Pause color={palette.warning} size={16} /> : <Play color={palette.primary} size={16} />}<Text style={styles.managerActionText}>{running ? "停止" : "启动"}</Text></Pressable> : null}
-                  <Pressable accessibilityLabel={`导出策略 ${item.name} 历史`} accessibilityRole="button" onPress={() => setExportStrategyId(exportStrategyId === item.strategy_id ? null : item.strategy_id)} style={({ pressed }) => [styles.managerAction, pressed && styles.pressed]}><Download color={palette.primary} size={16} /><Text style={styles.managerActionText}>导出</Text></Pressable>
-                  {canManage && !running ? <Pressable accessibilityLabel={`删除策略 ${item.name}`} accessibilityRole="button" onPress={() => setPendingOperation({ action: "archive", strategyId: item.strategy_id })} style={({ pressed }) => [styles.managerAction, styles.managerDeleteAction, pressed && styles.pressed]}><Trash2 color={palette.negative} size={16} /><Text style={styles.managerDeleteText}>删除</Text></Pressable> : null}
-                </View>
-                {exportStrategyId === item.strategy_id ? <StrategyExportPanel strategyId={item.strategy_id} /> : null}
-              </View>
-            );
-          })}
-        </View>
-      </SectionCard>
 
       <PrimaryButton label="查看策略详情" leading={<LineChart color={palette.canvas} size={19} />} onPress={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })} />
       <Pressable accessibilityLabel="刷新策略工作台" accessibilityRole="button" onPress={refresh} style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
@@ -467,16 +450,6 @@ export default function StrategyOverviewScreen() {
         selectedValue={activeId}
         title="选择工作台策略"
         visible={selectorVisible}
-      />
-      <ConfirmSheet
-        confirmLabel={pendingOperation?.action === "archive" ? "确认删除" : pendingOperation?.action === "start" ? "确认启动" : "确认停止"}
-        confirming={lifecycle.isPending}
-        destructive={pendingOperation?.action === "archive"}
-        message={pendingOperation?.action === "archive" ? "已停止策略会从工作台列表移除；如有审计记录，服务端会安全归档。" : pendingOperation?.action === "start" ? "策略会按服务端配置恢复扫描。" : "停止后不会再创建新的策略执行。"}
-        onCancel={() => !lifecycle.isPending && setPendingOperation(null)}
-        onConfirm={() => void confirmOperation()}
-        title={pendingOperation ? `${pendingOperation.action === "archive" ? "删除" : pendingOperation.action === "start" ? "启动" : "停止"}“${operationStrategy?.name ?? "策略"}”？` : "确认策略操作"}
-        visible={Boolean(pendingOperation)}
       />
     </ScrollView>
   );
@@ -508,6 +481,13 @@ const styles = StyleSheet.create({
   loadingText: { color: palette.textMuted, flex: 1, fontSize: 14, lineHeight: 20 },
   dataRows: { gap: spacing.xs },
   stateRows: { gap: spacing.xs },
+  incompleteText: { color: palette.warning, fontSize: 12, fontWeight: "800", lineHeight: 18 },
+  allocationRows: { gap: spacing.xs },
+  allocationHeading: { color: palette.text, fontSize: 14, fontWeight: "900", paddingTop: spacing.xs },
+  allocationTrailing: { alignItems: "flex-end", gap: spacing.xxs },
+  allocationPnlLabel: { color: palette.textMuted, fontSize: 10, fontWeight: "700" },
+  positiveText: { color: palette.positive },
+  negativeText: { color: palette.negative },
   stateText: { color: palette.text, fontSize: 13, fontWeight: "800", lineHeight: 20 },
   row: { color: palette.text, fontSize: 14, lineHeight: 22 },
   rowCopy: { flex: 1, gap: 2 },
@@ -518,21 +498,6 @@ const styles = StyleSheet.create({
   rangeTabActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
   rangeTabText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
   rangeTabTextActive: { color: palette.primary },
-  managerCards: { gap: spacing.sm },
-  managerCard: { backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, gap: spacing.sm, padding: spacing.sm },
-  managerCardSelected: { borderColor: palette.primary, backgroundColor: palette.primarySoft },
-  managerSelect: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
-  managerStatus: { fontSize: 12, fontWeight: "900" },
-  managerRunning: { color: palette.positive },
-  managerStopped: { color: palette.textMuted },
-  managerActions: { borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, paddingTop: spacing.sm },
-  managerAction: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: 4, minHeight: 36, paddingHorizontal: spacing.sm },
-  managerStopAction: { borderColor: palette.warning },
-  managerDeleteAction: { borderColor: palette.negative },
-  managerActionText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
-  managerDeleteText: { color: palette.negative, fontSize: 12, fontWeight: "800" },
-  operationError: { color: palette.negative, fontSize: 12, fontWeight: "800", lineHeight: 19 },
-  disabled: { opacity: 0.5 },
   positionSymbol: { color: palette.text, fontSize: 14, fontWeight: "800" },
   positionValue: { color: palette.text, fontSize: 13, fontWeight: "900" },
   orderRow: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 54, paddingVertical: spacing.xs },

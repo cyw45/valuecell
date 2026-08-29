@@ -79,6 +79,14 @@ from valuecell.server.services.rule_strategy_templates import (
     get_rule_strategy_template,
     list_rule_strategy_templates,
 )
+from valuecell.server.services.multi_strategy_registry import (
+    fixed_strategy_definitions,
+    strategy_code_fingerprint,
+)
+from valuecell.server.services.multi_strategy_account_summary import (
+    SharedAccountSummaryUnavailable,
+    shared_account_summary_dict,
+)
 from valuecell.server.services.rule_strategy_validation_service import (
     RuleStrategyValidationCoverageError,
     RuleStrategyValidationDataMaterializer,
@@ -87,6 +95,7 @@ from valuecell.server.services.rule_strategy_validation_service import (
     RuleStrategyValidationService,
     RuleStrategyValidationWindowError,
 )
+from valuecell.server.services.multi_strategy_trade_facts import journal_trade_facts
 from valuecell.server.services.rule_strategy_validation_export_service import (
     RuleStrategyValidationExportService,
 )
@@ -154,6 +163,16 @@ class RuleStrategyTemplateInstantiateRequest(BaseModel):
     execution_scope: Literal[
         "paper_virtual", "dedicated_credential", "dedicated_subaccount"
     ] = "paper_virtual"
+    credential_id: str | None = Field(default=None, min_length=1, max_length=36)
+class FixedStrategyCreateRequest(BaseModel):
+    """Create a code-owned strategy without accepting algorithm parameters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["dual_ma_trend", "pair_rotation", "leader_breakout"]
+    name: str = Field(min_length=1, max_length=200)
+    initial_capital_quote: float = Field(gt=0, le=100_000_000)
+    environment: Literal["paper", "okx_demo"] = "paper"
     credential_id: str | None = Field(default=None, min_length=1, max_length=36)
 class RuleStrategyManualCloseRequest(BaseModel):
     """Explicit, typed confirmation for one-symbol or all-position Demo close."""
@@ -302,6 +321,96 @@ def create_rule_strategy_router(
             ),
         )
 
+    @router.post("/fixed", response_model=SuccessResponse[dict[str, Any]], status_code=201)
+    async def create_fixed_rule_strategy(
+        request: FixedStrategyCreateRequest,
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[dict[str, Any]]:
+        """Register a code-owned strategy instance without exposing its rules."""
+        require_strategy_manage(principal)
+        if request.environment == "okx_demo":
+            credential = db.query(TenantCredential).filter_by(
+                id=request.credential_id,
+                tenant_id=principal.tenant_id,
+                revoked=False,
+            ).first()
+            metadata = credential.metadata_json if credential is not None else {}
+            if (
+                credential is None
+                or credential.kind != "exchange"
+                or credential.provider != "okx"
+                or metadata.get("sandbox") is not True
+                or metadata.get("market_type") != "spot"
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail={"code": "okx_demo_connection_invalid"},
+                )
+        try:
+            data = rule_service.create_fixed(
+                principal.tenant_id,
+                kind=request.kind,
+                name=request.name,
+                initial_capital_quote=request.initial_capital_quote,
+                environment=request.environment,
+                credential_id=request.credential_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Fixed rule strategy created")
+
+    @router.get("/shared-account-summary", response_model=SuccessResponse[dict[str, Any]])
+    async def get_shared_account_summary(
+        credential_id: str = Query(min_length=1, max_length=36),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[dict[str, Any]]:
+        """Return one OKX wallet summary plus strategy allocations."""
+        require_strategy_read(principal)
+        try:
+            data = shared_account_summary_dict(
+                db,
+                tenant_id=principal.tenant_id,
+                credential_id=credential_id,
+            )
+        except SharedAccountSummaryUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return SuccessResponse.create(data=data, msg="Shared account summary retrieved")
+
+    @router.get("/all-trade-facts", response_model=SuccessResponse[list[dict[str, Any]]])
+    async def get_all_trade_facts(
+        limit: int = Query(default=100, ge=1, le=500),
+        strategy_id: str | None = Query(default=None, max_length=100),
+        batch_id: str | None = Query(default=None, max_length=36),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[list[dict[str, Any]]]:
+        """Return tenant-scoped attributed trade explanations across strategies."""
+        require_strategy_read(principal)
+        strategies = (
+            [rule_service._require_strategy(strategy_id, principal.tenant_id)]
+            if strategy_id
+            else rule_service.repository.list(principal.tenant_id)
+        )
+        for strategy in strategies:
+            effective_batch_id = batch_id or getattr(strategy, "current_batch_id", None)
+            if effective_batch_id is None:
+                continue
+            journals = rule_service.repository.get_evaluations(
+                strategy.strategy_id,
+                principal.tenant_id,
+                limit=limit,
+                batch_id=effective_batch_id,
+            )
+            for journal in journals:
+                facts.extend(journal_trade_facts(strategy, journal))
+        facts.sort(key=lambda item: item.created_at, reverse=True)
+        return SuccessResponse.create(
+            data=[item.model_dump(mode="json") for item in facts[:limit]],
+            msg="Unified trade facts retrieved",
+        )
+
     @router.get("", response_model=SuccessResponse[list[dict[str, Any]]])
     async def list_rule_strategies(
         include_archived: bool = Query(default=False),
@@ -315,14 +424,20 @@ def create_rule_strategy_router(
             msg="Rule strategies retrieved",
         )
 
-    @router.get("/summary", response_model=SuccessResponse[list[dict[str, Any]]])
-    async def get_rule_strategy_summary(
+    @router.get("/definitions", response_model=SuccessResponse[list[dict[str, Any]]])
+    async def list_strategy_definitions(
         principal: CurrentPrincipal = Depends(get_current_principal),
     ) -> SuccessResponse[list[dict[str, Any]]]:
+        """List fixed strategy definitions without creating executable instances."""
         require_strategy_read(principal)
-        summary_reader = getattr(rule_service.repository, "summaries", None)
-        data = summary_reader(principal.tenant_id) if summary_reader is not None else []
-        return SuccessResponse.create(data=data, msg="Rule strategy summaries retrieved")
+        data = [
+            {
+                **definition.model_dump(mode="json"),
+                "code_fingerprint": strategy_code_fingerprint(definition.kind),
+            }
+            for definition in fixed_strategy_definitions()
+        ]
+        return SuccessResponse.create(data=data, msg="Fixed strategy definitions retrieved")
 
     @router.post(
         "/{strategy_id}/validations",

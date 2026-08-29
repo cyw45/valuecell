@@ -184,16 +184,23 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_rule_strategy_execution_batches,
         migrate_rule_strategy_manual_close,
         migrate_rule_strategy_validation,
+        migrate_leader_spot_v19_storage,
+        migrate_leader_spot_v19_quality,
+        migrate_leader_spot_v19_market_state,
         migrate_strategy_demo_account_snapshots,
         migrate_strategy_official_test_baselines,
         migrate_strategy_monitor_metadata,
         migrate_strategy_product_state,
+        migrate_multi_strategy_account,
+        migrate_fixed_strategy_paper_ledger,
     )
 
     session = get_database_manager().get_session()
     try:
         migrate_rule_strategy_execution_attribution(session)
         migrate_rule_strategy_execution_batches(session)
+        migrate_multi_strategy_account(session)
+        migrate_fixed_strategy_paper_ledger(session)
         migrate_strategy_product_state(session)
         migrate_rule_strategy_validation(session)
         migrate_strategy_monitor_metadata(session)
@@ -202,6 +209,9 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_strategy_demo_account_sync_state(session)
         migrate_strategy_official_test_baselines(session)
         migrate_rule_strategy_manual_close(session)
+        migrate_leader_spot_v19_storage(session)
+        migrate_leader_spot_v19_quality(session)
+        migrate_leader_spot_v19_market_state(session)
     finally:
         session.close()
 
@@ -297,14 +307,20 @@ def create_app() -> FastAPI:
 
         market_refresh_task = asyncio.create_task(_refresh_default_market_snapshot())
         _scheduler = None
+        _leader_spot_v19_scheduler = None
         try:
             from apscheduler.triggers.interval import IntervalTrigger
             from ..db.connection import get_database_manager
             from ..services.strategy_scheduler import StrategyScheduler
 
+            from ..services.leader_spot_v19_scheduler import LeaderSpotV19Scheduler
             _scheduler = StrategyScheduler()
             await _scheduler.start()
 
+            _leader_spot_v19_scheduler = LeaderSpotV19Scheduler()
+            await _leader_spot_v19_scheduler.start()
+            _leader_spot_v19_scheduler.install_sync_job()
+            _leader_spot_v19_scheduler.sync_running_strategies()
             def _sync_job() -> None:
                 try:
                     db = get_database_manager().get_session()
@@ -383,6 +399,8 @@ def create_app() -> FastAPI:
         yield
         # Shutdown
         logger.info("ValueCell Server shutting down...")
+        if _leader_spot_v19_scheduler is not None:
+            await _leader_spot_v19_scheduler.stop()
         if _scheduler is not None:
             await _scheduler.stop()
         await text_import_jobs.stop()

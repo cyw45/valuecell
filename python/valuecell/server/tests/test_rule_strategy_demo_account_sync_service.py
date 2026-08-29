@@ -3,9 +3,10 @@ import asyncio
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from valuecell.server.db.models.base import Base
 
 import valuecell.server.services.rule_strategy_demo_account_sync_service as sync_module
-from valuecell.server.db.models.base import Base
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyDemoAccountSnapshot,
@@ -105,6 +106,7 @@ def test_sync_fetches_shared_credential_once_and_deduplicates_snapshot(monkeypat
         assert FakeExchange.positions_calls == 2
         assert FakeExchange.refreshes == 2
         assert session.query(RuleStrategyDemoAccountSnapshot).count() == 2
+        assert session.query(StrategySharedAccount).count() == 1
         states = session.query(RuleStrategyDemoAccountSyncState).all()
         assert {state.strategy_id for state in states} == {"strategy-a", "strategy-b"}
         assert all(state.latest_snapshot_id is not None for state in states)

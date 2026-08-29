@@ -14,6 +14,7 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyDemoAccountSyncState,
 )
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     get_latest_demo_account_snapshot,
     record_demo_account_snapshot,
@@ -40,6 +41,69 @@ def _demo_connection(strategy: RuleStrategy) -> str | None:
         return None
     connection_id = execution.get("sandbox_connection_id")
     return connection_id if isinstance(connection_id, str) and connection_id else None
+def _shared_account(
+    session: Session, tenant_id: str, credential_id: str
+) -> StrategySharedAccount:
+    value = (
+        session.query(StrategySharedAccount)
+        .filter_by(
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            environment="okx_demo",
+        )
+        .first()
+    )
+    if value is None:
+        value = StrategySharedAccount(
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            environment="okx_demo",
+            sync_status="unavailable",
+            attribution_status="partial",
+        )
+        session.add(value)
+        session.flush()
+    return value
+
+
+def _update_shared_account(
+    account_row: StrategySharedAccount,
+    account: dict[str, Any],
+    observed_at: str | None,
+) -> None:
+    balances = account.get("balances")
+    usdt = next(
+        (
+            item
+            for item in balances
+            if isinstance(item, dict) and item.get("currency") == "USDT"
+        ),
+        None,
+    ) if isinstance(balances, list) else None
+    account_row.wallet_equity_quote = account.get("total_usdt_value")
+    account_row.available_quote = usdt.get("free") if usdt is not None else None
+    account_row.sync_status = "healthy"
+    account_row.attribution_status = "partial"
+    account_row.observed_at = (
+        datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        if observed_at
+        else None
+    )
+    denominator = account_row.wallet_equity_quote
+    account_row.utilization_denominator_quote = denominator if denominator and denominator > 0 else None
+    account_row.reusable_quote = account_row.available_quote
+
+
+def _mark_shared_account_failure(
+    session: Session, tenant_id: str, credential_id: str
+) -> None:
+    account = _shared_account(session, tenant_id, credential_id)
+    account.sync_status = "unavailable"
+    account.attribution_status = "unavailable"
+    account.observed_at = _utc_now()
+    session.commit()
+
+
 def _state(
     session: Session, tenant_id: str, strategy_id: str, credential_id: str
 ) -> RuleStrategyDemoAccountSyncState:
@@ -152,6 +216,9 @@ async def sync_demo_account_snapshots(session: Session) -> dict[str, int]:
         try:
             account, positions = await _fetch_account(service, tenant_id, credential_id)
             observed_at = positions.get("checked_at") or account.get("checked_at")
+            shared = _shared_account(session, tenant_id, credential_id)
+            _update_shared_account(shared, account, observed_at)
+            session.commit()
             for strategy in strategies:
                 latest = get_latest_demo_account_snapshot(
                     session,
@@ -177,6 +244,7 @@ async def sync_demo_account_snapshots(session: Session) -> dict[str, int]:
                 synced += 1
         except Exception as exc:
             session.rollback()
+            _mark_shared_account_failure(session, tenant_id, credential_id)
             for strategy in strategies:
                 _record_failure(session, strategy, credential_id, exc)
             failed += 1

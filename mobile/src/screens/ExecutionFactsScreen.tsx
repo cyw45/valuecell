@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useNavigation, useRoute, type NavigationProp, type RouteProp } from "@react-navigation/native";
 import { api } from "../api";
-import { StatePanel } from "../components";
+import { StatePanel, TradeDecisionConditions } from "../components";
 import type { WorkbenchStackParamList } from "../navigation/types";
 import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
@@ -26,9 +26,9 @@ function formatNumericQuote(value: number | string | null | undefined): string {
 
 export default function ExecutionFactsScreen() {
   const route = useRoute<Route>();
-  const { session } = useSession();
   const navigation = useNavigation<NavigationProp<WorkbenchStackParamList>>();
-  const { strategyId, kind } = route.params;
+  const { session } = useSession();
+  const { strategyId, kind, batchId } = route.params;
   const [page, setPage] = useState(1);
   const strategy = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", strategyId],
@@ -37,14 +37,14 @@ export default function ExecutionFactsScreen() {
   });
   const isDemo = strategy.data?.config.execution.environment === "okx_demo";
   const execution = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", page],
-    queryFn: () => api.strategyDemoExecution(strategyId, page, 20),
+    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", batchId ?? "current", page],
+    queryFn: () => api.strategyDemoExecution(strategyId, page, 20, batchId),
     enabled: Boolean(strategyId && isDemo),
     retry: false,
   });
   const paperAccount = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account"],
-    queryFn: () => api.strategyAccount(strategyId),
+    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account", batchId ?? "current"],
+    queryFn: () => api.strategyAccount(strategyId, batchId),
     enabled: Boolean(strategyId && strategy.data && !isDemo && kind === "positions"),
   });
   const loading = strategy.isLoading || execution.isLoading || paperAccount.isLoading;
@@ -64,7 +64,7 @@ export default function ExecutionFactsScreen() {
 
   if (kind === "positions") return <DemoPositions positions={demo.positions.data.positions} />;
   if (kind === "balances") return <DemoBalances balances={demo.account.data.balances} />;
-  return <DemoOrders page={page} setPage={setPage} execution={demo} navigation={navigation} strategyId={strategyId} />;
+  return <DemoOrders batchId={batchId} page={page} setPage={setPage} execution={demo} navigation={navigation} strategyId={strategyId} />;
 }
 
 function PaperPositions({ positions }: { positions: Array<[string, { quantity: number; mark_price: number }]> }) {
@@ -79,10 +79,12 @@ function DemoBalances({ balances }: { balances: Array<{ currency: string; free: 
   return <FactsList empty={pageCopy.balances.empty} title={pageCopy.balances.title}>{balances.map((balance) => <FactRow detail={`可用 ${balance.free} · 总计 ${balance.total}`} key={balance.currency} title={balance.currency} value={formatQuote(balance.usdt_value)} />)}</FactsList>;
 }
 
-function DemoOrders({ execution, page, setPage, navigation, strategyId }: { execution: RuleStrategyDemoExecution; page: number; setPage: (page: number) => void; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string }) {
+function DemoOrders({ batchId, execution, page, setPage, navigation, strategyId }: { batchId?: string | null; execution: RuleStrategyDemoExecution; page: number; setPage: (page: number) => void; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string }) {
   return <FactsList empty={pageCopy.orders.empty} title={`策略归属订单 · 第 ${execution.pagination.page}/${execution.pagination.total_pages || 1} 页`}>
-    {execution.orders.map((order) => <Pressable accessibilityRole="button" key={order.id} onPress={() => navigation.navigate("StrategyPositions", { strategyId, symbol: order.symbol, orderId: order.id, evaluationId: order.evaluation_id ?? undefined })} style={styles.orderRow}>
+    {execution.orders.map((order) => <Pressable accessibilityRole="button" key={order.id} onPress={() => navigation.navigate("StrategyPositions", { strategyId, symbol: order.symbol, orderId: order.id, evaluationId: order.evaluation_id ?? undefined, batchId })} style={styles.orderRow}>
       <FactRow detail={`${orderTypeLabel(order.type)} · 请求 ${formatNumericQuote(order.requested_quote)} · ${formatTimestamp(order.updated_at)}${order.error_code ? ` · ${order.error_code}` : ""}`} title={`${orderSideLabel(order.side)} · ${order.symbol}`} value={orderStatusLabel(order.status)} />
+      <Text style={styles.reason}>{order.decision_reason ?? order.decision_reason_code ?? "服务端未提供成交原因。"}</Text>
+      <TradeDecisionConditions conditions={order.decision_conditions} side={order.side} />
       <Text style={styles.openHint}>查看买入点、K 线、条件与执行结果</Text>
     </Pressable>)}
     {execution.pagination.total_pages > 1 ? <View style={styles.pagination}><Pressable accessibilityRole="button" disabled={page <= 1} onPress={() => setPage(Math.max(1, page - 1))} style={[styles.pageButton, page <= 1 && styles.disabled]}><Text style={styles.pageButtonText}>上一页</Text></Pressable><Pressable accessibilityRole="button" disabled={page >= execution.pagination.total_pages} onPress={() => setPage(Math.min(execution.pagination.total_pages, page + 1))} style={[styles.pageButton, page >= execution.pagination.total_pages && styles.disabled]}><Text style={styles.pageButtonText}>下一页</Text></Pressable></View> : null}
@@ -110,6 +112,7 @@ const styles = StyleSheet.create({
   orderRow: { borderTopColor: palette.border, borderTopWidth: 1, gap: spacing.xs, paddingVertical: spacing.xs },
   openHint: { color: palette.primary, fontSize: 12, fontWeight: "800", paddingBottom: spacing.xs },
   detail: { color: palette.textMuted, fontSize: 12, lineHeight: 17 },
+  reason: { color: palette.text, fontSize: 12, lineHeight: 18 },
   value: { color: palette.text, fontSize: 12, fontWeight: "900", textAlign: "right" },
   empty: { color: palette.textMuted, fontSize: 13, paddingVertical: spacing.lg, textAlign: "center" },
   pagination: { flexDirection: "row", gap: spacing.sm, justifyContent: "flex-end", paddingTop: spacing.sm },

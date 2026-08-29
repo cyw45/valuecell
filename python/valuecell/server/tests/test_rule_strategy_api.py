@@ -18,6 +18,40 @@ from valuecell.server.services.rule_strategy_service import (
 
 
 STRATEGY_ID = "rule_deterministic"
+def test_fixed_strategy_creation_rejects_algorithm_parameters() -> None:
+    client = _client()
+    response = client.post(
+        "/rule-strategies/fixed",
+        json={
+            "kind": "dual_ma_trend",
+            "name": "固定均线",
+            "initial_capital_quote": 1_000,
+            "environment": "paper",
+            "ma_fast": 5,
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_fixed_strategy_creation_persists_code_owned_identity() -> None:
+    client = _client()
+    response = client.post(
+        "/rule-strategies/fixed",
+        json={
+            "kind": "dual_ma_trend",
+            "name": "固定均线",
+            "initial_capital_quote": 600,
+            "environment": "paper",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()["data"]
+    assert data["strategy_kind"] == "dual_ma_trend"
+    assert data["strategy_version"] == "v1"
+    assert data["config"]["interval"] == "4h"
+    assert data["config"]["symbols"]
+
+
 EVALUATION_ID = "evaluation_deterministic"
 CREATED_AT = datetime(2026, 7, 10, tzinfo=timezone.utc)
 FIXED_PRINCIPAL = CurrentPrincipal(

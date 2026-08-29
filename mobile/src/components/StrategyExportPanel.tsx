@@ -10,8 +10,8 @@ import { SectionCard } from "./SectionCard";
 
 type StrategyExportPanelProps = {
   strategyId: string;
+  batchId?: string | null;
 };
-
 type ResolvedDateRange = {
   fromDate?: string;
   toDate?: string;
@@ -98,7 +98,7 @@ async function shareOnDevice(file: StrategyExportFile): Promise<void> {
 }
 
 /** Broker-grade date range controls for a strategy's authenticated XLSX export. */
-export function StrategyExportPanel({ strategyId }: StrategyExportPanelProps) {
+export function StrategyExportPanel({ strategyId, batchId }: StrategyExportPanelProps) {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [exportError, setExportError] = useState<string | null>(null);
@@ -120,6 +120,7 @@ export function StrategyExportPanel({ strategyId }: StrategyExportPanelProps) {
     setIsExporting(true);
     try {
       const file = await api.strategyExport(strategyId, {
+        batchId: batchId ?? undefined,
         fromDate: range.fromDate,
         toDate: range.toDate,
       });
@@ -137,7 +138,7 @@ export function StrategyExportPanel({ strategyId }: StrategyExportPanelProps) {
 
   return (
     <SectionCard
-      description="服务端生成策略参数、成交明细、资金变化、执行明细与资金费，不会在设备上拼接或推断数据。"
+      description={`服务端生成策略参数、成交明细、资金变化、执行明细与资金费，不会在设备上拼接或推断数据。${batchId ? " 当前范围限定为所选执行批次。" : " 当前范围为全部历史记录。"}`}
       title="策略历史导出"
     >
       <View style={styles.rangeStatus}>

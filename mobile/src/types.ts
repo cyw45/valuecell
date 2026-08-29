@@ -1,3 +1,15 @@
+export * from "./leader-spot-v19";
+export * from "./leader-spot-v19-snapshots";
+export * from "./leader-spot-v19-quality";
+export * from "./leader-spot-v19-market-state";
+export * from "./leader-spot-v19-candidate";
+export * from "./leader-spot-v19-entry";
+export * from "./leader-spot-v19-exit";
+export * from "./leader-spot-v19-account-risk";
+export * from "./leader-spot-v19-backtest";
+
+import type { StrategyKind } from "./multi-strategy";
+
 export type TenantRole =
   | "owner"
   | "admin"
@@ -374,6 +386,9 @@ export interface RuleStrategy {
   strategy_id: string;
   name: string;
   description: string | null;
+  strategy_kind: StrategyKind;
+  strategy_version: string;
+  code_fingerprint: string;
   status: RuleStrategyStatus;
   mode: ExecutionEnvironment;
   config: RuleStrategyConfig;
@@ -383,6 +398,29 @@ export interface RuleStrategy {
   created_at?: string;
   updated_at?: string;
 }
+export interface RuleStrategyExecutionBatch {
+  batch_id: string;
+  strategy_id: string;
+  strategy_name: string;
+  strategy_kind: StrategyKind;
+  strategy_version: string;
+  code_fingerprint: string;
+  execution_generation: number;
+  status: "running" | "stopped" | "archived";
+  started_at: string;
+  stopped_at: string | null;
+  config_snapshot: RuleStrategyConfig;
+}
+
+export interface RuleStrategyExecutionBatchPage {
+  items: RuleStrategyExecutionBatch[];
+  current_batch_id: string | null;
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
+}
+
 
 export interface RuleStrategyCondition {
   code: string;
@@ -709,6 +747,16 @@ export interface SandboxOrder {
   execution_generation?: number | null;
   execution_source?: string | null;
   execution_intent_id?: string | null;
+  decision_reason_code?: string | null;
+  decision_reason?: string | null;
+  decision_conditions?: Array<{
+    code?: string;
+    label?: string | null;
+    category?: string;
+    state?: string;
+    detail?: string;
+    values?: Record<string, unknown>;
+  }>;
   created_at: string;
   updated_at: string;
 }
@@ -1064,6 +1112,15 @@ export interface RuleStrategyDemoExecutionPositions {
   data: SandboxPositions;
 }
 
+export interface RuleStrategyDemoStrategyPosition {
+  symbol: string;
+  quantity: number | string;
+  entry_price: number | string | null;
+  mark_price: number | string | null;
+  notional_usdt: number | string | null;
+  unrealized_pnl_usdt: number | string | null;
+}
+
 export interface RuleStrategyDemoExecutionPnl {
   status: "available" | "partial" | "unavailable";
   scope?: string | null;
@@ -1118,6 +1175,8 @@ export interface RuleStrategyDemoExecution {
   pnl: RuleStrategyDemoExecutionPnl;
   /** Strategy-attributed cumulative PnL curve. */
   equity_curve?: DemoEquityCurve | null;
+  /** Strategy-attributed positions rebuilt from confirmed fills. */
+  strategy_positions?: RuleStrategyDemoStrategyPosition[];
   /** Exchange-connection wallet equity curve; never strategy PnL. */
   wallet_equity_curve?: DemoEquityCurve | null;
   checked_at: string;

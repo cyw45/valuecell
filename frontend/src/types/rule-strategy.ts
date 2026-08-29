@@ -1,3 +1,5 @@
+import type { StrategyKind } from "./multi-strategy";
+
 export type RuleStrategyStatus = "running" | "stopped" | "archived";
 export type RuleStrategyAction = "entry" | "add" | "reduce" | "close" | "buy" | "sell" | "no_op";
 export type RuleConditionState =
@@ -245,6 +247,9 @@ export interface RuleStrategy {
   strategy_id: string;
   name: string;
   description: string | null;
+  strategy_kind: StrategyKind;
+  strategy_version: string;
+  code_fingerprint: string;
   status: RuleStrategyStatus;
   execution_generation: number;
   current_batch_id: string | null;
@@ -260,6 +265,9 @@ export interface RuleStrategyExecutionBatch {
   batch_id: string;
   strategy_id: string;
   strategy_name: string;
+  strategy_kind: StrategyKind;
+  strategy_version: string;
+  code_fingerprint: string;
   execution_generation: number;
   status: "running" | "stopped" | "archived";
   started_at: string;

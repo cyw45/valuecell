@@ -87,7 +87,7 @@ export default function StrategyListScreen() {
   const start = useMutation({ mutationFn: api.startStrategy });
   const stop = useMutation({ mutationFn: api.stopStrategy });
   const archive = useMutation({ mutationFn: api.archiveStrategy });
-
+  const createFixed = useMutation({ mutationFn: api.createFixedStrategy });
   useEffect(() => {
     if (!session) return;
     let active = true;
@@ -159,6 +159,16 @@ export default function StrategyListScreen() {
       setOperationError(error instanceof Error ? error.message : "服务未完成本次策略操作。");
     }
   };
+  const createFixedStrategy = async (kind: "dual_ma_trend" | "pair_rotation" | "leader_breakout", name: string) => {
+    try {
+      await createFixed.mutateAsync({ kind, name, initial_capital_quote: 600, environment: "paper" });
+      await activeStrategies.refetch();
+      setOperationNotice(`${name}已创建，规则由代码固定管理。`);
+      setOperationError(null);
+    } catch (error) {
+      setOperationError(error instanceof Error ? error.message : "固定策略创建失败。");
+    }
+  };
 
   const confirmationCopyValue = confirmation ? confirmationCopy(confirmation) : null;
 
@@ -170,6 +180,7 @@ export default function StrategyListScreen() {
     >
       <ScreenHeader subtitle="选择工作台策略，并按服务端权限管理启停与归档。" title="策略" />
       {canManage ? <PrimaryButton label="新建策略" leading={<Plus color={palette.canvas} size={19} />} onPress={() => navigation.navigate("StrategyEditor")} /> : null}
+      {canManage ? <View style={styles.fixedPanel}><Text style={styles.fixedTitle}>代码固定策略</Text><Text style={styles.fixedCopy}>规则不可在移动端修改，只能查看并统一启停。</Text><View style={styles.fixedActions}>{[{ kind: "dual_ma_trend" as const, name: "双均线趋势" }, { kind: "pair_rotation" as const, name: "配对套利" }, { kind: "leader_breakout" as const, name: "现货龙头" }].map((item) => <Pressable accessibilityRole="button" disabled={createFixed.isPending} key={item.kind} onPress={() => void createFixedStrategy(item.kind, item.name)} style={({ pressed }) => [styles.fixedAction, pressed && styles.pressed, createFixed.isPending && styles.disabled]}><Text style={styles.fixedActionText}>{item.name}</Text></Pressable>)}</View></View> : null}
       {!gate.mutationAllowed && access.data ? <StatePanel description={gate.message ?? "当前角色仅具备策略查看权限。"} title="策略操作受限" /> : null}
       {operationNotice ? <View style={styles.notice}><Text style={styles.noticeText}>{operationNotice}</Text></View> : null}
       {operationError ? <StatePanel actionLabel="关闭" description={operationError} onAction={() => setOperationError(null)} title="策略操作未完成" tone="error" /> : null}
@@ -276,6 +287,12 @@ const styles = StyleSheet.create({
   workbenchMark: { alignItems: "center", flexDirection: "row", gap: spacing.xxs },
   workbenchMarkText: { color: palette.primary, fontSize: 12, fontWeight: "900" },
   actions: { gap: spacing.xs },
+  fixedPanel: { backgroundColor: palette.primarySoft, borderColor: palette.primary, borderRadius: radius.md, borderWidth: 1, gap: spacing.xs, padding: spacing.sm },
+  fixedTitle: { color: palette.text, fontSize: 14, fontWeight: "900" },
+  fixedCopy: { color: palette.textMuted, fontSize: 12, lineHeight: 18 },
+  fixedActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  fixedAction: { backgroundColor: palette.surface, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, minHeight: 40, justifyContent: "center", paddingHorizontal: spacing.sm },
+  fixedActionText: { color: palette.primary, fontSize: 12, fontWeight: "900" },
   secondaryAction: { alignItems: "center", backgroundColor: palette.primarySoft, borderColor: palette.primary, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, justifyContent: "center", minHeight: 48, paddingHorizontal: spacing.md },
   secondaryActionText: { color: palette.primary, fontSize: 15, fontWeight: "900" },
   currentAction: { alignItems: "center", backgroundColor: palette.surfaceRaised, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, justifyContent: "center", minHeight: 48, paddingHorizontal: spacing.md },

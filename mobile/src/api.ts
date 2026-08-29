@@ -2,7 +2,7 @@ import { Platform } from "react-native";
 import * as SecureStore from "expo-secure-store";
 import { fetch as expoFetch } from "expo/fetch";
 import type * as Types from "./types";
-
+import type { AccountStrategyOverview, UnifiedTradeFact } from "./multi-strategy";
 const ACCESS_TOKEN_KEY = "valuecell.mobile.access-token";
 const REMEMBERED_EMAIL_KEY = "valuecell.mobile.remembered-email";
 const REMEMBERED_PASSWORD_KEY = "valuecell.mobile.remembered-password";
@@ -20,6 +20,7 @@ export type StrategyExportFile = Readonly<{
 }>;
 
 export type StrategyExportDateRange = Readonly<{
+  batchId?: string;
   fromDate?: string;
   toDate?: string;
 }>;
@@ -309,9 +310,10 @@ class MobileApiClient {
 
   strategyExport = (
     strategyId: string,
-    { fromDate, toDate }: StrategyExportDateRange = {},
+    { batchId, fromDate, toDate }: StrategyExportDateRange = {},
   ): Promise<StrategyExportFile> => {
     const params = new URLSearchParams();
+    if (batchId) params.set("batch_id", batchId);
     if (fromDate) params.set("from_date", fromDate);
     if (toDate) params.set("to_date", toDate);
     return this.authenticatedBinaryRequest(
@@ -321,6 +323,105 @@ class MobileApiClient {
       ),
     );
   };
+  createFixedStrategy = (
+    request: {
+      kind: "dual_ma_trend" | "pair_rotation" | "leader_breakout";
+      name: string;
+      initial_capital_quote: number;
+      environment?: "paper" | "okx_demo";
+      credential_id?: string;
+    },
+  ): Promise<Types.Strategy> =>
+    this.authenticatedRequest<Types.Strategy>("/rule-strategies/fixed", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  sharedAccountSummary = (
+    credentialId: string,
+  ): Promise<AccountStrategyOverview> =>
+    this.authenticatedRequest<AccountStrategyOverview>(
+      withQuery(
+        "/rule-strategies/shared-account-summary",
+        new URLSearchParams({ credential_id: credentialId }),
+      ),
+    );
+  strategyAccount = (
+    strategyId: string,
+    batchId?: string | null,
+  ): Promise<Types.RuleStrategyPaperAccount> =>
+    this.authenticatedRequest<Types.RuleStrategyPaperAccount>(
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/account`,
+        new URLSearchParams(batchId ? { batch_id: batchId } : {}),
+      ),
+    );
+
+  strategyPnlCurve = (
+    strategyId: string,
+    batchId?: string | null,
+  ): Promise<Types.RuleStrategyPnlPoint[]> =>
+    this.authenticatedRequest<Types.RuleStrategyPnlPoint[]>(
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/pnl-curve`,
+        new URLSearchParams(batchId ? { batch_id: batchId } : {}),
+      ),
+    );
+
+  strategyBatches = (
+    strategyId: string,
+  ): Promise<Types.RuleStrategyExecutionBatchPage> =>
+    this.authenticatedRequest<Types.RuleStrategyExecutionBatchPage>(
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/batches`,
+        new URLSearchParams({ page: "1", page_size: "100" }),
+      ),
+    );
+  allTradeFacts = (
+    strategyId?: string,
+    limit = 100,
+    batchId?: string | null,
+  ): Promise<UnifiedTradeFact[]> =>
+    this.authenticatedRequest<UnifiedTradeFact[]>(
+      withQuery(
+        "/rule-strategies/all-trade-facts",
+        new URLSearchParams({
+          limit: String(limit),
+          ...(strategyId ? { strategy_id: strategyId } : {}),
+          ...(batchId ? { batch_id: batchId } : {}),
+        }),
+      ),
+    );
+
+  strategyEvaluations = (
+    strategyId: string,
+    limit = 100,
+    batchId?: string | null,
+  ): Promise<Types.RuleStrategyEvaluationHistoryEntry[]> =>
+    this.authenticatedRequest<Types.RuleStrategyEvaluationHistoryEntry[]>(
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/evaluations`,
+        new URLSearchParams({
+          limit: String(limit),
+          ...(batchId ? { batch_id: batchId } : {}),
+        }),
+      ),
+    );
+
+  strategyLog = <T extends StrategyLogType>(
+    strategyId: string,
+    logType: T,
+    limit = 100,
+    batchId?: string | null,
+  ): Promise<Types.RuleStrategyLog<StrategyLogEntry<T>>> =>
+    this.authenticatedRequest<Types.RuleStrategyLog<StrategyLogEntry<T>>>(
+      withQuery(
+        `/rule-strategies/${pathSegment(strategyId)}/${logType}`,
+        new URLSearchParams({
+          limit: String(limit),
+          ...(batchId ? { batch_id: batchId } : {}),
+        }),
+      ),
+    );
 
   createStrategy = (
     request: Types.CreateRuleStrategyRequest,
@@ -372,62 +473,35 @@ class MobileApiClient {
       },
     );
 
-  strategyAccount = (
-    strategyId: string,
-  ): Promise<Types.RuleStrategyPaperAccount> =>
-    this.authenticatedRequest<Types.RuleStrategyPaperAccount>(
-      `/rule-strategies/${pathSegment(strategyId)}/account`,
-    );
-
-  strategyPnlCurve = (strategyId: string): Promise<Types.RuleStrategyPnlPoint[]> =>
-    this.authenticatedRequest<Types.RuleStrategyPnlPoint[]>(
-      `/rule-strategies/${pathSegment(strategyId)}/pnl-curve`,
-    );
-
-  strategyEvaluations = (
-    strategyId: string,
-    limit = 100,
-  ): Promise<Types.RuleStrategyEvaluationHistoryEntry[]> =>
-    this.authenticatedRequest<Types.RuleStrategyEvaluationHistoryEntry[]>(
-      withQuery(
-        `/rule-strategies/${pathSegment(strategyId)}/evaluations`,
-        new URLSearchParams({ limit: String(limit) }),
-      ),
-    );
-
-  strategyLog = <T extends StrategyLogType>(
-    strategyId: string,
-    logType: T,
-    limit = 100,
-  ): Promise<Types.RuleStrategyLog<StrategyLogEntry<T>>> =>
-    this.authenticatedRequest<Types.RuleStrategyLog<StrategyLogEntry<T>>>(
-      withQuery(
-        `/rule-strategies/${pathSegment(strategyId)}/${logType}`,
-        new URLSearchParams({ limit: String(limit) }),
-      ),
-    );
 
   strategyDemoExecution = (
     strategyId: string,
     page = 1,
     pageSize = 10,
+    batchId?: string | null,
+    allHistory = false,
   ): Promise<Types.RuleStrategyDemoExecution> =>
     this.authenticatedRequest<Types.RuleStrategyDemoExecution>(
       withQuery(
         `/rule-strategies/${pathSegment(strategyId)}/demo-execution`,
-        new URLSearchParams({ page: String(page), page_size: String(pageSize) }),
+        new URLSearchParams({
+          page: String(page),
+          page_size: String(pageSize),
+          ...(allHistory ? { all_history: "true" } : batchId ? { batch_id: batchId } : {}),
+        }),
       ),
     );
 
   strategyDemoExecutionAll = async (
     strategyId: string,
     pageSize = 100,
+    batchId?: string | null,
   ): Promise<Types.RuleStrategyDemoExecution> => {
     let page = 1;
     let first: Types.RuleStrategyDemoExecution | null = null;
     const orders: Types.SandboxOrder[] = [];
     while (true) {
-      const data = await this.strategyDemoExecution(strategyId, page, pageSize);
+      const data = await this.strategyDemoExecution(strategyId, page, pageSize, batchId);
       first ??= data;
       orders.push(...data.orders);
       if (page >= data.pagination.total_pages) {

@@ -3,13 +3,13 @@ import type { NavigatorScreenParams } from "@react-navigation/native";
 export type PostAuthTab = "工作台" | "我的";
 
 export type WorkbenchStackParamList = {
-  StrategyOverview: { strategyId?: string } | undefined;
+  StrategyOverview: { strategyId?: string; batchId?: string | null } | undefined;
   StrategySymbols: { strategyId: string };
-  ExecutionFacts: { strategyId: string; kind: "positions" | "balances" | "orders" };
-  StrategyPositions: { strategyId: string; symbol?: string; orderId?: string; evaluationId?: string };
+  ExecutionFacts: { strategyId: string; kind: "positions" | "balances" | "orders"; batchId?: string | null };
+  StrategyPositions: { strategyId: string; symbol?: string; orderId?: string; evaluationId?: string; batchId?: string | null };
   StrategyWorkbenchDetail: { strategyId: string; section: "execution" | "decision" | "risk" };
-  TradeLedger: { strategyId?: string } | undefined;
-  FundingPnl: { strategyId?: string } | undefined;
+  TradeLedger: { strategyId?: string; batchId?: string | null } | undefined;
+  FundingPnl: { strategyId?: string; batchId?: string | null } | undefined;
 };
 
 export type StrategyStackParamList = {

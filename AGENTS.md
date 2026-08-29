@@ -157,3 +157,9 @@ value = user_value or default
 * Group agent core, adapters, and utilities into separate modules.
 * Keep public surface small. Delay re-exports in __init__ until stable.
 * If circular dependencies appear, refactor shared contracts to a thin shared module (e.g., interfaces.py or contracts.py).
+
+## Required Project Context
+
+* Before every feature, bug fix, investigation, or deployment-related change, read `PROJECT_CONTEXT.md` first.
+* Treat it as durable project context; reconcile it with relevant source and tests before modifying behavior.
+* When a durable architecture, data-authority rule, safety boundary, cross-client contract, or deployment rule changes, update `PROJECT_CONTEXT.md` in the same change.

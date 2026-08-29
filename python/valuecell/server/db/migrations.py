@@ -36,6 +36,145 @@ RULE_STRATEGY_ARCHIVING_MIGRATION_LOCK_KEY = 7720250720
 EXECUTION_BATCH_MIGRATION_VERSION = "20260820_rule_strategy_execution_batches_v1"
 EXECUTION_BATCH_MIGRATION_LOCK_KEY = 7720250722
 
+MULTI_STRATEGY_MIGRATION_VERSION = "20260828_multi_strategy_account_v1"
+MULTI_STRATEGY_MIGRATION_LOCK_KEY = 7720250731
+FIXED_PAPER_LEDGER_MIGRATION_VERSION = "20260829_fixed_strategy_paper_ledger_v1"
+FIXED_PAPER_LEDGER_MIGRATION_LOCK_KEY = 7720250732
+
+
+def migrate_fixed_strategy_paper_ledger(session: Session) -> bool:
+    """Install side-aware fixed-strategy paper ledger tables idempotently."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(f"fixed paper ledger migration does not support {dialect!r}")
+    if dialect == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": FIXED_PAPER_LEDGER_MIGRATION_LOCK_KEY})
+    session.execute(text("CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)"))
+    if session.execute(text("SELECT 1 FROM schema_migrations WHERE version=:version"), {"version": FIXED_PAPER_LEDGER_MIGRATION_VERSION}).first():
+        return False
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS fixed_paper_accounts (
+        account_id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+        strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE RESTRICT,
+        batch_id VARCHAR(36) NOT NULL, initial_capital_quote FLOAT NOT NULL, quote_balance FLOAT NOT NULL,
+        reserved_quote FLOAT NOT NULL DEFAULT 0, occupied_quote FLOAT NOT NULL DEFAULT 0,
+        realized_pnl_quote FLOAT NOT NULL DEFAULT 0, unrealized_pnl_quote FLOAT NOT NULL DEFAULT 0,
+        version INTEGER NOT NULL DEFAULT 1, created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_fixed_paper_account_batch UNIQUE (tenant_id, strategy_id, batch_id),
+        CONSTRAINT ck_fixed_paper_account_initial CHECK (initial_capital_quote > 0),
+        CONSTRAINT ck_fixed_paper_account_reserved CHECK (reserved_quote >= 0),
+        CONSTRAINT ck_fixed_paper_account_occupied CHECK (occupied_quote >= 0),
+        CONSTRAINT ck_fixed_paper_account_version CHECK (version >= 1)
+    )"""))
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS fixed_paper_positions (
+        position_id VARCHAR(36) PRIMARY KEY, account_id VARCHAR(36) NOT NULL REFERENCES fixed_paper_accounts(account_id) ON DELETE CASCADE,
+        tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+        strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE RESTRICT,
+        batch_id VARCHAR(36) NOT NULL, symbol VARCHAR(32) NOT NULL, pair VARCHAR(64), side VARCHAR(8) NOT NULL,
+        quantity FLOAT NOT NULL, entry_price FLOAT NOT NULL, entry_quote FLOAT NOT NULL,
+        entry_timestamp_ms BIGINT NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'open',
+        created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_fixed_paper_position_symbol UNIQUE (tenant_id, strategy_id, batch_id, symbol),
+        CONSTRAINT ck_fixed_paper_position_quantity CHECK (quantity > 0),
+        CONSTRAINT ck_fixed_paper_position_entry_price CHECK (entry_price > 0),
+        CONSTRAINT ck_fixed_paper_position_entry_quote CHECK (entry_quote > 0)
+    )"""))
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS fixed_paper_fills (
+        fill_id VARCHAR(36) PRIMARY KEY, account_id VARCHAR(36) NOT NULL REFERENCES fixed_paper_accounts(account_id) ON DELETE RESTRICT,
+        position_id VARCHAR(36) REFERENCES fixed_paper_positions(position_id) ON DELETE SET NULL,
+        tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+        strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE RESTRICT,
+        batch_id VARCHAR(36) NOT NULL, evaluation_id VARCHAR(100) NOT NULL, idempotency_key VARCHAR(160) NOT NULL,
+        symbol VARCHAR(32) NOT NULL, pair VARCHAR(64), action VARCHAR(16) NOT NULL, side VARCHAR(8) NOT NULL,
+        quantity FLOAT NOT NULL, price FLOAT NOT NULL, quote_amount FLOAT NOT NULL, fee_quote FLOAT NOT NULL DEFAULT 0,
+        realized_pnl_quote FLOAT NOT NULL DEFAULT 0, created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_fixed_paper_fill_idempotency UNIQUE (tenant_id, idempotency_key),
+        CONSTRAINT ck_fixed_paper_fill_quantity CHECK (quantity > 0),
+        CONSTRAINT ck_fixed_paper_fill_price CHECK (price > 0),
+        CONSTRAINT ck_fixed_paper_fill_quote CHECK (quote_amount > 0)
+    )"""))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_fixed_paper_account_tenant_strategy ON fixed_paper_accounts (tenant_id, strategy_id)"))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_fixed_paper_position_strategy_status ON fixed_paper_positions (strategy_id, status)"))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_fixed_paper_fill_strategy_batch ON fixed_paper_fills (tenant_id, strategy_id, batch_id)"))
+    session.execute(text("INSERT INTO schema_migrations (version) VALUES (:version)"), {"version": FIXED_PAPER_LEDGER_MIGRATION_VERSION})
+    session.commit()
+    return True
+
+
+
+def migrate_multi_strategy_account(session: Session) -> bool:
+    """Install additive strategy identity and shared-account allocator tables."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(f"multi-strategy migration does not support {dialect!r}")
+    if dialect == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": MULTI_STRATEGY_MIGRATION_LOCK_KEY})
+    session.execute(text("CREATE TABLE IF NOT EXISTS schema_migrations (version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP)"))
+    if session.execute(text("SELECT 1 FROM schema_migrations WHERE version=:version"), {"version": MULTI_STRATEGY_MIGRATION_VERSION}).first():
+        return False
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS strategy_shared_accounts (
+        id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+        credential_id VARCHAR(36) NOT NULL REFERENCES tenant_credentials(id) ON DELETE RESTRICT,
+        environment VARCHAR(16) NOT NULL DEFAULT 'okx_demo', wallet_equity_quote FLOAT,
+        available_quote FLOAT, reserved_quote FLOAT NOT NULL DEFAULT 0, occupied_notional_quote FLOAT NOT NULL DEFAULT 0,
+        pending_settlement_quote FLOAT NOT NULL DEFAULT 0, reusable_quote FLOAT,
+        utilization_denominator_quote FLOAT, sync_status VARCHAR(16) NOT NULL DEFAULT 'unavailable',
+        attribution_status VARCHAR(16) NOT NULL DEFAULT 'unavailable', observed_at {ts}, version INTEGER NOT NULL DEFAULT 1,
+        active BOOLEAN NOT NULL DEFAULT TRUE, created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_strategy_shared_account_scope UNIQUE (tenant_id, credential_id, environment),
+        CONSTRAINT ck_strategy_shared_account_reserved CHECK (reserved_quote >= 0),
+        CONSTRAINT ck_strategy_shared_account_occupied CHECK (occupied_notional_quote >= 0),
+        CONSTRAINT ck_strategy_shared_account_pending CHECK (pending_settlement_quote >= 0),
+        CONSTRAINT ck_strategy_shared_account_version CHECK (version >= 1)
+    )"""))
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS strategy_capital_reservations (
+        reservation_id VARCHAR(36) PRIMARY KEY, account_id VARCHAR(36) NOT NULL REFERENCES strategy_shared_accounts(id) ON DELETE RESTRICT,
+        tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT,
+        strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) ON DELETE RESTRICT,
+        batch_id VARCHAR(36), intent_id VARCHAR(36), idempotency_key VARCHAR(128) NOT NULL,
+        symbol VARCHAR(32) NOT NULL, side VARCHAR(16) NOT NULL, requested_quote FLOAT NOT NULL,
+        reserved_quote FLOAT NOT NULL, consumed_quote FLOAT NOT NULL DEFAULT 0, released_quote FLOAT NOT NULL DEFAULT 0,
+        status VARCHAR(24) NOT NULL DEFAULT 'reserved', reason VARCHAR(1000),
+        created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_strategy_reservation_idempotency UNIQUE (tenant_id, idempotency_key),
+        CONSTRAINT ck_strategy_reservation_requested CHECK (requested_quote >= 0),
+        CONSTRAINT ck_strategy_reservation_reserved CHECK (reserved_quote >= 0),
+        CONSTRAINT ck_strategy_reservation_consumed CHECK (consumed_quote >= 0),
+        CONSTRAINT ck_strategy_reservation_released CHECK (released_quote >= 0),
+        CONSTRAINT ck_strategy_reservation_settled CHECK (consumed_quote + released_quote <= reserved_quote)
+    )"""))
+    additions = {
+        "rule_strategies": {
+            "strategy_kind": "VARCHAR(32) NOT NULL DEFAULT 'configurable_rule'",
+            "strategy_version": "VARCHAR(64) NOT NULL DEFAULT 'existing'",
+            "code_fingerprint": "VARCHAR(128) NOT NULL DEFAULT 'legacy-configurable'",
+        },
+        "rule_strategy_execution_batches": {
+            "strategy_kind": "VARCHAR(32) NOT NULL DEFAULT 'configurable_rule'",
+            "strategy_version": "VARCHAR(64) NOT NULL DEFAULT 'existing'",
+            "code_fingerprint": "VARCHAR(128) NOT NULL DEFAULT 'legacy-configurable'",
+        },
+        "rule_strategy_execution_intents": {
+            "reservation_id": "VARCHAR(36)",
+        },
+    }
+    for table, columns in additions.items():
+        existing = {row[1] for row in session.execute(text(f"PRAGMA table_info({table})")).fetchall()} if dialect == "sqlite" else set()
+        for name, definition in columns.items():
+            if dialect == "postgresql":
+                session.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {definition}"))
+            elif name not in existing:
+                session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_strategy_shared_account_tenant_active ON strategy_shared_accounts (tenant_id, active)"))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_strategy_reservation_account_status ON strategy_capital_reservations (account_id, status)"))
+    session.execute(text("CREATE INDEX IF NOT EXISTS ix_strategy_reservation_strategy_status ON strategy_capital_reservations (strategy_id, status)"))
+    session.execute(text("INSERT INTO schema_migrations (version) VALUES (:version)"), {"version": MULTI_STRATEGY_MIGRATION_VERSION})
+    session.commit()
+    return True
+
 
 def migrate_rule_strategy_execution_batches(session: Session) -> bool:
     """Install batch lifecycle and nullable attribution columns idempotently."""
@@ -890,5 +1029,174 @@ def migrate_strategy_official_test_baselines(session: Session) -> bool:
     logger.info(
         "Applied schema migration {version}",
         version=STRATEGY_OFFICIAL_TEST_BASELINE_MIGRATION_VERSION,
+    )
+    return True
+
+
+LEADER_SPOT_V19_STORAGE_MIGRATION_VERSION = "20260824_leader_spot_v19_storage_v1"
+LEADER_SPOT_V19_STORAGE_MIGRATION_LOCK_KEY = 7720250728
+
+
+def migrate_leader_spot_v19_storage(session: Session) -> bool:
+    """Install isolated V19 tables before any V19 route or scheduler is enabled."""
+
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "leader spot V19 storage migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": LEADER_SPOT_V19_STORAGE_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": LEADER_SPOT_V19_STORAGE_MIGRATION_VERSION},
+    ).first():
+        return False
+
+    from valuecell.server.db.models.leader_spot_v19 import (
+        LeaderSpotV19Account,
+        LeaderSpotV19CandidateSnapshot,
+        LeaderSpotV19Event,
+        LeaderSpotV19ExecutionBatch,
+        LeaderSpotV19ExecutionIntent,
+        LeaderSpotV19ExecutionLease,
+        LeaderSpotV19Fill,
+        LeaderSpotV19MarketSnapshot,
+        LeaderSpotV19OrderAttempt,
+        LeaderSpotV19Position,
+        LeaderSpotV19RiskState,
+        LeaderSpotV19Strategy,
+    )
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[
+            LeaderSpotV19Strategy.__table__,
+            LeaderSpotV19ExecutionBatch.__table__,
+            LeaderSpotV19Account.__table__,
+            LeaderSpotV19RiskState.__table__,
+            LeaderSpotV19CandidateSnapshot.__table__,
+            LeaderSpotV19MarketSnapshot.__table__,
+            LeaderSpotV19Position.__table__,
+            LeaderSpotV19ExecutionIntent.__table__,
+            LeaderSpotV19OrderAttempt.__table__,
+            LeaderSpotV19Fill.__table__,
+            LeaderSpotV19Event.__table__,
+            LeaderSpotV19ExecutionLease.__table__,
+        ],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": LEADER_SPOT_V19_STORAGE_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=LEADER_SPOT_V19_STORAGE_MIGRATION_VERSION,
+    )
+    return True
+LEADER_SPOT_V19_QUALITY_MIGRATION_VERSION = "20260824_leader_spot_v19_quality_v1"
+LEADER_SPOT_V19_QUALITY_MIGRATION_LOCK_KEY = 7720250729
+
+
+def migrate_leader_spot_v19_quality(session: Session) -> bool:
+    """Install durable V19 quality reports without altering prior V19 tables."""
+
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "leader spot V19 quality migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": LEADER_SPOT_V19_QUALITY_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": LEADER_SPOT_V19_QUALITY_MIGRATION_VERSION},
+    ).first():
+        return False
+    from valuecell.server.db.models.leader_spot_v19 import LeaderSpotV19DataQualityReport
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[LeaderSpotV19DataQualityReport.__table__],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": LEADER_SPOT_V19_QUALITY_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=LEADER_SPOT_V19_QUALITY_MIGRATION_VERSION,
+    )
+    return True
+
+
+LEADER_SPOT_V19_MARKET_STATE_MIGRATION_VERSION = "20260824_leader_spot_v19_market_state_v1"
+LEADER_SPOT_V19_MARKET_STATE_MIGRATION_LOCK_KEY = 7720250730
+
+
+def migrate_leader_spot_v19_market_state(session: Session) -> bool:
+    """Install append-only V19 market decisions before selection can run."""
+
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "leader spot V19 market-state migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": LEADER_SPOT_V19_MARKET_STATE_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": LEADER_SPOT_V19_MARKET_STATE_MIGRATION_VERSION},
+    ).first():
+        return False
+    from valuecell.server.db.models.leader_spot_v19 import LeaderSpotV19MarketStateDecision
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[LeaderSpotV19MarketStateDecision.__table__],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": LEADER_SPOT_V19_MARKET_STATE_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=LEADER_SPOT_V19_MARKET_STATE_MIGRATION_VERSION,
     )
     return True

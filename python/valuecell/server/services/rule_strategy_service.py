@@ -32,6 +32,11 @@ from valuecell.server.services.rule_strategy_templates import (
     get_rule_strategy_template,
 )
 from valuecell.server.services.crypto_market_service import get_crypto_market_service
+from valuecell.server.services.multi_strategy_registry import (
+    fixed_strategy_config,
+    strategy_code_fingerprint,
+    strategy_definition,
+)
 from valuecell.server.services.rule_strategy_monitor_service import (
     RuleStrategyMonitorAdmissionWorker,
     StrategyMarketMetadata,
@@ -66,6 +71,11 @@ class RuleStrategyDeleteConflictError(Exception):
 class RuleStrategyUnsupportedEvaluationError(Exception):
     """Raised when manual evaluation cannot use authoritative account facts."""
 
+class RuleStrategyFixedConfigurationError(Exception):
+    """Raised when callers try to edit a code-owned fixed strategy."""
+
+
+
 
 class RuleStrategyService:
     """Persist and evaluate standalone deterministic paper rule strategies."""
@@ -92,6 +102,9 @@ class RuleStrategyService:
             tenant_id=tenant_id,
             name=name,
             description=description,
+            strategy_kind="configurable_rule",
+            strategy_version="existing",
+            code_fingerprint="legacy-configurable",
             status="stopped",
             paper_mode=True,
             config=config.model_dump(mode="json"),
@@ -104,6 +117,60 @@ class RuleStrategyService:
                 strategy,
                 scope="paper_virtual",
                 credential_id=None,
+                symbol_candidates=config.symbols,
+            )
+        return self._strategy_data(strategy)
+
+    def create_fixed(
+        self,
+        tenant_id: str,
+        *,
+        kind: str,
+        name: str,
+        initial_capital_quote: float,
+        environment: str,
+        credential_id: str | None,
+    ) -> dict[str, Any]:
+        """Create a stopped fixed-rule strategy without exposing editable parameters."""
+
+        definition = strategy_definition(kind)
+        if definition.parameter_source != "code":
+            raise ValueError("fixed strategy creation requires a code-owned kind")
+        if environment not in definition.execution_environments:
+            raise ValueError("strategy kind does not support this execution environment")
+        try:
+            existing_strategies = self.repository.list(tenant_id, include_archived=True)
+        except TypeError:
+            existing_strategies = self.repository.list(tenant_id)
+        if any(item.name == name for item in existing_strategies):
+            raise ValueError("Rule strategy name already exists for this tenant")
+        config = fixed_strategy_config(
+            kind,
+            initial_capital_quote=initial_capital_quote,
+            environment=environment,
+            sandbox_connection_id=credential_id,
+        )
+        scope = "paper_virtual" if environment == "paper" else "shared_exchange_account"
+        strategy = RuleStrategy(
+            strategy_id=f"rule_{uuid4().hex}",
+            tenant_id=tenant_id,
+            name=name,
+            description=definition.description,
+            strategy_kind=definition.kind,
+            strategy_version=definition.strategy_version,
+            code_fingerprint=strategy_code_fingerprint(definition.kind),
+            status="stopped",
+            paper_mode=environment == "paper",
+            config=config.model_dump(mode="json"),
+        )
+        creator = getattr(self.repository, "create_with_current_state", None)
+        if creator is None:
+            strategy = self.repository.create(strategy)
+        else:
+            strategy = creator(
+                strategy,
+                scope=scope,
+                credential_id=credential_id,
                 symbol_candidates=config.symbols,
             )
         return self._strategy_data(strategy)
@@ -147,11 +214,13 @@ class RuleStrategyService:
             strategy_id=f"rule_{uuid4().hex}",
             tenant_id=tenant_id,
             name=name,
+            strategy_kind="configurable_rule",
+            strategy_version="existing",
+            code_fingerprint="legacy-configurable",
             status="stopped",
             paper_mode=scope == "paper_virtual",
             config=config.model_dump(mode="json"),
         )
-        creator = getattr(self.repository, "create_with_current_state", None)
         if creator is None:
             strategy = self.repository.create(strategy)
         else:
@@ -334,10 +403,14 @@ class RuleStrategyService:
 
     @staticmethod
     def _batch_data(batch: Any) -> dict[str, Any]:
+        # Legacy repository doubles predate additive identity metadata.
         return {
             "batch_id": batch.batch_id,
             "strategy_id": batch.strategy_id,
             "strategy_name": batch.strategy_name_snapshot,
+            "strategy_kind": getattr(batch, "strategy_kind", "configurable_rule"),
+            "strategy_version": getattr(batch, "strategy_version", "existing"),
+            "code_fingerprint": getattr(batch, "code_fingerprint", "legacy-configurable"),
             "execution_generation": batch.execution_generation,
             "status": batch.status,
             "started_at": batch.started_at,
@@ -1367,6 +1440,10 @@ class RuleStrategyService:
         description: str | None,
         config: RuleStrategyConfig | None,
     ) -> None:
+        if config is not None and getattr(strategy, "strategy_kind", "configurable_rule") != "configurable_rule":
+            raise RuleStrategyFixedConfigurationError(
+                "Fixed strategy parameters are code-owned and cannot be edited"
+            )
         if name is not None:
             strategy.name = name
         if description is not None:
@@ -1431,6 +1508,9 @@ class RuleStrategyService:
             "strategy_id": strategy.strategy_id,
             "name": strategy.name,
             "description": strategy.description,
+            "strategy_kind": getattr(strategy, "strategy_kind", "configurable_rule"),
+            "strategy_version": getattr(strategy, "strategy_version", "existing"),
+            "code_fingerprint": getattr(strategy, "code_fingerprint", "legacy-configurable"),
             "status": strategy.status,
             "mode": config.execution.environment,
             "config": config.model_dump(mode="json"),

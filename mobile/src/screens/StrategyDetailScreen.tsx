@@ -156,7 +156,7 @@ export default function StrategyDetailScreen() {
       refreshControl={<RefreshControl onRefresh={refresh} refreshing={strategy.isRefetching || account.isRefetching || demo.isRefetching || evaluations.isRefetching} tintColor={palette.primary} />}
       style={styles.page}
     >
-      <ScreenHeader actionLabel={!item.archived_at && mayManage ? "编辑" : undefined} onAction={!item.archived_at && mayManage ? () => navigation.navigate("StrategyEditor", { strategyId }) : undefined} subtitle={item.archived_at ? "已归档，只读历史与执行记录" : item.status === "running" ? `运行中 · ${executionEnvironmentLabel(config.execution.environment)}` : `已停止 · ${executionEnvironmentLabel(config.execution.environment)}`} title={item.name} />
+      <ScreenHeader actionLabel={!item.archived_at && mayManage && item.strategy_kind === "configurable_rule" ? "编辑" : undefined} onAction={!item.archived_at && mayManage && item.strategy_kind === "configurable_rule" ? () => navigation.navigate("StrategyEditor", { strategyId }) : undefined} subtitle={item.archived_at ? "已归档，只读历史与执行记录" : item.status === "running" ? `运行中 · ${executionEnvironmentLabel(config.execution.environment)}` : `已停止 · ${executionEnvironmentLabel(config.execution.environment)}`} title={item.name} />
       {!gate.mutationAllowed && access.data ? <StatePanel description={gate.message ?? "当前角色仅具备策略查看权限。"} title="策略操作受限" /> : null}
       {operationError ? <StatePanel actionLabel="关闭" description={operationError} onAction={() => setOperationError(null)} title="策略操作未完成" tone="error" /> : null}
 

@@ -20,6 +20,13 @@ from valuecell.server.db.models.rule_strategy import (
 )
 from valuecell.server.services import strategy_scheduler
 
+def test_scheduler_registers_all_fixed_strategy_engine_boundaries() -> None:
+    assert strategy_scheduler.strategy_kind_has_scheduler("configurable_rule") is True
+    assert strategy_scheduler.strategy_kind_has_scheduler("dual_ma_trend") is True
+    assert strategy_scheduler.strategy_kind_has_scheduler("pair_rotation") is True
+    assert strategy_scheduler.strategy_kind_has_scheduler("leader_breakout") is True
+
+
 
 class DurableQuery:
     def __init__(self, session, model):

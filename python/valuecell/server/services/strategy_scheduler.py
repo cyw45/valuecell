@@ -56,11 +56,24 @@ from valuecell.server.services.sandbox_exchange_trading_service import (
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     get_official_test_baseline,
 )
+from valuecell.server.api.schemas.fixed_strategy import FixedCandle, FixedEngineInput
+from valuecell.server.services.fixed_strategy_paper_service import FixedPaperEvaluationService
 
 _MIN_INTERVAL_S = 60
 _DEMO_SUBMISSION_TIMEOUT_S = 15
 _DEMO_POSITION_DUST_EPSILON = Decimal("0.000001")
 _SYNC_JOB_ID = "_scheduler_sync_running"
+_SUPPORTED_STRATEGY_KINDS = frozenset({
+    "configurable_rule",
+    "dual_ma_trend",
+    "pair_rotation",
+    "leader_breakout",
+})
+
+
+def strategy_kind_has_scheduler(strategy_kind: str | None) -> bool:
+    """Return whether a strategy kind has a registered scheduler boundary."""
+    return strategy_kind in _SUPPORTED_STRATEGY_KINDS
 _INTERVAL_SECONDS: dict[str, int] = {
     "1m": 60,
     "3m": 180,
@@ -316,6 +329,8 @@ class StrategyScheduler:
         config_dict: dict[str, Any] | None = None,
     ) -> None:
         """Fetch, evaluate, and execute only while holding the durable lease."""
+        strategy_kind = "configurable_rule"
+        strategy_batch_id: str | None = None
         if config_dict is None and worker_id is None:
             config_dict = execution_generation if isinstance(execution_generation, dict) else {}
             execution_generation = 1
@@ -334,6 +349,15 @@ class StrategyScheduler:
                     strategy_id, tenant_id
                 )
                 if strategy_row is not None:
+                    strategy_kind = getattr(strategy_row, "strategy_kind", "configurable_rule")
+                    strategy_batch_id = getattr(strategy_row, "current_batch_id", None)
+                    if not strategy_kind_has_scheduler(strategy_kind):
+                        logger.warning(
+                            "StrategyScheduler skipped unavailable strategy kind strategy_id={} kind={}",
+                            strategy_id,
+                            strategy_kind,
+                        )
+                        return
                     execution_generation = strategy_row.execution_generation or execution_generation
                     if not RuleStrategyRepository(db_session=lease_session).claim_execution_lease(
                         strategy_id, execution_generation, worker_id
@@ -355,6 +379,15 @@ class StrategyScheduler:
                 return
         finally:
             session.close()
+        if strategy_kind != "configurable_rule":
+            await self._tick_fixed_strategy(
+                strategy_id,
+                tenant_id,
+                strategy_kind,
+                config_dict,
+                strategy_batch_id,
+            )
+            return
         config = RuleStrategyConfig.model_validate(config_dict)
         symbols = config.symbols
         monitor_session = get_database_manager().get_session()
@@ -676,6 +709,91 @@ class StrategyScheduler:
                         execution,
                     )
 
+    async def _tick_fixed_strategy(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        strategy_kind: str,
+        config_dict: dict[str, Any],
+        batch_id: str | None,
+    ) -> None:
+        """Run a fixed engine and persist signals without placing orders."""
+        symbols = [
+            symbol
+            for symbol in config_dict.get("symbols", [])
+            if isinstance(symbol, str) and symbol
+        ]
+        if not symbols:
+            return
+        lookback = 260 if strategy_kind == "pair_rotation" else 80
+        market_service = get_crypto_market_service()
+        try:
+            market_data = await market_service.get_indicators(
+                symbols=symbols,
+                interval="4h",
+                lookback=lookback,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _safe_warning("FIXED_STRATEGY_MARKET_FETCH_FAILED", count=len(symbols), exc=exc)
+            self._record_diagnostics(
+                strategy_id,
+                tenant_id,
+                symbols,
+                stage="market_data",
+                reason_code="fetch_failed",
+                reason="固定策略行情暂不可用，未生成 Paper 信号。",
+                retry_after_s=_INTERVAL_SECONDS["4h"],
+            )
+            return
+        fixed_candles: list[FixedCandle] = []
+        for symbol_data in market_data.symbols:
+            if symbol_data.freshness_status != "fresh":
+                continue
+            fixed_candles.extend(
+                FixedCandle(
+                    symbol=symbol_data.symbol,
+                    timestamp_ms=candle.ts,
+                    open=candle.open,
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                    volume=candle.volume,
+                    is_closed=True,
+                )
+                for candle in symbol_data.candles
+            )
+        if not fixed_candles:
+            return
+        observed_at = datetime.fromtimestamp(
+            max(candle.timestamp_ms for candle in fixed_candles) / 1000,
+            tz=timezone.utc,
+        )
+        paper_service = FixedPaperEvaluationService()
+        if strategy_kind == "pair_rotation":
+            paper_service.evaluate_and_record(
+                strategy_id=strategy_id,
+                tenant_id=tenant_id,
+                strategy_kind=strategy_kind,
+                batch_id=batch_id,
+                request=FixedEngineInput(candles=fixed_candles, observed_at=observed_at),
+            )
+            return
+        by_symbol: dict[str, list[FixedCandle]] = {}
+        for candle in fixed_candles:
+            by_symbol.setdefault(candle.symbol, []).append(candle)
+        btc_candles = by_symbol.get("BTC-USDT")
+        for symbol in symbols:
+            candles = by_symbol.get(symbol)
+            if not candles:
+                continue
+            paper_service.evaluate_and_record(
+                strategy_id=strategy_id,
+                tenant_id=tenant_id,
+                strategy_kind=strategy_kind,
+                batch_id=batch_id,
+                request=FixedEngineInput(candles=candles, observed_at=observed_at),
+                btc_request=btc_candles,
+            )
     @staticmethod
     def _record_market_data_diagnostics(
         strategy_id: str,

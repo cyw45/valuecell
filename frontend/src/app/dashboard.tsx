@@ -38,6 +38,7 @@ import {
   useRuleStrategyPnlCurve,
   useRuleStrategyRiskState,
   useRuleStrategyTrades,
+  useSharedAccountSummary,
 } from "@/api/rule-strategy";
 import {
   buildDashboardFunnel,
@@ -81,6 +82,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import {
   Tooltip,
   TooltipContent,
@@ -198,6 +207,18 @@ function displayReason(
     return REASON_CODE_LABELS[reasonCode];
   }
   return reasonDetail ? "系统暂未提供中文说明" : "暂无说明";
+}
+const ALLOCATION_STATE_LABELS: Record<string, string> = {
+  available: "可分配",
+  reserved: "已预留",
+  occupied: "已占用",
+  partially_released: "部分释放",
+  released: "已释放",
+  blocked: "已阻断",
+};
+
+function formatQuote(value: number | null | undefined) {
+  return value == null || !Number.isFinite(value) ? "—" : currency.format(value);
 }
 
 function TerminalValue({
@@ -338,6 +359,13 @@ export default function DashboardPage() {
   }, {});
   const execution = ruleStrategy?.config.execution;
   const isOkxDemo = execution?.environment === "okx_demo";
+  const sharedCredentialId =
+    (isOkxDemo ? execution?.sandbox_connection_id : undefined)
+    ?? strategiesQuery.data?.find(
+      (item) => item.config.execution.environment === "okx_demo" && item.config.execution.sandbox_connection_id,
+    )?.config.execution.sandbox_connection_id;
+  const sharedAccountQuery = useSharedAccountSummary(sharedCredentialId);
+  const sharedAccountSummary = sharedAccountQuery.data;
   const strategyExecutionModeIsDemo = ruleStrategy ? isOkxDemo : undefined;
   const [demoOrdersPage, setDemoOrdersPage] = useState(1);
   const exportStrategy = useExportRuleStrategy();
@@ -465,6 +493,9 @@ export default function DashboardPage() {
           );
         }
       }
+      if (sharedCredentialId) {
+        refreshes.push(() => sharedAccountQuery.refetch());
+      }
       void Promise.all(refreshes.map((refetch) => refetch()));
     }, 15_000);
     return () => window.clearInterval(timer);
@@ -474,6 +505,8 @@ export default function DashboardPage() {
     monitorStateQuery,
     pnlCurveQuery,
     riskStateQuery,
+    sharedAccountQuery,
+    sharedCredentialId,
     strategyExecutionModeIsDemo,
     strategyId,
     strategyQuery,
@@ -789,6 +822,211 @@ export default function DashboardPage() {
           </div>
         </header>
         <DashboardStrategyManagement />
+        {sharedCredentialId ? (
+          <section aria-label="共享账户概览" className="order-3">
+            <Card className="dashboard-panel overflow-hidden rounded-lg border-sky-500/20 bg-card/90 py-0 shadow-none">
+              <CardHeader className="gap-1 border-border/70 border-b px-5 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <WalletCards className="size-4 text-sky-500" />
+                      共享账户概览
+                    </CardTitle>
+                    <CardDescription>
+                      钱包权威总额与策略归属分配分开呈现，不将当前策略视为整个账户
+                    </CardDescription>
+                  </div>
+                  <Badge
+                    className={cn(
+                      "shrink-0",
+                      sharedAccountQuery.isError &&
+                        "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                      !sharedAccountQuery.isError &&
+                        sharedAccountSummary?.data_complete !== false &&
+                        sharedAccountSummary?.wallet.sync_status === "healthy" &&
+                        sharedAccountSummary?.wallet.attribution_status === "complete" &&
+                        "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+                      sharedAccountSummary != null &&
+                        (sharedAccountSummary.data_complete === false ||
+                          sharedAccountSummary.wallet.sync_status !== "healthy" ||
+                          sharedAccountSummary.wallet.attribution_status !== "complete") &&
+                        "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                    )}
+                    variant="outline"
+                  >
+                    {sharedAccountQuery.isError
+                      ? "账户数据不可用"
+                      : sharedAccountQuery.isFetching && !sharedAccountSummary
+                        ? "正在同步"
+                        : !sharedAccountSummary
+                          ? "等待账户数据"
+                          : sharedAccountSummary.wallet.sync_status === "unavailable"
+                            ? "钱包不可用"
+                            : sharedAccountSummary.wallet.sync_status === "stale"
+                              ? "钱包数据延迟"
+                              : sharedAccountSummary.wallet.attribution_status !== "complete"
+                                ? "归因不完整"
+                              : sharedAccountSummary?.data_complete === false
+                                ? "数据不完整"
+                                : "已同步"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 sm:p-5">
+                {sharedAccountQuery.isError ? (
+                  <div className="rounded-md border border-rose-500/25 bg-rose-500/5 px-4 py-3 text-sm">
+                    <p className="font-medium text-rose-700 dark:text-rose-300">
+                      暂时无法读取共享钱包与分配数据
+                    </p>
+                    <p className="mt-1 text-muted-foreground text-xs">
+                      请稍后重试；在数据恢复前不会用策略账户数值替代钱包权威总额。
+                    </p>
+                  </div>
+                ) : sharedAccountQuery.isFetching && !sharedAccountSummary ? (
+                  <div aria-busy="true" className="flex items-center gap-2 py-8 text-muted-foreground text-sm">
+                    <RefreshCw className="size-4 animate-spin" /> 正在同步共享钱包与策略分配…
+                  </div>
+                ) : !sharedAccountSummary ? (
+                  <p className="py-8 text-center text-muted-foreground text-sm">
+                    共享账户暂无可用数据。
+                  </p>
+                ) : (
+                  <>
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        {
+                          label: "钱包总权益 · 权威",
+                          value: formatQuote(sharedAccountSummary.wallet.total_equity_quote),
+                          detail: "OKX 钱包同步值，不代表当前策略余额",
+                          tone: "text-sky-600 dark:text-sky-300",
+                        },
+                        {
+                          label: "钱包可用余额 · 权威",
+                          value: formatQuote(sharedAccountSummary.wallet.available_quote),
+                          detail: "可用资金，以钱包为准",
+                          tone: "text-sky-600 dark:text-sky-300",
+                        },
+                        {
+                          label: "策略归属 PnL · 归因",
+                          value: formatQuote(sharedAccountSummary.strategy_pnl_total_quote),
+                          detail: "所有策略归属盈亏合计",
+                          tone: sharedAccountSummary.strategy_pnl_total_quote == null
+                            ? "text-muted-foreground"
+                            : sharedAccountSummary.strategy_pnl_total_quote >= 0
+                              ? "text-emerald-600 dark:text-emerald-300"
+                              : "text-rose-600 dark:text-rose-300",
+                        },
+                        {
+                          label: "钱包 − 策略差额",
+                          value: formatQuote(sharedAccountSummary.wallet_strategy_reconciliation_delta_quote),
+                          detail: "用于核对，非当前策略账户权益",
+                          tone: "text-amber-600 dark:text-amber-300",
+                        },
+                      ].map((metric) => (
+                        <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3" key={metric.label}>
+                          <p className="font-medium text-[10px] text-muted-foreground uppercase tracking-[0.08em]">
+                            {metric.label}
+                          </p>
+                          <p className={cn("mt-2 font-semibold text-lg tabular-nums", metric.tone)}>
+                            {metric.value} <span className="font-normal text-xs">USDT</span>
+                          </p>
+                          <p className="mt-1 text-muted-foreground text-[11px]">{metric.detail}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {sharedAccountSummary.data_complete === false ||
+                    sharedAccountSummary.wallet.sync_status !== "healthy" ||
+                    sharedAccountSummary.wallet.attribution_status !== "complete" ? (
+                      <div className="mt-3 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-amber-800 text-xs dark:text-amber-200">
+                        <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                        <span>
+                          {sharedAccountSummary.incomplete_reason ??
+                            (sharedAccountSummary.wallet.sync_status !== "healthy"
+                              ? "钱包同步状态异常，权威余额可能暂时不可用。"
+                              : "部分策略归因尚未完成，归属 PnL 仅供参考。")}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="mt-5 border-border/70 border-t pt-4">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="font-medium text-sm">策略资金分配</h3>
+                          <p className="mt-0.5 text-muted-foreground text-xs">
+                            allocator.allocations · 仅显示归属分配，不替代钱包总额
+                          </p>
+                        </div>
+                        <span className="text-muted-foreground text-xs">
+                          账户利用率 {(sharedAccountSummary.allocator.account_utilization_ratio * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto rounded-md border border-border/70">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>策略</TableHead>
+                              <TableHead>状态</TableHead>
+                              <TableHead className="text-right">预留</TableHead>
+                              <TableHead className="text-right">占用</TableHead>
+                              <TableHead className="text-right">已释放</TableHead>
+                              <TableHead className="text-right">净 PnL</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {sharedAccountSummary.allocator.allocations.length === 0 ? (
+                              <TableRow>
+                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={6}>
+                                  暂无策略分配记录。
+                                </TableCell>
+                              </TableRow>
+                            ) : (
+                              sharedAccountSummary.allocator.allocations.map((allocation) => (
+                                <TableRow key={allocation.strategy_id}>
+                                  <TableCell>
+                                    <div className="flex min-w-32 flex-col gap-1">
+                                      <span className="font-medium">{allocation.kind}</span>
+                                      <span className="font-mono text-muted-foreground text-[10px]" title={allocation.strategy_id}>
+                                        {allocation.strategy_id}
+                                      </span>
+                                      {allocation.strategy_id === strategyId ? (
+                                        <Badge className="w-fit border-sky-500/30 bg-sky-500/10 text-sky-600 text-[10px] dark:text-sky-300" variant="outline">
+                                          当前选择
+                                        </Badge>
+                                      ) : null}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge
+                                      className={cn(
+                                        "text-[10px]",
+                                        allocation.allocation_state === "blocked" &&
+                                          "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                                        allocation.allocation_state !== "blocked" &&
+                                          "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+                                      )}
+                                      variant="outline"
+                                    >
+                                      {ALLOCATION_STATE_LABELS[allocation.allocation_state] ?? allocation.allocation_state}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.reserved_quote)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.occupied_quote)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.released_quote)}</TableCell>
+                                  <TableCell className={cn("text-right tabular-nums", allocation.net_pnl_quote == null ? "text-muted-foreground" : allocation.net_pnl_quote >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300")}>
+                                    {formatQuote(allocation.net_pnl_quote)}
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            )}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </section>
+        ) : null}
         <section
           className="order-7 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]"
           aria-label="策略监控与风险"
@@ -1676,7 +1914,7 @@ export default function DashboardPage() {
                             <td className={cn("px-3 py-3 font-medium", order.side === "buy" ? "text-emerald-500" : "text-rose-500")}>
                               {order.side === "buy" ? "买入" : order.side === "sell" ? "卖出" : "未知方向"}
                             </td>
-                            <td className="whitespace-nowrap px-3 py-3 font-mono"><Link className="text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(order.symbol.replace("/", "-"))}&orderId=${encodeURIComponent(order.id)}${order.evaluation_id ? `&evaluationId=${encodeURIComponent(order.evaluation_id)}` : ""}`}>{toDashboardSymbol(order.symbol)}</Link></td>
+                            <td className="whitespace-nowrap px-3 py-3 font-mono"><Link className="text-sky-600 hover:underline dark:text-sky-300" to={`/positions?strategyId=${encodeURIComponent(strategyId ?? "")}&symbol=${encodeURIComponent(order.symbol.replace("/", "-"))}&orderId=${encodeURIComponent(order.id)}${selectedBatchId ? `&batch_id=${encodeURIComponent(selectedBatchId)}` : ""}${order.evaluation_id ? `&evaluationId=${encodeURIComponent(order.evaluation_id)}` : ""}`}>{toDashboardSymbol(order.symbol)}</Link></td>
                             <td className="whitespace-nowrap px-3 py-3">{demoOrderStatusLabel(order.status)}</td>
                             <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.requested_quote)}</td>
                             <td className="px-3 py-3 tabular-nums">{formatOptionalAmount(order.requested_quantity)}</td>

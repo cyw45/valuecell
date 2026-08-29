@@ -23,6 +23,7 @@ import type {
   RuleStrategyTradeLogEntry,
   UpdateRuleStrategyRequest,
 } from "@/types/rule-strategy";
+import type { AccountStrategyOverview, UnifiedTradeFact } from "@/types/multi-strategy";
 import type { RuleStrategyDemoExecution } from "@/types/rule-strategy-demo-execution";
 
 const ruleStrategiesKey = (tenantId: string) =>
@@ -37,6 +38,34 @@ const ruleStrategyLogKey = (
   logType: "signals" | "trades" | "funding",
   batchId: string | null = null,
 ) => [...ruleStrategyKey(tenantId, strategyId), logType, batchId ?? "current"] as const;
+const allTradeFactsKey = (
+  tenantId: string,
+  strategyId: string | null,
+  batchId: string | null,
+) => [...ruleStrategiesKey(tenantId), "all-trade-facts", strategyId ?? "all", batchId ?? "all"] as const;
+
+export function useAllTradeFacts(
+  strategyId?: string | null,
+  batchId: string | null = null,
+  enabled = true,
+) {
+  const tenantId = useSaaSSession().tenantId;
+  return useQuery({
+    queryKey: allTradeFactsKey(tenantId, strategyId ?? null, batchId),
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: "500" });
+      if (strategyId) params.set("strategy_id", strategyId);
+      if (batchId) params.set("batch_id", batchId);
+      return apiClient.get<ApiResponse<UnifiedTradeFact[]>>(
+        `/rule-strategies/all-trade-facts?${params.toString()}`,
+        { requiresAuth: true },
+      );
+    },
+    select: (response) => response.data,
+    enabled: Boolean(tenantId && enabled),
+  });
+}
+
 
 export function useRuleStrategyBatches(strategyId?: string) {
   const tenantId = useSaaSSession().tenantId;
@@ -50,6 +79,18 @@ export function useRuleStrategyBatches(strategyId?: string) {
     enabled: Boolean(strategyId && tenantId),
   });
 };
+export function useSharedAccountSummary(credentialId?: string) {
+  const tenantId = useSaaSSession().tenantId;
+  return useQuery({
+    queryKey: [...ruleStrategiesKey(tenantId), "shared-account-summary", credentialId ?? ""],
+    queryFn: () => apiClient.get<ApiResponse<AccountStrategyOverview>>(
+      `/rule-strategies/shared-account-summary?credential_id=${encodeURIComponent(credentialId ?? "")}`,
+      { requiresAuth: true },
+    ),
+    select: (response) => response.data,
+    enabled: Boolean(tenantId && credentialId),
+  });
+}
 const ruleStrategyDemoExecutionKey = (
   tenantId: string,
   strategyId: string,
@@ -171,6 +212,26 @@ export function useCreateRuleStrategy() {
       queryClient.invalidateQueries({ queryKey: ruleStrategiesKey(tenantId) }),
   });
 }
+export type FixedRuleStrategyRequest = {
+  kind: "dual_ma_trend" | "pair_rotation" | "leader_breakout";
+  name: string;
+  initial_capital_quote: number;
+  environment?: "paper" | "okx_demo";
+  credential_id?: string;
+};
+
+export function useCreateFixedRuleStrategy() {
+  const queryClient = useQueryClient();
+  const tenantId = useSaaSSession().tenantId;
+  return useMutation({
+    mutationFn: (request: FixedRuleStrategyRequest) =>
+      apiClient.post<ApiResponse<RuleStrategy>>("/rule-strategies/fixed", request, {
+        requiresAuth: true,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ruleStrategiesKey(tenantId) }),
+  });
+}
+
 
 export function useUpdateRuleStrategy(strategyId?: string) {
   const queryClient = useQueryClient();

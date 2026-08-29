@@ -3,6 +3,7 @@ import { type FormEvent, useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import {
+  useCreateFixedRuleStrategy,
   useExportRuleStrategy,
   useRuleStrategies,
   useRuleStrategyLifecycleAction,
@@ -154,8 +155,14 @@ export function DashboardStrategyManagement() {
   const { tenantId } = useSaaSSession();
   const [activeStrategyId, setActiveStrategyId] = useActiveRuleStrategyId();
   const strategiesQuery = useRuleStrategies(tenantId);
+  const createFixed = useCreateFixedRuleStrategy();
   const lifecycleAction = useRuleStrategyLifecycleAction();
   const strategies = strategiesQuery.data ?? [];
+  const fixedDefinitions = [
+    { kind: "dual_ma_trend" as const, name: "双均线趋势策略" },
+    { kind: "pair_rotation" as const, name: "配对套利策略" },
+    { kind: "leader_breakout" as const, name: "现货龙头策略" },
+  ];
 
   const runLifecycleAction = async (
     strategy: RuleStrategy,
@@ -178,6 +185,19 @@ export function DashboardStrategyManagement() {
       toast.error(error instanceof Error ? error.message : "策略操作失败，请稍后重试。");
     }
   };
+  const createFixedStrategy = async (kind: "dual_ma_trend" | "pair_rotation" | "leader_breakout", name: string) => {
+    try {
+      await createFixed.mutateAsync({
+        kind,
+        name,
+        initial_capital_quote: 600,
+        environment: "paper",
+      });
+      toast.success(`${name}已创建，规则固定且当前处于停止状态。`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "固定策略创建失败。");
+    }
+  };
 
   return (
     <Card className="dashboard-panel order-8 rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
@@ -195,6 +215,13 @@ export function DashboardStrategyManagement() {
         </Button>
       </CardHeader>
       <CardContent className="p-4">
+        <section className="mb-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
+          <p className="font-medium text-sm">代码固定策略</p>
+          <p className="mt-1 text-muted-foreground text-xs">规则由代码版本管理，创建后可统一启停，但不能在前端编辑参数。</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {fixedDefinitions.map((definition) => <Button disabled={createFixed.isPending} key={definition.kind} onClick={() => void createFixedStrategy(definition.kind, definition.name)} size="sm" type="button" variant="outline">{definition.name}</Button>)}
+          </div>
+        </section>
         {strategiesQuery.isPending ? (
           <p className="text-muted-foreground text-sm">正在加载策略…</p>
         ) : strategies.length === 0 ? (
@@ -261,11 +288,11 @@ export function DashboardStrategyManagement() {
                         <Square /> 停止
                       </Button>
                     ) : null}
-                    <Button asChild size="sm" type="button" variant="outline">
+                    {strategy.strategy_kind === "configurable_rule" ? <Button asChild size="sm" type="button" variant="outline">
                       <Link to={`/strategies/${strategy.strategy_id}/edit`}>
                         <Pencil /> 编辑
                       </Link>
-                    </Button>
+                    </Button> : <span className="rounded-md border border-border px-3 py-2 text-muted-foreground text-xs">规则固定，只读</span>}
                     <StrategyExportPopover strategy={strategy} />
                     {actions.canDelete ? (
                       <AlertDialog>
