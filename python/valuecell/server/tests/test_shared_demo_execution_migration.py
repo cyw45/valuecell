@@ -185,3 +185,23 @@ def test_shared_demo_models_register_and_startup_runs_storage_migration() -> Non
     assert app_source.index("migrate_multi_strategy_account(session)") < app_source.index(
         "migrate_shared_demo_execution_storage(session)"
     )
+    assert "provision_quant_tables_with_shared_demo_constraints()" in app_source
+    assert app_source.rindex(
+        "provision_quant_tables_with_shared_demo_constraints()"
+    ) < app_source.rindex("_run_required_rule_strategy_archiving_migration()")
+
+
+def test_quant_table_provisioning_supports_fresh_database_and_is_idempotent() -> None:
+    from valuecell.server.db.migrations import (
+        provision_quant_tables_with_shared_demo_constraints,
+    )
+
+    engine = create_engine("sqlite://")
+    session = sessionmaker(bind=engine)()
+
+    provision_quant_tables_with_shared_demo_constraints(session)
+    provision_quant_tables_with_shared_demo_constraints(session)
+
+    inspector = inspect(engine)
+    assert _SHARED_DEMO_TABLES <= set(inspector.get_table_names())
+    assert "strategy_shared_accounts" in inspector.get_table_names()

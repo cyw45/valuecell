@@ -218,6 +218,20 @@ def _run_required_execution_attribution_migration() -> None:
         session.close()
 
 
+def provision_quant_tables_with_shared_demo_constraints() -> None:
+    """Provision quant tables in dependency order under one database lock."""
+    from ..db.connection import get_database_manager
+    from ..db.migrations import (
+        provision_quant_tables_with_shared_demo_constraints as provision,
+    )
+
+    session = get_database_manager().get_session()
+    try:
+        provision(session)
+    finally:
+        session.close()
+
+
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
     # Ensure .env exists and is loaded before reading settings
@@ -233,10 +247,8 @@ def create_app() -> FastAPI:
 
         # Quant-only deployments must not initialize legacy Agent dependencies.
         if settings.QUANT_ONLY_MODE:
-            from ..db.connection import create_tables
-
             logger.info("Provisioning SaaS database tables in quant-only mode")
-            create_tables()
+            provision_quant_tables_with_shared_demo_constraints()
         else:
             try:
                 from ...adapters.assets import get_adapter_manager
