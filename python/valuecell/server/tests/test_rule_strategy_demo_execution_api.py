@@ -22,6 +22,17 @@ class StrategyService:
 
 def _app(monkeypatch) -> FastAPI:
     monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        router_module,
+        "shared_demo_evidence_for_strategy",
+        lambda *_args, **_kwargs: {
+            "fills": [],
+            "venue_orders": [],
+            "order_projections": [],
+            "intents": [],
+            "reservations": [],
+        },
+    )
     app = FastAPI()
     app.include_router(create_rule_strategy_router(service=StrategyService()))
     app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
@@ -32,7 +43,9 @@ def _app(monkeypatch) -> FastAPI:
 
 def test_demo_execution_endpoint_reports_pending_snapshot_without_exchange_call(monkeypatch):
     app = _app(monkeypatch)
-    monkeypatch.setattr(router_module, "get_latest_demo_account_snapshot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        router_module, "get_latest_shared_demo_account_snapshot", lambda *_args, **_kwargs: None
+    )
     response = TestClient(app).get("/rule-strategies/strategy-a/demo-execution")
 
     assert response.status_code == 503
@@ -42,8 +55,9 @@ def test_demo_execution_endpoint_reports_pending_snapshot_without_exchange_call(
 def test_demo_execution_endpoint_reads_snapshot_and_local_orders_only(monkeypatch):
     app = _app(monkeypatch)
     snapshot = SimpleNamespace(
-        id=1,
-        source="okx_demo",
+        snapshot_id="snapshot-a",
+        source="okx_account_sync",
+        wallet_equity_quote=1_000.0,
         total_usdt_value=1_000.0,
         balances=[],
         positions=[],
@@ -53,7 +67,11 @@ def test_demo_execution_endpoint_reads_snapshot_and_local_orders_only(monkeypatc
         {"id": f"order-{index}", "strategy_id": "strategy-a", "execution_source": "rule_strategy"}
         for index in range(23)
     ]
-    monkeypatch.setattr(router_module, "get_latest_demo_account_snapshot", lambda *_args, **_kwargs: snapshot)
+    monkeypatch.setattr(
+        router_module,
+        "get_latest_shared_demo_account_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
     monkeypatch.setattr(router_module, "get_official_test_baseline", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(router_module, "list_demo_account_snapshots", lambda *_args, **_kwargs: [snapshot])
     monkeypatch.setattr(router_module, "get_demo_account_sync_state", lambda *_args, **_kwargs: None)

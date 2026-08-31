@@ -17,7 +17,7 @@ from valuecell.server.db.models.multi_strategy import (
     StrategyCapitalReservation,
     StrategySharedAccount,
 )
-from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyAccount
+from valuecell.server.db.models.rule_strategy import RuleStrategy
 
 
 class SharedAccountSummaryUnavailable(RuntimeError):
@@ -81,6 +81,12 @@ def build_shared_account_overview(
             RuleStrategy.archived_at.is_(None),
         )
         .all()
+        if (
+            isinstance(strategy.config, dict)
+            and isinstance(strategy.config.get("execution"), dict)
+            and strategy.config["execution"].get("environment") == environment
+            and strategy.config["execution"].get("sandbox_connection_id") == credential_id
+        )
     }
     grouped: dict[str, list[StrategyCapitalReservation]] = {}
     for reservation in reservations:
@@ -92,14 +98,11 @@ def build_shared_account_overview(
         occupied = sum(float(row.consumed_quote) for row in rows)
         released = sum(float(row.released_quote) for row in rows)
         state = "occupied" if occupied > 0 else "reserved" if reserved > 0 else "available"
-        strategy_account = (
-            session.query(RuleStrategyAccount)
-            .filter_by(tenant_id=tenant_id, strategy_id=strategy_id, active=True)
-            .first()
-        )
-        realized = strategy_account.realized_pnl_quote if strategy_account else None
-        unrealized = strategy_account.unrealized_pnl_quote if strategy_account else None
-        net = realized + unrealized if realized is not None and unrealized is not None else None
+        # Shared-wallet strategy PnL must be derived from attributed Demo fills.
+        # Paper account rows are a separate ledger and cannot enter this read model.
+        realized = None
+        unrealized = None
+        net = None
         allocations.append(
             StrategyAllocation(
                 strategy_id=strategy_id,
@@ -114,11 +117,7 @@ def build_shared_account_overview(
                 utilization_denominator_quote=denominator,
             )
         )
-    total_strategy_pnl = sum(
-        allocation.net_pnl_quote
-        for allocation in allocations
-        if allocation.net_pnl_quote is not None
-    )
+    total_strategy_pnl = None
     wallet = SharedWalletSummary(
         tenant_id=tenant_id,
         credential_id=credential_id,

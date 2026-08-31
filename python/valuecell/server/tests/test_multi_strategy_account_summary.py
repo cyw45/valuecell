@@ -46,7 +46,13 @@ def _session():
             strategy_kind="dual_ma_trend",
             strategy_version="v1",
             code_fingerprint="fingerprint-a",
-            config={"initial_capital_quote": 600},
+            config={
+                "initial_capital_quote": 600,
+                "execution": {
+                    "environment": "okx_demo",
+                    "sandbox_connection_id": "credential-a",
+                },
+            }
         )
     )
     session.add(
@@ -91,8 +97,8 @@ def test_summary_separates_wallet_and_strategy_allocation() -> None:
     assert overview.wallet.total_equity_quote == 1_000
     assert overview.allocator.reserved_quote == 400
     assert overview.allocator.occupied_notional_quote == 300
-    assert overview.allocator.allocations[0].net_pnl_quote == 50
-    assert overview.data_complete is True
+    assert overview.allocator.allocations[0].net_pnl_quote is None
+    assert overview.strategy_pnl_total_quote is None
 
 
 def test_summary_requires_authoritative_allocator_equity() -> None:

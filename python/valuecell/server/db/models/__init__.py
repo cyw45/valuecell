@@ -37,6 +37,17 @@ from .fixed_strategy_paper import (
     FixedPaperPosition,
 )
 from .multi_strategy import StrategyCapitalReservation, StrategySharedAccount
+from .shared_demo_execution import (
+    SharedDemoAccountSnapshot,
+    SharedDemoAccountSyncState,
+    SharedDemoExecutionIntent,
+    SharedDemoExecutionReservation,
+    SharedDemoFill,
+    SharedDemoOrderProjection,
+    SharedDemoReservationRecoveryEvent,
+    SharedDemoStrategyAllocationCap,
+    SharedDemoVenueOrder,
+)
 from .rule_strategy_validation import (
     RuleStrategyValidationDataset,
     RuleStrategyValidationFill,
@@ -105,6 +116,15 @@ __all__ = [
     "RuleStrategyRiskState",
     "StrategySharedAccount",
     "StrategyCapitalReservation",
+    "SharedDemoAccountSnapshot",
+    "SharedDemoAccountSyncState",
+    "SharedDemoExecutionIntent",
+    "SharedDemoExecutionReservation",
+    "SharedDemoFill",
+    "SharedDemoOrderProjection",
+    "SharedDemoReservationRecoveryEvent",
+    "SharedDemoStrategyAllocationCap",
+    "SharedDemoVenueOrder",
     "FixedPaperAccount",
     "FixedPaperFill",
     "FixedPaperPosition",

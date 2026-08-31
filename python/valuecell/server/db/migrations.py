@@ -40,6 +40,8 @@ MULTI_STRATEGY_MIGRATION_VERSION = "20260828_multi_strategy_account_v1"
 MULTI_STRATEGY_MIGRATION_LOCK_KEY = 7720250731
 FIXED_PAPER_LEDGER_MIGRATION_VERSION = "20260829_fixed_strategy_paper_ledger_v1"
 FIXED_PAPER_LEDGER_MIGRATION_LOCK_KEY = 7720250732
+SHARED_DEMO_EXECUTION_MIGRATION_VERSION = "20260829_shared_demo_execution_v1"
+SHARED_DEMO_EXECUTION_MIGRATION_LOCK_KEY = 7720250733
 
 
 def migrate_fixed_strategy_paper_ledger(session: Session) -> bool:
@@ -144,7 +146,7 @@ def migrate_multi_strategy_account(session: Session) -> bool:
         CONSTRAINT ck_strategy_reservation_reserved CHECK (reserved_quote >= 0),
         CONSTRAINT ck_strategy_reservation_consumed CHECK (consumed_quote >= 0),
         CONSTRAINT ck_strategy_reservation_released CHECK (released_quote >= 0),
-        CONSTRAINT ck_strategy_reservation_settled CHECK (consumed_quote + released_quote <= reserved_quote)
+        CONSTRAINT ck_strategy_reservation_settled CHECK (consumed_quote + released_quote <= requested_quote)
     )"""))
     additions = {
         "rule_strategies": {
@@ -174,6 +176,182 @@ def migrate_multi_strategy_account(session: Session) -> bool:
     session.execute(text("INSERT INTO schema_migrations (version) VALUES (:version)"), {"version": MULTI_STRATEGY_MIGRATION_VERSION})
     session.commit()
     return True
+
+
+
+def migrate_shared_demo_execution_storage(session: Session) -> bool:
+    """Install isolated shared-OKX-Demo evidence storage without ownership backfills."""
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "shared Demo execution migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": SHARED_DEMO_EXECUTION_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = :version"),
+        {"version": SHARED_DEMO_EXECUTION_MIGRATION_VERSION},
+    ).first():
+        return False
+
+    _migrate_strategy_capital_reservation_settlement_constraint(session, dialect)
+    _create_shared_demo_execution_identity_indexes(session)
+    # Composite Demo foreign keys resolve against this existing account metadata.
+    from valuecell.server.db.models.multi_strategy import StrategySharedAccount  # noqa: F401
+
+    from valuecell.server.db.models.shared_demo_execution import (
+        SharedDemoAccountSnapshot,
+        SharedDemoAccountSyncState,
+        SharedDemoExecutionIntent,
+        SharedDemoExecutionReservation,
+        SharedDemoFill,
+        SharedDemoOrderProjection,
+        SharedDemoReservationRecoveryEvent,
+        SharedDemoStrategyAllocationCap,
+        SharedDemoVenueOrder,
+    )
+
+    Base.metadata.create_all(
+        bind=session.bind,
+        tables=[
+            SharedDemoAccountSnapshot.__table__,
+            SharedDemoAccountSyncState.__table__,
+            SharedDemoExecutionReservation.__table__,
+            SharedDemoExecutionIntent.__table__,
+            SharedDemoVenueOrder.__table__,
+            SharedDemoOrderProjection.__table__,
+            SharedDemoFill.__table__,
+            SharedDemoReservationRecoveryEvent.__table__,
+            SharedDemoStrategyAllocationCap.__table__,
+        ],
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": SHARED_DEMO_EXECUTION_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=SHARED_DEMO_EXECUTION_MIGRATION_VERSION,
+    )
+    return True
+
+
+def _create_shared_demo_execution_identity_indexes(session: Session) -> None:
+    """Make composite scope foreign keys valid for both supported databases."""
+    statements = (
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_shared_account_scope_identity "
+        "ON strategy_shared_accounts (id, tenant_id, credential_id, environment)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_rule_strategy_tenant_identity "
+        "ON rule_strategies (tenant_id, strategy_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_rule_strategy_batch_scope_identity "
+        "ON rule_strategy_execution_batches (tenant_id, strategy_id, batch_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_rule_strategy_intent_scope_identity "
+        "ON rule_strategy_execution_intents (id, tenant_id, strategy_id, batch_id)",
+        "CREATE INDEX IF NOT EXISTS ix_strategy_reservation_account_status "
+        "ON strategy_capital_reservations (account_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_strategy_reservation_strategy_status "
+        "ON strategy_capital_reservations (strategy_id, status)",
+    )
+    for statement in statements:
+        session.execute(text(statement))
+
+
+def _migrate_strategy_capital_reservation_settlement_constraint(
+    session: Session,
+    dialect: str,
+) -> None:
+    """Treat reserved quote as outstanding, not lifetime settled quote.
+
+    No ownership fields are inferred or populated. SQLite rebuilds only this
+    existing table definition while preserving its rows verbatim because it
+    cannot replace a named CHECK constraint in place.
+    """
+    if dialect == "postgresql":
+        session.execute(
+            text(
+                "ALTER TABLE strategy_capital_reservations "
+                "DROP CONSTRAINT IF EXISTS ck_strategy_reservation_settled"
+            )
+        )
+        session.execute(
+            text(
+                "ALTER TABLE strategy_capital_reservations "
+                "ADD CONSTRAINT ck_strategy_reservation_settled "
+                "CHECK (consumed_quote + released_quote <= requested_quote)"
+            )
+        )
+        return
+
+    existing_sql = session.execute(
+        text(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' "
+            "AND name = 'strategy_capital_reservations'"
+        )
+    ).scalar_one_or_none()
+    if existing_sql is None:
+        return
+    normalized_sql = existing_sql.lower().replace(" ", "").replace("\n", "")
+    if "consumed_quote+released_quote<=requested_quote" in normalized_sql:
+        return
+    session.execute(
+        text(
+            "CREATE TABLE strategy_capital_reservations__settlement_v2 ("
+            "reservation_id VARCHAR(36) PRIMARY KEY, "
+            "account_id VARCHAR(36) NOT NULL REFERENCES strategy_shared_accounts(id) "
+            "ON DELETE RESTRICT, "
+            "tenant_id VARCHAR(36) NOT NULL REFERENCES tenants(id) ON DELETE RESTRICT, "
+            "strategy_id VARCHAR(100) NOT NULL REFERENCES rule_strategies(strategy_id) "
+            "ON DELETE RESTRICT, "
+            "batch_id VARCHAR(36), intent_id VARCHAR(36), "
+            "idempotency_key VARCHAR(128) NOT NULL, symbol VARCHAR(32) NOT NULL, "
+            "side VARCHAR(16) NOT NULL, requested_quote FLOAT NOT NULL, "
+            "reserved_quote FLOAT NOT NULL, consumed_quote FLOAT NOT NULL DEFAULT 0, "
+            "released_quote FLOAT NOT NULL DEFAULT 0, status VARCHAR(24) NOT NULL "
+            "DEFAULT 'reserved', reason VARCHAR(1000), "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "CONSTRAINT uq_strategy_reservation_idempotency "
+            "UNIQUE (tenant_id, idempotency_key), "
+            "CONSTRAINT ck_strategy_reservation_requested CHECK (requested_quote >= 0), "
+            "CONSTRAINT ck_strategy_reservation_reserved CHECK (reserved_quote >= 0), "
+            "CONSTRAINT ck_strategy_reservation_consumed CHECK (consumed_quote >= 0), "
+            "CONSTRAINT ck_strategy_reservation_released CHECK (released_quote >= 0), "
+            "CONSTRAINT ck_strategy_reservation_settled "
+            "CHECK (consumed_quote + released_quote <= requested_quote)"
+            ")"
+        )
+    )
+    session.execute(
+        text(
+            "INSERT INTO strategy_capital_reservations__settlement_v2 "
+            "(reservation_id, account_id, tenant_id, strategy_id, batch_id, intent_id, "
+            "idempotency_key, symbol, side, requested_quote, reserved_quote, "
+            "consumed_quote, released_quote, status, reason, created_at, updated_at) "
+            "SELECT reservation_id, account_id, tenant_id, strategy_id, batch_id, intent_id, "
+            "idempotency_key, symbol, side, requested_quote, reserved_quote, "
+            "consumed_quote, released_quote, status, reason, created_at, updated_at "
+            "FROM strategy_capital_reservations"
+        )
+    )
+    session.execute(text("DROP TABLE strategy_capital_reservations"))
+    session.execute(
+        text(
+            "ALTER TABLE strategy_capital_reservations__settlement_v2 "
+            "RENAME TO strategy_capital_reservations"
+        )
+    )
 
 
 def migrate_rule_strategy_execution_batches(session: Session) -> bool:

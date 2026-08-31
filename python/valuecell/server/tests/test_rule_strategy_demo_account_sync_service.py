@@ -12,6 +12,10 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyDemoAccountSnapshot,
     RuleStrategyDemoAccountSyncState,
 )
+from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoAccountSnapshot,
+    SharedDemoAccountSyncState,
+)
 
 
 class FakeExchange:
@@ -106,6 +110,11 @@ def test_sync_fetches_shared_credential_once_and_deduplicates_snapshot(monkeypat
         assert FakeExchange.positions_calls == 2
         assert FakeExchange.refreshes == 2
         assert session.query(RuleStrategyDemoAccountSnapshot).count() == 2
+        assert session.query(SharedDemoAccountSnapshot).count() == 1
+        shared_state = session.query(SharedDemoAccountSyncState).one()
+        assert shared_state.account_id == session.query(StrategySharedAccount).one().id
+        assert shared_state.sync_status == "healthy"
+        assert shared_state.reconciliation_status == "pending"
         assert session.query(StrategySharedAccount).count() == 1
         states = session.query(RuleStrategyDemoAccountSyncState).all()
         assert {state.strategy_id for state in states} == {"strategy-a", "strategy-b"}

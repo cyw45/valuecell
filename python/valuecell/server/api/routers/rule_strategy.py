@@ -48,6 +48,7 @@ from valuecell.server.services.rule_strategy_text_import_job_service import (
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     build_demo_execution_read_model,
     build_strategy_daily_pnl_curve,
+    shared_demo_evidence_for_strategy,
 )
 from valuecell.server.services.rule_strategy_pnl_service import (
     build_daily_pnl_points,
@@ -56,7 +57,7 @@ from valuecell.server.services.rule_strategy_pnl_service import (
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     build_demo_daily_curve,
     get_demo_account_sync_state,
-    get_latest_demo_account_snapshot,
+    get_latest_shared_demo_account_snapshot,
     get_official_test_baseline,
     list_demo_account_snapshots,
 )
@@ -1013,13 +1014,10 @@ def create_rule_strategy_router(
                     "detail": "OKX Demo connection is unavailable.",
                 },
             )
-        snapshot = get_latest_demo_account_snapshot(
+        snapshot = get_latest_shared_demo_account_snapshot(
             db,
             tenant_id=principal.tenant_id,
-            strategy_id=strategy_id,
             credential_id=connection_id,
-            started_at=getattr(batch, "started_at", None),
-            stopped_at=getattr(batch, "stopped_at", None),
         )
         if snapshot is None:
             raise HTTPException(
@@ -1035,7 +1033,11 @@ def create_rule_strategy_router(
             observed_at = observed_at.replace(tzinfo=timezone.utc)
         account = {
             "source": snapshot.source,
-            "total_usdt_value": snapshot.total_usdt_value,
+            "total_usdt_value": (
+                float(snapshot.wallet_equity_quote)
+                if snapshot.wallet_equity_quote is not None
+                else None
+            ),
             "balances": list(snapshot.balances or []),
             "checked_at": observed_at.isoformat(),
         }
@@ -1055,12 +1057,24 @@ def create_rule_strategy_router(
             if all_history or batch is not None or not batch_capable
             else []
         )
+        shared_evidence = shared_demo_evidence_for_strategy(
+            db,
+            tenant_id=principal.tenant_id,
+            credential_id=connection_id,
+            strategy_id=strategy_id,
+            batch_id=getattr(batch, "batch_id", None),
+        )
         data = build_demo_execution_read_model(
             strategy,
             account,
             positions,
             orders,
             started_at=baseline.started_at if baseline is not None else None,
+            shared_fills=shared_evidence["fills"],
+            shared_venue_orders=shared_evidence["venue_orders"],
+            shared_order_projections=shared_evidence["order_projections"],
+            shared_intents=shared_evidence["intents"],
+            shared_reservations=shared_evidence["reservations"],
         )
         data["batch"] = rule_service._batch_data(batch) if batch is not None else None
         snapshots = list_demo_account_snapshots(

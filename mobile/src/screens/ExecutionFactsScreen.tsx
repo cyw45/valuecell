@@ -76,7 +76,7 @@ function DemoPositions({ positions }: { positions: Array<{ symbol: string; quant
 }
 
 function DemoBalances({ balances }: { balances: Array<{ currency: string; free: string | number; total: string | number; usdt_value: number | null }> }) {
-  return <FactsList empty={pageCopy.balances.empty} title={pageCopy.balances.title}>{balances.map((balance) => <FactRow detail={`可用 ${balance.free} · 总计 ${balance.total}`} key={balance.currency} title={balance.currency} value={formatQuote(balance.usdt_value)} />)}</FactsList>;
+  return <FactsList empty={pageCopy.balances.empty} title={pageCopy.balances.title}><Text style={styles.detail}>仅展示 OKX Demo 共享钱包事实；不可用估值不会以 0 替代。</Text>{balances.map((balance) => <FactRow detail={`可用 ${balance.free} · 总计 ${balance.total}`} key={balance.currency} title={balance.currency} value={formatQuote(balance.usdt_value)} />)}</FactsList>;
 }
 
 function DemoOrders({ batchId, execution, page, setPage, navigation, strategyId }: { batchId?: string | null; execution: RuleStrategyDemoExecution; page: number; setPage: (page: number) => void; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string }) {

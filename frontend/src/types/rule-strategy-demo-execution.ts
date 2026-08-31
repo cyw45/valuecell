@@ -48,11 +48,13 @@ export interface DemoTradeSummary {
   filled_order_count?: number;
   partially_filled_order_count?: number;
   failed_order_count?: number;
+  submission_unknown_orders?: number;
+  unknown_order_count?: number;
+  latest_status?: string | null;
   latest_order?: SandboxOrder | null;
   filled_buy_orders?: number;
   filled_sell_orders?: number;
   failed_orders?: number;
-  submission_unknown_orders?: number;
   current_position_quantity?: string | number;
 }
 
@@ -72,6 +74,12 @@ export interface DemoEquityCurvePoint {
 export interface DemoEquityCurve {
   points?: DemoEquityCurvePoint[] | null;
 }
+export interface DemoExecutionLifecycle {
+  reservations: Array<Record<string, unknown>>;
+  intents: Array<Record<string, unknown>>;
+  orders: SandboxOrder[];
+  attribution_status: "complete" | "partial" | "unavailable";
+}
 
 export interface StrategyDemoPosition {
   symbol: string;
@@ -90,17 +98,22 @@ export interface RuleStrategyDemoExecution {
   positions: RuleStrategyDemoExecutionPositions;
   strategy_positions: StrategyDemoPosition[];
   orders: SandboxOrder[];
-  pagination: {
-    page: number;
-    page_size: number;
-    total_items: number;
-    total_pages: number;
-  };
+  pagination: { page: number; page_size: number; total_items: number; total_pages: number };
   trade_summary?: DemoTradeSummary | null;
   pnl: RuleStrategyDemoExecutionPnl;
   equity_curve?: DemoEquityCurve | null;
   wallet_equity_curve?: DemoEquityCurve | null;
+  lifecycle?: DemoExecutionLifecycle | null;
   checked_at: string;
+  sync?: {
+    status: "healthy" | "stale" | "unavailable";
+    observed_at: string;
+    freshness_age_s: number;
+    last_attempt_at?: string | null;
+    last_success_at?: string | null;
+    consecutive_failures: number;
+    last_error_code?: string | null;
+  } | null;
 }
 
 type DemoExecutionTimestampSnapshot = {

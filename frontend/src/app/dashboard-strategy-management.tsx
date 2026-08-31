@@ -190,7 +190,7 @@ export function DashboardStrategyManagement() {
       await createFixed.mutateAsync({
         kind,
         name,
-        initial_capital_quote: 600,
+        initial_capital_quote: 10_000,
         environment: "paper",
       });
       toast.success(`${name}已创建，规则固定且当前处于停止状态。`);

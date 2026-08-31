@@ -70,6 +70,8 @@ const ALLOCATION_LABELS: Record<string, string> = {
   occupied: "已占用",
   partially_released: "部分释放",
   released: "已释放",
+  submission_unknown: "提交结果待对账",
+  recovery_required: "等待对账恢复",
   blocked: "已阻断",
 };
 const SYNC_STATUS_LABELS: Record<string, string> = {
@@ -349,21 +351,21 @@ export default function StrategyOverviewScreen() {
         {credentialId && sharedData ? <>
           <View style={styles.stateRows}>
             <Text style={styles.stateText}>{SYNC_STATUS_LABELS[sharedData.wallet.sync_status] ?? "钱包状态未知"} · {ATTRIBUTION_STATUS_LABELS[sharedData.wallet.attribution_status] ?? "归因状态未知"}</Text>
-            <Text style={styles.muted}>钱包观测 {formatTimestamp(sharedData.wallet.observed_at)} · allocator 观测 {formatTimestamp(sharedData.allocator.observed_at)}</Text>
+            <Text style={styles.muted}>钱包观测 {formatTimestamp(sharedData.wallet.observed_at)} · allocator 观测 {formatTimestamp(sharedData.allocator.observed_at)} · 未归因权益不计入策略 PnL</Text>
             {!sharedData.data_complete ? <Text style={styles.incompleteText}>数据不完整：{sharedData.incomplete_reason ?? "部分共享账户事实尚未就绪"}</Text> : null}
           </View>
           <View style={styles.metricGrid}>
             <MetricCard caption="OKX Sandbox 钱包事实" label="钱包权益" style={styles.metric} value={formatNumericQuote(sharedData.wallet.total_equity_quote)} />
             <MetricCard caption="钱包当前可用余额" label="可用资金" style={styles.metric} value={formatNumericQuote(sharedData.wallet.available_quote)} />
-            <MetricCard caption="所有策略归因的累计结果" label="策略归因 PnL" style={styles.metric} tone={typeof sharedData.strategy_pnl_total_quote === "number" && sharedData.strategy_pnl_total_quote >= 0 ? "positive" : "warning"} value={formatNumericQuote(sharedData.strategy_pnl_total_quote)} />
+            <MetricCard caption="所有策略归因的累计结果，不含纸面账本" label="策略归因 PnL" style={styles.metric} tone={typeof sharedData.strategy_pnl_total_quote === "number" && sharedData.strategy_pnl_total_quote >= 0 ? "positive" : "warning"} value={formatNumericQuote(sharedData.strategy_pnl_total_quote)} />
+            <MetricCard caption="钱包中暂不能归属到策略的部分，不计入策略 PnL" label="未归因权益" style={styles.metric} tone="warning" value={formatNumericQuote(sharedData.wallet.unassigned_equity_quote)} />
             <MetricCard caption="allocator 已分配待使用" label="已预留" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reserved_quote)} />
             <MetricCard caption="allocator 当前名义占用" label="已占用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.occupied_notional_quote)} />
-            <MetricCard caption="可重新分配的 allocator 余额" label="可复用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reusable_quote)} />
-            <MetricCard caption="占用 / allocator 分母" label="账户利用率" style={styles.metric} tone={sharedData.allocator.account_utilization_ratio > 0.9 ? "warning" : "default"} value={ratioLabel(sharedData.allocator.account_utilization_ratio)} />
+            <MetricCard caption="已完成释放、可重新分配的 allocator 余额" label="已释放 / 可复用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reusable_quote)} />
           </View>
           <View style={styles.allocationRows}>
             <Text style={styles.allocationHeading}>策略分配矩阵</Text>
-            {sharedAllocations.length > 0 ? sharedAllocations.map((allocation) => <ListRow key={allocation.strategy_id} subtitle={`${allocationStateLabel(allocation.allocation_state)} · 预留 ${formatNumericQuote(allocation.reserved_quote)} · 占用 ${formatNumericQuote(allocation.occupied_quote)}`} title={allocation.strategy_id === activeId ? `${strategy.name} · 当前选择` : allocation.strategy_id} trailing={<View style={styles.allocationTrailing}><Text style={[styles.linkValue, allocation.net_pnl_quote != null && allocation.net_pnl_quote >= 0 ? styles.positiveText : styles.negativeText]}>{formatNumericQuote(allocation.net_pnl_quote)}</Text><Text style={styles.allocationPnlLabel}>净 PnL</Text></View>} />) : <Text style={styles.muted}>服务端尚未返回策略分配事实。</Text>}
+            {sharedAllocations.length > 0 ? sharedAllocations.map((allocation) => <ListRow key={allocation.strategy_id} subtitle={`${allocationStateLabel(allocation.allocation_state)} · 预留 ${formatNumericQuote(allocation.reserved_quote)} · 占用 ${formatNumericQuote(allocation.occupied_quote)} · 已释放 ${formatNumericQuote(allocation.released_quote)}${allocation.lifecycle_reason ? ` · ${allocation.lifecycle_reason}` : ""}`} title={allocation.strategy_id === activeId ? `${strategy.name} · 当前选择` : allocation.strategy_id} trailing={<View style={styles.allocationTrailing}><Text style={[styles.linkValue, allocation.net_pnl_quote != null && allocation.net_pnl_quote >= 0 ? styles.positiveText : styles.negativeText]}>{formatNumericQuote(allocation.net_pnl_quote)}</Text><Text style={styles.allocationPnlLabel}>净 PnL</Text></View>} />) : <Text style={styles.muted}>服务端尚未返回策略分配事实。</Text>}
           </View>
           {!selectedAllocation ? <Text style={styles.incompleteText}>当前策略暂无共享分配记录；上方钱包事实不代表当前策略资金。</Text> : null}
         </> : null}
@@ -393,7 +395,7 @@ export default function StrategyOverviewScreen() {
             </View>
             <View style={styles.detailLinks}>
               <ListRow accessibilityLabel="查看交易所持仓" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyPositions", { strategyId: activeId })} subtitle={`${demoPositions.length} 项连接级仓位 · 不代表策略分配`} title="我的持仓" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
-              <ListRow accessibilityLabel="查看策略归属订单" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "orders" })} subtitle={`共 ${demoData?.pagination.total_items ?? 0} 笔 · 已成交 ${demoData?.trade_summary?.filled_order_count ?? 0} 笔`} title="策略归属订单" />
+              <ListRow accessibilityLabel="查看策略归属订单" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "orders" })} subtitle={`共 ${demoData?.pagination.total_items ?? 0} 笔 · 已成交 ${demoData?.trade_summary?.filled_order_count ?? 0} 笔 · 部分成交 ${demoData?.trade_summary?.partially_filled_order_count ?? 0} 笔 · 待远端对账 ${demoData?.trade_summary?.submission_unknown_orders ?? demoData?.trade_summary?.unknown_order_count ?? 0} 笔`} title="策略归属订单" />
               <ListRow accessibilityLabel="查看 Demo 资金费与 PnL" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看交易所 PnL 与权益曲线" title="资金费与 PnL" />
             </View>
           </SectionCard>

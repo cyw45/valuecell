@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
+
 
 import pytest
 from sqlalchemy import create_engine
@@ -18,6 +20,11 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyEvaluationJournal,
 )
+from valuecell.server.db.models.multi_strategy import (
+    StrategyCapitalReservation,
+    StrategySharedAccount,
+)
+
 from valuecell.server.services import strategy_scheduler
 
 def test_scheduler_registers_all_fixed_strategy_engine_boundaries() -> None:
@@ -37,18 +44,40 @@ class DurableQuery:
         self.filters.update(kwargs)
         return self
 
+    def filter(self, *_args):
+        return self
     def with_for_update(self):
         self.session.locked = True
+        return self
+
+    def order_by(self, *_args):
         return self
 
     def first(self):
         if self.model is strategy_scheduler.RuleStrategy:
             return self.session.strategy
+        if self.model is StrategySharedAccount:
+            return self.session.account
+        if self.model is StrategyCapitalReservation:
+            return next(
+                (
+                    reservation
+                    for reservation in self.session.reservations
+                    if all(
+                        getattr(reservation, key, None) == value
+                        for key, value in self.filters.items()
+                    )
+                ),
+                None,
+            )
         return self.session.intent_by_evaluation.get(self.filters.get("evaluation_id"))
 
     def all(self):
+        if self.model.__name__ == "SharedDemoStrategyAllocationCap":
+            return []
+        if self.model is StrategyCapitalReservation:
+            return self.session.reservations
         return self.session.intents
-
 
 class DurableSession:
     def __init__(self, config, intents=()):
@@ -57,21 +86,45 @@ class DurableSession:
             tenant_id="tenant-a",
             status="running",
             execution_generation=1,
+            current_batch_id=None,
             config=config.model_dump(mode="json"),
         )
         self.intents = list(intents)
         self.intent_by_evaluation = {}
         self.locked = False
+        self.account = SimpleNamespace(
+            id="shared-account",
+            tenant_id="tenant-a",
+            credential_id="okx-demo-connection",
+            sync_status="healthy",
+            active=True,
+            observed_at=datetime.now(timezone.utc),
+            environment="okx_demo",
+            available_quote=100_000.0,
+            reserved_quote=0.0,
+            occupied_notional_quote=0.0,
+            pending_settlement_quote=0.0,
+            reusable_quote=100_000.0,
+            version=1,
+        )
+        self.reservations = []
+
 
     def query(self, model):
         return DurableQuery(self, model)
 
     def add(self, item):
+        if isinstance(item, StrategyCapitalReservation):
+            if item.reservation_id is None:
+                item.reservation_id = str(uuid4())
+            self.reservations.append(item)
+            return
         evaluation_id = getattr(item, "evaluation_id", None)
         if evaluation_id:
+            if item.id is None:
+                item.id = str(uuid4())
             self.intent_by_evaluation[evaluation_id] = item
             self.intents.append(item)
-
     def flush(self):
         pass
 
@@ -345,7 +398,7 @@ async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministi
         Decimal("100"),
         Decimal("50000"),
         1234,
-        "eval-b",
+        "eval-a",
     )
     assert first["execution"] == second["execution"] == "okx_demo_submitted"
     assert len(calls) == 2
@@ -356,7 +409,7 @@ async def test_okx_demo_execution_uses_bound_sandbox_connection_and_deterministi
 
 
 @pytest.mark.asyncio
-async def test_okx_demo_execution_blocks_when_strategy_total_limit_is_reached(
+async def test_okx_demo_execution_uses_shared_wallet_not_strategy_total_limit(
     monkeypatch,
 ):
     config = RuleStrategyConfig.model_validate(
@@ -373,6 +426,15 @@ async def test_okx_demo_execution_blocks_when_strategy_total_limit_is_reached(
     session = DurableSession(
         config, [SimpleNamespace(requested_quote="100", side="buy", status="open")]
     )
+    class FakeService:
+        def __init__(self, _session):
+            pass
+
+        async def submit_order(self, *_args, **_kwargs):
+            return {"id": "demo-order", "status": "open", "sandbox": True}
+
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", FakeService)
+
     monkeypatch.setattr(
         strategy_scheduler,
         "get_database_manager",
@@ -389,8 +451,7 @@ async def test_okx_demo_execution_blocks_when_strategy_total_limit_is_reached(
         1234,
         "eval-a",
     )
-    assert result["execution"] == "blocked"
-    assert "total limit" in result["reason"]
+    assert result["execution"] == "okx_demo_submitted"
 
 
 @pytest.mark.asyncio
@@ -548,7 +609,7 @@ async def test_okx_demo_daily_limit_excludes_failed_intents(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_okx_demo_limits_use_actual_order_cost_after_sell_preflight(monkeypatch):
+async def test_okx_demo_daily_limit_uses_actual_prior_order_cost(monkeypatch):
     config = RuleStrategyConfig.model_validate(
         {
             "symbols": ["BTC-USDT"],
@@ -591,7 +652,7 @@ async def test_okx_demo_limits_use_actual_order_cost_after_sell_preflight(monkey
         "rule-a",
         config,
         "BTC-USDT",
-        "sell",
+        "buy",
         Decimal("100"),
         Decimal("50000"),
         1234,

@@ -161,7 +161,7 @@ export default function StrategyListScreen() {
   };
   const createFixedStrategy = async (kind: "dual_ma_trend" | "pair_rotation" | "leader_breakout", name: string) => {
     try {
-      await createFixed.mutateAsync({ kind, name, initial_capital_quote: 600, environment: "paper" });
+      await createFixed.mutateAsync({ kind, name, initial_capital_quote: 10_000, environment: "paper" });
       await activeStrategies.refetch();
       setOperationNotice(`${name}已创建，规则由代码固定管理。`);
       setOperationError(null);

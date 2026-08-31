@@ -17,6 +17,19 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyEvaluationJournal,
     RuleStrategyExecutionIntent,
 )
+from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation
+from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoExecutionIntent,
+    SharedDemoExecutionReservation,
+    SharedDemoFill,
+    SharedDemoOrderProjection,
+    SharedDemoReservationRecoveryEvent,
+    SharedDemoVenueOrder,
+)
+from valuecell.server.services.multi_strategy_capital_allocator import (
+    CapitalAllocationError,
+    SharedCapitalAllocator,
+)
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
 from valuecell.server.services.tenant_credential_service import (
@@ -391,6 +404,9 @@ class SandboxExchangeTradingService:
                 intent.status = order.status if order.status not in ORDER_TERMINAL else order.status
                 if order.status in ORDER_TERMINAL:
                     intent.terminal_at = datetime.now(timezone.utc)
+            self._sync_shared_demo_evidence(
+                order, exchange_order, source="submit", intent=intent
+            )
         except SandboxTradingError as exc:
             order.status = "failed"
             order.error_code = "sandbox_order_rejected"
@@ -408,6 +424,9 @@ class SandboxExchangeTradingService:
                 intent.status = INTENT_SUBMISSION_UNKNOWN
                 intent.error_code = order.error_code
                 intent.error_message = "submission cancelled"
+                self._retain_ambiguous_reservation(
+                    intent, "submission_cancelled"
+                )
             self.db.commit()
             raise
         except Exception as exc:
@@ -428,6 +447,9 @@ class SandboxExchangeTradingService:
                     intent.status = INTENT_SUBMISSION_UNKNOWN
                     intent.error_code = order.error_code
                     intent.error_message = str(exc)
+                    self._retain_ambiguous_reservation(
+                        intent, "submission_unknown"
+                    )
         finally:
             await self._close(exchange)
         self.db.commit()
@@ -495,6 +517,7 @@ class SandboxExchangeTradingService:
             raw = await exchange.fetch_order(order.exchange_order_id, order.symbol)
             order.status = self._normalise_status(raw.get("status") or order.status)
             order.response_metadata = self._safe_exchange_metadata(raw)
+            self._sync_shared_demo_evidence(order, raw, source="refresh")
             self._sync_intent_from_order(order)
             self._sync_evaluation_execution(order=order)
             self.db.commit()
@@ -547,6 +570,7 @@ class SandboxExchangeTradingService:
                 intent.error_message = str(exc)
                 if intent.status == INTENT_SUBMITTING:
                     intent.status = INTENT_SUBMISSION_UNKNOWN
+                self._retain_ambiguous_reservation(intent, "reconciliation_deferred")
                 self._sync_evaluation_execution(intent=intent)
                 self.db.commit()
                 results.append(self._intent_metadata(intent, None))
@@ -561,6 +585,7 @@ class SandboxExchangeTradingService:
                     # never turn this into another create_order request.
                     if intent.status == INTENT_SUBMITTING:
                         intent.status = INTENT_SUBMISSION_UNKNOWN
+                    self._retain_ambiguous_reservation(intent, "reconciliation_required")
                     self._sync_evaluation_execution(intent=intent)
                     self.db.commit()
                     results.append(self._intent_metadata(intent, None))
@@ -572,17 +597,18 @@ class SandboxExchangeTradingService:
                 order.status = self._normalise_status(raw.get("status") or "submitted")
                 order.exchange_order_id = str(raw["id"]) if raw.get("id") is not None else None
                 order.response_metadata = self._safe_exchange_metadata(raw)
+                self._sync_shared_demo_evidence(order, raw, source="reconciliation", intent=intent)
                 self._sync_intent_from_order(order)
                 self._sync_evaluation_execution(order=order, intent=intent)
                 self.db.commit()
                 results.append(self._order_metadata(order))
             except Exception as exc:
                 # Recovery errors must not kill the whole tenant loop or permit a
-                # retrying order submission. Keep the intent safely ambiguous.
                 intent.error_code = "reconciliation_deferred"
                 intent.error_message = str(exc)
                 if intent.status == INTENT_SUBMITTING:
                     intent.status = INTENT_SUBMISSION_UNKNOWN
+                self._retain_ambiguous_reservation(intent, "reconciliation_deferred")
                 self._sync_evaluation_execution(intent=intent)
                 self.db.commit()
                 results.append(self._intent_metadata(intent, None))
@@ -797,7 +823,197 @@ class SandboxExchangeTradingService:
         """Map CCXT terminal vocabulary to durable execution vocabulary."""
         value = str(status).lower()
         return {"closed": "filled", "canceled": "canceled", "cancelled": "cancelled"}.get(value, value)
+    def _ensure_shared_binding(
+        self, intent: RuleStrategyExecutionIntent,
+    ) -> SharedDemoExecutionIntent | None:
+        """Mirror the allocator reservation binding once for shared Demo evidence."""
+        if not intent.reservation_id or not intent.batch_id or not intent.credential_id:
+            return None
+        reservation = self.db.get(StrategyCapitalReservation, intent.reservation_id)
+        if reservation is None or reservation.tenant_id != intent.tenant_id:
+            return None
+        binding = self.db.query(SharedDemoExecutionIntent).filter_by(intent_id=intent.id).first()
+        if binding is not None:
+            return binding
+        shared_reservation = self.db.get(SharedDemoExecutionReservation, reservation.reservation_id)
+        if shared_reservation is None:
+            requested = Decimal(str(reservation.requested_quote))
+            self.db.add(SharedDemoExecutionReservation(
+                reservation_id=reservation.reservation_id, account_id=reservation.account_id,
+                tenant_id=reservation.tenant_id, credential_id=intent.credential_id,
+                environment="okx_demo", strategy_id=reservation.strategy_id,
+                batch_id=intent.batch_id, idempotency_key=reservation.idempotency_key,
+                symbol=reservation.symbol, side=reservation.side, requested_quote=requested,
+                reserved_quote=max(requested, Decimal(str(reservation.reserved_quote))),
+            ))
+            self.db.flush()
+        binding = SharedDemoExecutionIntent(
+            intent_id=intent.id, reservation_id=reservation.reservation_id,
+            account_id=reservation.account_id, tenant_id=reservation.tenant_id,
+            credential_id=intent.credential_id, environment="okx_demo",
+            strategy_id=reservation.strategy_id, batch_id=intent.batch_id,
+            client_order_id=intent.idempotency_key,
+        )
+        self.db.add(binding)
+        self.db.flush()
+        return binding
 
+
+    def _sync_shared_demo_evidence(
+        self,
+        order: SandboxExchangeOrder,
+        raw: dict[str, Any],
+        *,
+        source: str,
+        intent: RuleStrategyExecutionIntent | None = None,
+    ) -> None:
+        """Append normalized cumulative venue facts for an attributed shared-Demo intent."""
+        intent = intent or (
+            self.db.query(RuleStrategyExecutionIntent)
+            .filter_by(id=order.execution_intent_id, tenant_id=order.tenant_id)
+            .first()
+            if order.execution_intent_id
+            else None
+        )
+        if intent is None:
+            return
+        binding = self._ensure_shared_binding(intent)
+        if binding is None:
+            return
+        venue_order_id = raw.get("id") or order.exchange_order_id
+        if venue_order_id is None:
+            return
+        amount = self._optional_decimal(raw.get("amount")) or self._optional_decimal(order.requested_quantity)
+        filled = self._optional_decimal(raw.get("filled")) or Decimal(0)
+        if amount is None:
+            amount = filled
+        if amount <= 0:
+            return
+        shared_order = self.db.query(SharedDemoVenueOrder).filter_by(
+            venue="okx", client_order_id=intent.idempotency_key
+        ).first()
+        if shared_order is None:
+            shared_order = SharedDemoVenueOrder(
+                intent_id=binding.intent_id, reservation_id=binding.reservation_id,
+                account_id=binding.account_id, tenant_id=binding.tenant_id,
+                credential_id=binding.credential_id, environment=binding.environment,
+                strategy_id=binding.strategy_id, batch_id=binding.batch_id, venue="okx",
+                client_order_id=binding.client_order_id, venue_order_id=str(venue_order_id),
+                symbol=order.symbol, side=order.side, order_type=order.order_type,
+                leg_kind=intent.leg_kind, requested_price=self._optional_decimal(raw.get("price")),
+                requested_quantity=amount, requested_quote=Decimal(str(intent.requested_quote)),
+            )
+            self.db.add(shared_order)
+            self.db.flush()
+        projection = self.db.get(SharedDemoOrderProjection, shared_order.order_id)
+        if projection is None:
+            projection = SharedDemoOrderProjection(
+                order_id=shared_order.order_id, venue="okx", account_id=binding.account_id,
+                tenant_id=binding.tenant_id, credential_id=binding.credential_id,
+                environment=binding.environment, strategy_id=binding.strategy_id,
+                batch_id=binding.batch_id,
+            )
+            self.db.add(projection)
+        prior_quantity = Decimal(str(projection.filled_quantity or 0))
+        prior_quote = Decimal(str(projection.filled_quote or 0))
+        cumulative_quote = self._optional_decimal(raw.get("cost"))
+        average = self._optional_decimal(raw.get("average"))
+        if cumulative_quote is None and average is not None:
+            cumulative_quote = filled * average
+        cumulative_quote = cumulative_quote or Decimal(0)
+        delta_quantity = max(Decimal(0), filled - prior_quantity)
+        delta_quote = max(Decimal(0), cumulative_quote - prior_quote)
+        if delta_quantity > 0:
+            price = delta_quote / delta_quantity if delta_quote > 0 else average
+            if price is not None and price > 0:
+                fill_key = f"{venue_order_id}:cumulative:{filled}:{cumulative_quote}"
+                if self.db.query(SharedDemoFill).filter_by(venue="okx", venue_fill_id=fill_key).first() is None:
+                    observed_ms = raw.get("lastTradeTimestamp") or raw.get("timestamp")
+                    try:
+                        occurred_at = datetime.fromtimestamp(float(Decimal(str(observed_ms)) / 1000), tz=timezone.utc)
+                    except (InvalidOperation, TypeError, ValueError, OverflowError):
+                        occurred_at = datetime.now(timezone.utc)
+                    self.db.add(SharedDemoFill(
+                        order_id=shared_order.order_id, venue="okx", venue_fill_id=fill_key,
+                        account_id=binding.account_id, tenant_id=binding.tenant_id,
+                        credential_id=binding.credential_id, environment=binding.environment,
+                        strategy_id=binding.strategy_id, batch_id=binding.batch_id, price=price,
+                        quantity=delta_quantity, quote_amount=delta_quote, occurred_at=occurred_at,
+                        reconciliation_source=source,
+                    ))
+        status = self._normalise_status(raw.get("status") or order.status)
+        projection.status = {"canceled": "cancelled"}.get(status, status)
+        projection.filled_quantity = filled
+        projection.remaining_quantity = self._optional_decimal(raw.get("remaining")) or max(Decimal(0), amount - filled)
+        projection.filled_quote = cumulative_quote
+        projection.last_reconciliation_source = source
+        projection.last_observed_at = datetime.now(timezone.utc)
+        self._settle_shared_demo_reservation(intent, binding, status, cumulative_quote, source)
+
+    def _settle_shared_demo_reservation(
+        self, intent: RuleStrategyExecutionIntent, binding: SharedDemoExecutionIntent,
+        status: str, cumulative_quote: Decimal, source: str,
+    ) -> None:
+        """Settle only confirmed terminal outcomes; open partial fills retain their live hold."""
+        if status not in ORDER_TERMINAL or intent.reservation_id is None:
+            return
+        reservation = self.db.get(StrategyCapitalReservation, intent.reservation_id)
+        if reservation is None or reservation.status != "reserved":
+            return
+        live_reserved = Decimal(str(reservation.reserved_quote))
+        if cumulative_quote <= 0:
+            outcome = "rejected" if status == "rejected" else "cancelled" if status in {"canceled", "cancelled"} else "failed"
+            consumed = Decimal(0)
+        else:
+            consumed = min(live_reserved, cumulative_quote)
+            if consumed == live_reserved:
+                outcome = "occupied"
+            else:
+                outcome = "partially_released"
+        try:
+            settled = SharedCapitalAllocator(self.db).settle(
+                reservation.reservation_id, consumed_quote=consumed, outcome=outcome,
+                reason=f"venue_{status}",
+            )
+        except CapitalAllocationError:
+            return
+        shared_reservation = self.db.get(SharedDemoExecutionReservation, binding.reservation_id)
+        if shared_reservation is not None:
+            self.db.add(SharedDemoReservationRecoveryEvent(
+                reservation_id=binding.reservation_id, account_id=binding.account_id,
+                tenant_id=binding.tenant_id, credential_id=binding.credential_id,
+                environment=binding.environment, strategy_id=binding.strategy_id,
+                batch_id=binding.batch_id, event_type="venue_terminal_settled",
+                outstanding_reserved_quote=Decimal(str(settled.reserved_quote)),
+                occupied_quote=Decimal(str(settled.consumed_quote)),
+                released_quote=Decimal(str(settled.released_quote)), reason_code=f"venue_{status}",
+                payload={"source": source, "filled_quote": str(cumulative_quote)},
+                occurred_at=datetime.now(timezone.utc),
+            ))
+    def _retain_ambiguous_reservation(self, intent: RuleStrategyExecutionIntent, reason: str) -> None:
+        """Lock, never release, a reservation while venue submission remains ambiguous."""
+        if getattr(intent, "reservation_id", None) is None:
+            return
+        try:
+            reservation = SharedCapitalAllocator(self.db).mark_recovery_required(
+                intent.reservation_id, tenant_id=intent.tenant_id, reason=reason,
+                status="submission_unknown",
+            )
+        except CapitalAllocationError:
+            return
+        binding = self._ensure_shared_binding(intent)
+        if binding is None or self.db.get(SharedDemoExecutionReservation, binding.reservation_id) is None:
+            return
+        self.db.add(SharedDemoReservationRecoveryEvent(
+            reservation_id=binding.reservation_id, account_id=binding.account_id,
+            tenant_id=binding.tenant_id, credential_id=binding.credential_id,
+            environment=binding.environment, strategy_id=binding.strategy_id,
+            batch_id=binding.batch_id, event_type="submission_retained",
+            outstanding_reserved_quote=Decimal(str(reservation.reserved_quote)),
+            occupied_quote=Decimal(str(reservation.consumed_quote)),
+            released_quote=Decimal(str(reservation.released_quote)), reason_code=reason,
+            payload={}, occurred_at=datetime.now(timezone.utc),
+        ))
     def _sync_intent_from_order(self, order: SandboxExchangeOrder) -> None:
         """Persist order and attributed-intent lifecycle atomically."""
         if not order.execution_intent_id:

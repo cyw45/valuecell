@@ -39,6 +39,13 @@ class StrategySharedAccount(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     __table_args__ = (
+        UniqueConstraint(
+            "id",
+            "tenant_id",
+            "credential_id",
+            "environment",
+            name="uq_strategy_shared_account_identity_scope",
+        ),
         UniqueConstraint("tenant_id", "credential_id", "environment", name="uq_strategy_shared_account_scope"),
         CheckConstraint("reserved_quote >= 0", name="ck_strategy_shared_account_reserved"),
         CheckConstraint("occupied_notional_quote >= 0", name="ck_strategy_shared_account_occupied"),
@@ -77,7 +84,7 @@ class StrategyCapitalReservation(Base):
         CheckConstraint("reserved_quote >= 0", name="ck_strategy_reservation_reserved"),
         CheckConstraint("consumed_quote >= 0", name="ck_strategy_reservation_consumed"),
         CheckConstraint("released_quote >= 0", name="ck_strategy_reservation_released"),
-        CheckConstraint("consumed_quote + released_quote <= reserved_quote", name="ck_strategy_reservation_settled"),
+        CheckConstraint("consumed_quote + released_quote <= requested_quote", name="ck_strategy_reservation_settled"),
         Index("ix_strategy_reservation_strategy_status", "strategy_id", "status"),
         Index("ix_strategy_reservation_account_status", "account_id", "status"),
     )

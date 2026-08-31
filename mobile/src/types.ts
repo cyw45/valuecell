@@ -1143,11 +1143,13 @@ export interface DemoTradeSummary {
   filled_order_count?: number;
   partially_filled_order_count?: number;
   failed_order_count?: number;
+  submission_unknown_orders?: number;
+  unknown_order_count?: number;
+  latest_status?: string | null;
   latest_order?: SandboxOrder | null;
   filled_buy_orders?: number;
   filled_sell_orders?: number;
   failed_orders?: number;
-  submission_unknown_orders?: number;
   current_position_quantity?: string | number;
 }
 export interface DemoEquityCurvePoint {
@@ -1163,6 +1165,12 @@ export interface DemoEquityCurvePoint {
   action?: string | null;
 }
 export interface DemoEquityCurve { points?: DemoEquityCurvePoint[] | null; }
+export interface DemoExecutionLifecycle {
+  reservations: Array<Record<string, unknown>>;
+  intents: Array<Record<string, unknown>>;
+  orders: SandboxOrder[];
+  attribution_status: "complete" | "partial" | "unavailable";
+}
 export interface RuleStrategyDemoExecution {
   source: "okx_demo_spot";
   strategy_id: string;
@@ -1179,9 +1187,10 @@ export interface RuleStrategyDemoExecution {
   strategy_positions?: RuleStrategyDemoStrategyPosition[];
   /** Exchange-connection wallet equity curve; never strategy PnL. */
   wallet_equity_curve?: DemoEquityCurve | null;
+  lifecycle?: DemoExecutionLifecycle | null;
   checked_at: string;
   sync?: {
-    status: "healthy" | "stale";
+    status: "healthy" | "stale" | "unavailable";
     observed_at: string;
     freshness_age_s: number;
     last_attempt_at?: string | null;

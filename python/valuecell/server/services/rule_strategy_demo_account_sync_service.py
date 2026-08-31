@@ -15,6 +15,10 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyDemoAccountSyncState,
 )
 from valuecell.server.db.models.multi_strategy import StrategySharedAccount
+from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoAccountSnapshot,
+    SharedDemoAccountSyncState,
+)
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     get_latest_demo_account_snapshot,
     record_demo_account_snapshot,
@@ -90,9 +94,85 @@ def _update_shared_account(
         else None
     )
     denominator = account_row.wallet_equity_quote
-    account_row.utilization_denominator_quote = denominator if denominator and denominator > 0 else None
-    account_row.reusable_quote = account_row.available_quote
+    account_row.utilization_denominator_quote = (
+        denominator if denominator and denominator > 0 else None
+    )
+    if account_row.reusable_quote is None:
+        account_row.reusable_quote = account_row.available_quote
 
+
+
+def _observed_at(value: str | None) -> datetime:
+    if value is None:
+        return _utc_now()
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _shared_sync_state(
+    session: Session,
+    account: StrategySharedAccount,
+) -> SharedDemoAccountSyncState:
+    state = session.get(SharedDemoAccountSyncState, account.id)
+    if state is not None:
+        return state
+    state = SharedDemoAccountSyncState(
+        account_id=account.id,
+        tenant_id=account.tenant_id,
+        credential_id=account.credential_id,
+        environment=account.environment,
+        sync_status="unavailable",
+        reconciliation_status="pending",
+        consecutive_failures=0,
+        unresolved_submission_count=0,
+    )
+    session.add(state)
+    session.flush()
+    return state
+
+
+def _record_shared_snapshot(
+    session: Session,
+    *,
+    account: StrategySharedAccount,
+    wallet: dict[str, Any],
+    positions: dict[str, Any],
+    observed_at: str | None,
+) -> SharedDemoAccountSnapshot:
+    """Store one immutable wallet observation for a shared Demo credential."""
+    timestamp = _observed_at(observed_at)
+    snapshot = (
+        session.query(SharedDemoAccountSnapshot)
+        .filter_by(account_id=account.id, observed_at=timestamp)
+        .first()
+    )
+    if snapshot is None:
+        snapshot = SharedDemoAccountSnapshot(
+            account_id=account.id,
+            tenant_id=account.tenant_id,
+            credential_id=account.credential_id,
+            environment=account.environment,
+            source="okx_account_sync",
+            observed_at=timestamp,
+            wallet_equity_quote=wallet.get("total_usdt_value"),
+            available_quote=account.available_quote,
+            balances=list(wallet.get("balances") or []),
+            positions=list(positions.get("positions") or []),
+            open_orders=[],
+        )
+        session.add(snapshot)
+        session.flush()
+    state = _shared_sync_state(session, account)
+    state.latest_snapshot_id = snapshot.snapshot_id
+    state.sync_status = "healthy"
+    state.reconciliation_status = "pending"
+    state.last_attempt_at = _utc_now()
+    state.last_success_at = _utc_now()
+    state.stale_after = state.last_success_at + timedelta(
+        seconds=get_settings().DEMO_ACCOUNT_SYNC_INTERVAL_S * 2
+    )
+    state.consecutive_failures = 0
+    state.last_error_code = None
+    return snapshot
 
 def _mark_shared_account_failure(
     session: Session, tenant_id: str, credential_id: str
@@ -101,6 +181,13 @@ def _mark_shared_account_failure(
     account.sync_status = "unavailable"
     account.attribution_status = "unavailable"
     account.observed_at = _utc_now()
+    shared_state = session.get(SharedDemoAccountSyncState, account.id)
+    if shared_state is not None:
+        shared_state.sync_status = "failed"
+        shared_state.reconciliation_status = "blocked"
+        shared_state.last_attempt_at = _utc_now()
+        shared_state.consecutive_failures += 1
+        shared_state.last_error_code = "shared_account_sync_failed"
     session.commit()
 
 
@@ -218,6 +305,13 @@ async def sync_demo_account_snapshots(session: Session) -> dict[str, int]:
             observed_at = positions.get("checked_at") or account.get("checked_at")
             shared = _shared_account(session, tenant_id, credential_id)
             _update_shared_account(shared, account, observed_at)
+            _record_shared_snapshot(
+                session,
+                account=shared,
+                wallet=account,
+                positions=positions,
+                observed_at=observed_at,
+            )
             session.commit()
             for strategy in strategies:
                 latest = get_latest_demo_account_snapshot(

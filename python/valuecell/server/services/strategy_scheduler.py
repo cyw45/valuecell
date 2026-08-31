@@ -39,6 +39,12 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyEvaluationJournal,
     RuleStrategyExecutionIntent,
 )
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
+from valuecell.server.db.models.shared_demo_execution import SharedDemoAccountSnapshot
+from valuecell.server.services.multi_strategy_capital_allocator import (
+    CapitalAllocationError,
+    SharedCapitalAllocator,
+)
 from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
 )
@@ -57,7 +63,10 @@ from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     get_official_test_baseline,
 )
 from valuecell.server.api.schemas.fixed_strategy import FixedCandle, FixedEngineInput
-from valuecell.server.services.fixed_strategy_paper_service import FixedPaperEvaluationService
+from valuecell.server.services.fixed_strategy_paper_service import (
+    FixedDemoExecutionAdapter,
+    FixedPaperEvaluationService,
+)
 
 _MIN_INTERVAL_S = 60
 _DEMO_SUBMISSION_TIMEOUT_S = 15
@@ -423,27 +432,54 @@ class StrategyScheduler:
             credential_id = config.execution.sandbox_connection_id
             session = get_database_manager().get_session()
             try:
-                trading_service = SandboxExchangeTradingService(session)
-                demo_account = await trading_service.balance(tenant_id, credential_id or "")
-                position_snapshot = await trading_service.positions(
-                    tenant_id,
-                    credential_id or "",
-                    account=demo_account,
+                account = (
+                    session.query(StrategySharedAccount)
+                    .filter_by(
+                        tenant_id=tenant_id,
+                        credential_id=credential_id,
+                        environment="okx_demo",
+                        active=True,
+                    )
+                    .first()
                 )
-                await trading_service.refresh_open_orders(
-                    tenant_id, credential_id or ""
+                snapshot = (
+                    session.query(SharedDemoAccountSnapshot)
+                    .filter_by(account_id=account.id if account is not None else "")
+                    .order_by(SharedDemoAccountSnapshot.observed_at.desc())
+                    .first()
                 )
+                if (
+                    account is None
+                    or account.sync_status != "healthy"
+                    or snapshot is None
+                    or snapshot.observed_at is None
+                ):
+                    raise RuntimeError("shared Demo wallet snapshot is unavailable")
+                observed_at = snapshot.observed_at
+                if observed_at.tzinfo is None:
+                    observed_at = observed_at.replace(tzinfo=timezone.utc)
+                snapshot_age = (datetime.now(timezone.utc) - observed_at).total_seconds()
+                if snapshot_age > 2 * _INTERVAL_SECONDS["5m"]:
+                    raise RuntimeError("shared Demo wallet snapshot is stale")
+                demo_account = {
+                    "source": "okx_demo_shared_snapshot",
+                    "total_usdt_value": float(snapshot.wallet_equity_quote or 0),
+                    "balances": list(snapshot.balances or []),
+                    "checked_at": observed_at.isoformat(),
+                }
                 demo_positions = {
                     str(item["symbol"]).upper().replace("/", "-"): item
-                    for item in position_snapshot.get("positions", [])
+                    for item in (snapshot.positions or [])
+                    if isinstance(item, dict) and item.get("symbol")
                 }
+                trading_service = SandboxExchangeTradingService(session)
                 strategy_orders = [
                     item
                     for item in trading_service.list_orders(
                         tenant_id, credential_id or ""
                     )
                     if item.get("strategy_id") == strategy_id
-                    and item.get("execution_source") == "rule_strategy"
+                    and item.get("execution_source") in {"rule_strategy", "shared_demo"}
                 ]
                 baseline = get_official_test_baseline(
                     session, tenant_id=tenant_id, strategy_id=strategy_id
@@ -717,12 +753,9 @@ class StrategyScheduler:
         config_dict: dict[str, Any],
         batch_id: str | None,
     ) -> None:
-        """Run a fixed engine and persist signals without placing orders."""
-        symbols = [
-            symbol
-            for symbol in config_dict.get("symbols", [])
-            if isinstance(symbol, str) and symbol
-        ]
+        """Evaluate fixed strategies and route only supported Demo spot actions."""
+        config = RuleStrategyConfig.model_validate(config_dict)
+        symbols = [symbol for symbol in config.symbols if symbol]
         if not symbols:
             return
         lookback = 260 if strategy_kind == "pair_rotation" else 80
@@ -769,13 +802,66 @@ class StrategyScheduler:
             tz=timezone.utc,
         )
         paper_service = FixedPaperEvaluationService()
-        if strategy_kind == "pair_rotation":
-            paper_service.evaluate_and_record(
+        demo_adapter = (
+            FixedDemoExecutionAdapter(self._execute_signal)
+            if config.execution.environment == "okx_demo"
+            else None
+        )
+
+        async def evaluate_and_dispatch(
+            request: FixedEngineInput,
+            btc_request: list[FixedCandle] | None = None,
+        ) -> None:
+            signal, evaluation_id = paper_service.evaluate_and_record(
                 strategy_id=strategy_id,
                 tenant_id=tenant_id,
                 strategy_kind=strategy_kind,
                 batch_id=batch_id,
-                request=FixedEngineInput(candles=fixed_candles, observed_at=observed_at),
+                request=request,
+                btc_request=btc_request,
+                environment=config.execution.environment,
+            )
+            if demo_adapter is None:
+                return
+            latest_candle = max(
+                (candle for candle in request.candles if candle.symbol == signal.symbol),
+                key=lambda candle: candle.timestamp_ms,
+                default=None,
+            )
+            if latest_candle is None:
+                if signal.action in {"long_entry", "short_entry", "exit"}:
+                    paper_service.update_execution(
+                        tenant_id=tenant_id,
+                        strategy_id=strategy_id,
+                        evaluation_id=evaluation_id,
+                        execution={
+                            "execution": "blocked_market_evidence",
+                            "execution_ledger": "okx_demo",
+                            "paper_fill": False,
+                            "reason": "No fresh candle matches the fixed execution signal",
+                        },
+                    )
+                return
+            execution = await demo_adapter.execute(
+                tenant_id=tenant_id,
+                strategy_id=strategy_id,
+                config=config,
+                signal=signal,
+                price=Decimal(str(latest_candle.close)),
+                candle_timestamp_ms=latest_candle.timestamp_ms,
+                evaluation_id=evaluation_id,
+            )
+            if execution is not None:
+                paper_service.update_execution(
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                    evaluation_id=evaluation_id,
+                    execution=execution,
+                )
+
+        if strategy_kind == "pair_rotation":
+            await evaluate_and_dispatch(
+                FixedEngineInput(candles=fixed_candles, observed_at=observed_at)
             )
             return
         by_symbol: dict[str, list[FixedCandle]] = {}
@@ -784,16 +870,12 @@ class StrategyScheduler:
         btc_candles = by_symbol.get("BTC-USDT")
         for symbol in symbols:
             candles = by_symbol.get(symbol)
-            if not candles:
-                continue
-            paper_service.evaluate_and_record(
-                strategy_id=strategy_id,
-                tenant_id=tenant_id,
-                strategy_kind=strategy_kind,
-                batch_id=batch_id,
-                request=FixedEngineInput(candles=candles, observed_at=observed_at),
-                btc_request=btc_candles,
-            )
+            if candles:
+                await evaluate_and_dispatch(
+                    FixedEngineInput(candles=candles, observed_at=observed_at),
+                    btc_candles,
+                )
+
     @staticmethod
     def _record_market_data_diagnostics(
         strategy_id: str,
@@ -981,6 +1063,7 @@ class StrategyScheduler:
                 "reason": "durable evaluation is required for strategy execution",
             }
         session = get_database_manager().get_session()
+
         try:
             # This lock is acquired only after all market/evaluation I/O. A stale
             # captured job config is never authoritative for execution.
@@ -1008,9 +1091,7 @@ class StrategyScheduler:
                     "sandbox": True,
                     "reason": "strategy execution configuration changed",
                 }
-            requested_quote = min(
-                quote_amount, Decimal(str(fresh_execution.max_order_quote_amount))
-            )
+            key = _strategy_client_order_id(strategy_id, candle_timestamp_ms, symbol, action)
             intents = (
                 session.query(RuleStrategyExecutionIntent)
                 .filter_by(
@@ -1020,33 +1101,9 @@ class StrategyScheduler:
                 )
                 .all()
             )
-            # Daily throughput reserves every non-rejected/non-stale strategy
-            # intent, including filled/closed records.  Total is active exposure
-            # only, but conservatively includes pending/submitting/unknown.
-            active_statuses = {
-                "pending",
-                "submitting",
-                "submission_unknown",
-                "submitted",
-                "open",
-                "partially_filled",
-            }
-            def reserved_cost(row: RuleStrategyExecutionIntent) -> Decimal:
-                # Once preflight has sized an order, its actual notional is the
-                # quota fact. Older/in-flight rows retain the conservative nominal
-                # reservation until a factual cost exists.
-                payload = getattr(row, "request_payload", None) or {}
-                return Decimal(str(payload.get("order_cost", row.requested_quote)))
-
-            existing_total = sum(
-                reserved_cost(row)
-                for row in intents
-                if row.status in active_statuses
-                and getattr(row, "side", None) == "buy"
-            )
             daily_cutoff = datetime.now(timezone.utc) - timedelta(days=1)
             daily_total = sum(
-                reserved_cost(row)
+                Decimal(str((getattr(row, "request_payload", None) or {}).get("order_cost", row.requested_quote)))
                 for row in intents
                 if row.status not in {"failed", "rejected", "stale"}
                 and (
@@ -1062,15 +1119,77 @@ class StrategyScheduler:
                     "sandbox": True,
                     "reason": "OKX Demo strategy daily limit reached",
                 }
-            if existing_total + requested_quote > Decimal(
-                str(fresh_execution.max_total_quote_amount)
-            ):
+            account = (
+                session.query(StrategySharedAccount)
+                .filter_by(
+                    tenant_id=tenant_id,
+                    credential_id=fresh_execution.sandbox_connection_id,
+                    environment="okx_demo",
+                    active=True,
+                )
+                .with_for_update()
+                .first()
+            )
+            if account is None or account.sync_status != "healthy":
                 return {
                     "execution": "blocked",
                     "sandbox": True,
-                    "reason": "OKX Demo strategy total limit reached",
+                    "reason": "OKX Demo shared account is unavailable or stale",
                 }
-            key = _strategy_client_order_id(strategy_id, candle_timestamp_ms, symbol, action)
+            # A sell is constrained by this strategy's confirmed, attributed
+            # fills. Never use the shared wallet's raw base-asset balance as
+            # strategy inventory.
+            if action == "sell":
+                trading_service = SandboxExchangeTradingService(session)
+                strategy_orders = [
+                    item
+                    for item in trading_service.list_orders(
+                        tenant_id, fresh_execution.sandbox_connection_id
+                    )
+                    if item.get("strategy_id") == strategy_id
+                    and item.get("execution_source") == "rule_strategy"
+                ]
+                baseline = get_official_test_baseline(
+                    session, tenant_id=tenant_id, strategy_id=strategy_id
+                )
+                inventory = strategy_inventory_by_symbol(
+                    strategy_orders,
+                    started_at=baseline.started_at if baseline is not None else None,
+                )
+                held_quantity, _, _ = _strategy_position_from_inventory(
+                    inventory, symbol
+                )
+                if price <= 0 or held_quantity <= 0:
+                    return {
+                        "execution": "blocked",
+                        "sandbox": True,
+                        "reason": "strategy has no confirmed inventory to sell",
+                    }
+                if requested_quote / price > held_quantity:
+                    return {
+                        "execution": "blocked",
+                        "sandbox": True,
+                        "reason": "sell exceeds strategy confirmed inventory",
+                    }
+            reservation = None
+            if action == "buy":
+                try:
+                    reservation = SharedCapitalAllocator(session).reserve(
+                        account_id=account.id,
+                        tenant_id=tenant_id,
+                        strategy_id=strategy_id,
+                        batch_id=getattr(strategy, "current_batch_id", None),
+                        idempotency_key=key,
+                        symbol=symbol.replace("-", "/"),
+                        side=action,
+                        requested_quote=requested_quote,
+                    )
+                except CapitalAllocationError as exc:
+                    return {
+                        "execution": "blocked",
+                        "sandbox": True,
+                        "reason": str(exc),
+                    }
             intent = (
                 session.query(RuleStrategyExecutionIntent)
                 .filter_by(
@@ -1099,6 +1218,16 @@ class StrategyScheduler:
                     request_payload={"candle_timestamp_ms": candle_timestamp_ms},
                 )
                 session.add(intent)
+            if reservation is not None:
+                session.flush()
+                if intent.reservation_id not in {None, reservation.reservation_id}:
+                    raise CapitalAllocationError("execution intent is bound to another reservation")
+                intent.reservation_id = reservation.reservation_id
+                SharedCapitalAllocator(session).bind_intent(
+                    reservation.reservation_id,
+                    tenant_id=tenant_id,
+                    intent_id=intent.id,
+                )
             # The intent is an audit/outbox record, not merely a row staged in
             # the transaction that will make a remote request. Commit it before
             # progressing, so a process crash can always be reconciled by its
@@ -1120,6 +1249,21 @@ class StrategyScheduler:
                     "sandbox": True,
                     "reason": "execution intent unavailable",
                 }
+            def release_intent_reservation(reason: str) -> None:
+                if intent.reservation_id is None:
+                    return
+                try:
+                    SharedCapitalAllocator(session).settle(
+                        intent.reservation_id,
+                        consumed_quote=Decimal(0),
+                        outcome="released",
+                        reason=reason,
+                    )
+                except CapitalAllocationError:
+                    # A repeat observation of a terminal intent must not revive
+                    # or resubmit it; its reservation has already been settled.
+                    pass
+
             # Persist the conservative in-flight state before remote I/O. A
             # restart will reconcile it; it is never automatically re-submitted.
             if intent.status == "pending":
@@ -1142,6 +1286,8 @@ class StrategyScheduler:
                 intent.status = "stale"
                 intent.error_code = "stale_generation"
                 intent.terminal_at = datetime.now(timezone.utc)
+                release_intent_reservation("stale_generation")
+
                 session.commit()
                 return {
                     "execution": "blocked",
@@ -1157,6 +1303,8 @@ class StrategyScheduler:
                 intent.status = "stale"
                 intent.error_code = "stale_execution_configuration"
                 intent.terminal_at = datetime.now(timezone.utc)
+                release_intent_reservation("stale_execution_configuration")
+
                 session.commit()
                 return {
                     "execution": "blocked",
@@ -1171,6 +1319,7 @@ class StrategyScheduler:
             # cannot interleave after this lock is acquired and before the bounded
             # exchange create call returns.
             order = await SandboxExchangeTradingService(session).submit_order(
+
                 tenant_id,
                 fresh_execution.sandbox_connection_id,
                 key,
@@ -1183,6 +1332,9 @@ class StrategyScheduler:
                 fenced=True,
                 submission_timeout_s=_DEMO_SUBMISSION_TIMEOUT_S,
             )
+            if order.get("status") in {"failed", "rejected", "stale", "ignored_dust"}:
+                release_intent_reservation(str(order.get("status")))
+                session.commit()
             if order.get("status") == "ignored_dust":
                 return {
                     "execution": "ignored_dust",
@@ -1202,6 +1354,30 @@ class StrategyScheduler:
             }
         except Exception:
             session.rollback()
+            if "intent" in locals():
+                persisted_intent = (
+                    session.query(RuleStrategyExecutionIntent)
+                    .filter_by(id=intent.id, tenant_id=tenant_id)
+                    .first()
+                )
+                if (
+                    persisted_intent is not None
+                    and persisted_intent.reservation_id is not None
+                    and persisted_intent.status != "submission_unknown"
+                ):
+                    persisted_intent.status = "failed"
+                    persisted_intent.error_code = "scheduler_pre_submit_failure"
+                    persisted_intent.terminal_at = datetime.now(timezone.utc)
+                    try:
+                        SharedCapitalAllocator(session).settle(
+                            persisted_intent.reservation_id,
+                            consumed_quote=Decimal(0),
+                            outcome="released",
+                            reason="scheduler_pre_submit_failure",
+                        )
+                        session.commit()
+                    except CapitalAllocationError:
+                        session.rollback()
             return {
                 "execution": "blocked",
                 "sandbox": True,

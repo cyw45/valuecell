@@ -48,8 +48,13 @@ def _condition(value: Any, observed_at: datetime) -> ExplanationCondition | None
     )
 
 
-def journal_trade_facts(strategy: Any, journal: Any) -> list[UnifiedTradeFact]:
-    """Read only durable journal data; never infer facts from current config."""
+def journal_trade_facts(
+    strategy: Any,
+    journal: Any,
+    *,
+    shared_fills: list[Any] | None = None,
+    shared_orders: list[Any] | None = None,
+) -> list[UnifiedTradeFact]:
     strategy_kind = getattr(strategy, "strategy_kind", "configurable_rule")
     strategy_version = getattr(strategy, "strategy_version", "existing")
     code_fingerprint = getattr(strategy, "code_fingerprint", "legacy-configurable")

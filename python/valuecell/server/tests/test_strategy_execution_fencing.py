@@ -1,6 +1,8 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
+from uuid import uuid4
+
 import pytest
 
 from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
@@ -129,3 +131,176 @@ async def test_unknown_intent_is_not_resubmitted_and_reconciliation_never_create
     await reconcile.reconcile_nonterminal_intents("tenant-a")
     assert intent.status == INTENT_SUBMISSION_UNKNOWN
     assert intent.error_code == "reconciliation_required"
+
+class _DemoExecutionQuery:
+    def __init__(self, session, model):
+        self.session = session
+        self.model = model
+        self.filters = {}
+
+    def filter_by(self, **kwargs):
+        self.filters.update(kwargs)
+        return self
+
+    def with_for_update(self):
+        return self
+
+    def first(self):
+        if self.model is strategy_scheduler.RuleStrategy:
+            return self.session.strategy
+        if self.model is strategy_scheduler.StrategySharedAccount:
+            return self.session.account
+        return next(
+            (
+                intent
+                for intent in self.session.intents
+                if all(getattr(intent, key, None) == value for key, value in self.filters.items())
+            ),
+            None,
+        )
+
+    def all(self):
+        return list(self.session.intents)
+
+
+class _DemoExecutionSession:
+    def __init__(self, strategy_id: str, config: RuleStrategyConfig):
+        self.strategy = SimpleNamespace(
+            strategy_id=strategy_id,
+            tenant_id="tenant-a",
+            status="running",
+            execution_generation=1,
+            current_batch_id=None,
+            config=config.model_dump(mode="json"),
+        )
+        self.account = SimpleNamespace(
+            id="shared-account",
+            sync_status="healthy",
+            active=True,
+        )
+        self.intents = []
+
+    def query(self, model):
+        return _DemoExecutionQuery(self, model)
+
+    def add(self, intent):
+        self.intents.append(intent)
+
+    def flush(self):
+        for intent in self.intents:
+            if intent.id is None:
+                intent.id = str(uuid4())
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_shared_wallet_blocks_second_strategy_when_reservation_exhausts(monkeypatch):
+    config = RuleStrategyConfig.model_validate(
+        {
+            "symbols": ["BTC-USDT"],
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "credential-a",
+                "max_order_quote_amount": 100,
+                "max_daily_quote_amount": 1_000,
+            },
+        }
+    )
+    sessions = [
+        _DemoExecutionSession("strategy-a", config),
+        _DemoExecutionSession("strategy-b", config),
+    ]
+    submitted = []
+
+    class Allocator:
+        reserved = Decimal(0)
+
+        def __init__(self, _session):
+            pass
+
+        def reserve(self, *, requested_quote, **_kwargs):
+            if self.reserved + requested_quote > Decimal(100):
+                raise strategy_scheduler.CapitalAllocationError("shared account has insufficient unreserved quote")
+            self.__class__.reserved += requested_quote
+            return SimpleNamespace(reservation_id=f"reservation-{self.reserved}")
+
+        def bind_intent(self, *_args, **_kwargs):
+            pass
+
+        def settle(self, *_args, **_kwargs):
+            pass
+
+    class Service:
+        def __init__(self, _session):
+            pass
+
+        async def submit_order(self, *_args, **_kwargs):
+            submitted.append(True)
+            return {"id": "order", "status": "open"}
+
+    monkeypatch.setattr(strategy_scheduler, "SharedCapitalAllocator", Allocator)
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", Service)
+    monkeypatch.setattr(
+        strategy_scheduler,
+        "get_database_manager",
+        lambda: SimpleNamespace(get_session=lambda: sessions.pop(0)),
+    )
+
+    first = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "strategy-a", config, "BTC-USDT", "buy", Decimal(100), Decimal(50_000), 1, "eval-a"
+    )
+    second = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "strategy-b", config, "BTC-USDT", "buy", Decimal(100), Decimal(50_000), 2, "eval-b"
+    )
+
+    assert first["execution"] == "okx_demo_submitted"
+    assert second["execution"] == "blocked"
+    assert "insufficient unreserved" in second["reason"]
+    assert len(submitted) == 1
+
+
+@pytest.mark.asyncio
+async def test_okx_demo_sell_requires_confirmed_strategy_inventory(monkeypatch):
+    config = RuleStrategyConfig.model_validate(
+        {
+            "symbols": ["BTC-USDT"],
+            "execution": {"environment": "okx_demo", "sandbox_connection_id": "credential-a"},
+        }
+    )
+    session = _DemoExecutionSession("strategy-a", config)
+    submitted = False
+
+    class Service:
+        def __init__(self, _session):
+            pass
+
+        def list_orders(self, *_args):
+            return []
+
+        async def submit_order(self, *_args, **_kwargs):
+            nonlocal submitted
+            submitted = True
+            return {"id": "order", "status": "open"}
+
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", Service)
+    monkeypatch.setattr(
+        strategy_scheduler,
+        "get_database_manager",
+        lambda: SimpleNamespace(get_session=lambda: session),
+    )
+
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a", "strategy-a", config, "BTC-USDT", "sell", Decimal(100), Decimal(50_000), 1, "eval-a"
+    )
+
+    assert result["execution"] == "blocked"
+    assert "confirmed inventory" in result["reason"]
+    assert submitted is False

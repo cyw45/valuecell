@@ -103,6 +103,59 @@ def test_demo_read_model_calculates_attributed_moving_average_pnl():
     }
 
 
+def test_demo_read_model_replays_shared_append_only_fills() -> None:
+    result = build_demo_execution_read_model(
+        _demo_strategy(),
+        {"source": "okx_demo", "balances": []},
+        {
+            "source": "okx_demo",
+            "checked_at": "2026-08-29T00:00:00+00:00",
+            "positions": [{"symbol": "BTC/USDT", "mark_price": 120}],
+        },
+        [],
+        shared_venue_orders=[
+            {
+                "order_id": "shared-order-a",
+                "intent_id": "intent-a",
+                "reservation_id": "reservation-a",
+                "strategy_id": "strategy-a",
+                "batch_id": "batch-a",
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "requested_quote": "100",
+                "requested_quantity": "1",
+                "created_at": "2026-08-29T00:00:00+00:00",
+            }
+        ],
+        shared_order_projections=[
+            {
+                "order_id": "shared-order-a",
+                "status": "filled",
+                "filled_quantity": "1",
+                "remaining_quantity": "0",
+                "filled_quote": "100",
+                "fee_quote": "0",
+            }
+        ],
+        shared_fills=[
+            {
+                "order_id": "shared-order-a",
+                "strategy_id": "strategy-a",
+                "batch_id": "batch-a",
+                "quantity": "1",
+                "quote_amount": "100",
+                "fee_quote": "0",
+                "occurred_at": "2026-08-29T00:00:00+00:00",
+            }
+        ],
+    )
+
+    assert result["orders"][0]["execution_source"] == "shared_demo"
+    assert result["strategy_positions"][0]["quantity"] == "1"
+    assert result["pnl"]["status"] == "available"
+    assert result["pnl"]["unrealized"] == "20"
+
+
 def test_strategy_inventory_uses_only_confirmed_fills_and_tracks_average_cost():
     inventory = strategy_inventory_by_symbol([
         {"symbol": "BTC/USDT", "side": "buy", "status": "filled", "filled_quantity": "2", "filled_quote": "200"},

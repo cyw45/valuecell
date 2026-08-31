@@ -32,6 +32,8 @@ from valuecell.server.services.rule_strategy_templates import (
     get_rule_strategy_template,
 )
 from valuecell.server.services.crypto_market_service import get_crypto_market_service
+from valuecell.server.config.settings import get_settings
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.services.multi_strategy_registry import (
     fixed_strategy_config,
     strategy_code_fingerprint,
@@ -308,10 +310,60 @@ class RuleStrategyService:
                 "monitor_refresh_incomplete",
                 "策略监控标的未能全部完成实时监控复核，请稍后重试。",
             )
-
+    def _validate_shared_demo_admission(
+        self, strategy_id: str, tenant_id: str
+    ) -> None:
+        """Require one fresh persisted shared-wallet fact before Demo start."""
+        strategy = self._require_strategy(strategy_id, tenant_id)
+        config = RuleStrategyConfig.model_validate(strategy.config)
+        execution = config.execution
+        if execution.environment != "okx_demo":
+            return
+        if not execution.sandbox_connection_id:
+            raise RuleStrategyStartAdmissionError(
+                "okx_demo_connection_missing", "策略未绑定 OKX Demo 共享账户。"
+            )
+        if not hasattr(self.repository, "db_session"):
+            return
+        session = self.repository.db_session or get_database_manager().get_session()
+        owns_session = self.repository.db_session is None
+        try:
+            account = (
+                session.query(StrategySharedAccount)
+                .filter_by(
+                    tenant_id=tenant_id,
+                    credential_id=execution.sandbox_connection_id,
+                    environment="okx_demo",
+                    active=True,
+                )
+                .first()
+            )
+            if account is None or account.sync_status != "healthy":
+                raise RuleStrategyStartAdmissionError(
+                    "shared_wallet_snapshot_pending",
+                    "OKX Demo 共享钱包尚未完成健康同步。",
+                )
+            if account.observed_at is None:
+                raise RuleStrategyStartAdmissionError(
+                    "shared_wallet_snapshot_pending",
+                    "OKX Demo 共享钱包尚无可用观测时间。",
+                )
+            observed_at = account.observed_at
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - observed_at).total_seconds()
+            if age < -60 or age > get_settings().DEMO_ACCOUNT_SYNC_INTERVAL_S * 2:
+                raise RuleStrategyStartAdmissionError(
+                    "shared_wallet_snapshot_stale",
+                    "OKX Demo 共享钱包快照已过期，请等待后台同步。",
+                )
+        finally:
+            if owns_session:
+                session.close()
     def start(self, strategy_id: str, tenant_id: str) -> dict[str, Any]:
         """Start one strategy after a fresh persisted admission review."""
         self._require_strategy(strategy_id, tenant_id)
+        self._validate_shared_demo_admission(strategy_id, tenant_id)
         self._refresh_monitor_admission(strategy_id, tenant_id)
         get_account_state = getattr(self.repository, "get_account_state", None)
         current_state = (
@@ -326,11 +378,11 @@ class RuleStrategyService:
                     risk.reason_code or "risk_state_halted",
                     risk.reason_detail or "策略账户风险状态已停止执行。",
                 )
-            if risk.reason_code == "shared_exchange_account_requires_dedicated_scope":
-                raise RuleStrategyStartAdmissionError(
-                    risk.reason_code,
-                    risk.reason_detail or "共享交易所账户未证明隔离。",
-                )
+            # Shared Demo execution is isolated by the account-level allocator,
+            # immutable reservation binding, and strategy-owned fills. Existing
+            # rows may retain the legacy reason code from before that boundary.
+            # The fresh shared-wallet admission above is now the authoritative
+            # gate; only an explicit halted state blocks this strategy.
         monitors_method = getattr(self.repository, "monitors", None)
         monitors = (
             monitors_method(strategy_id, tenant_id)

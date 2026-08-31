@@ -13,6 +13,8 @@ export type AllocationState =
   | "occupied"
   | "partially_released"
   | "released"
+  | "submission_unknown"
+  | "recovery_required"
   | "blocked";
 
 export type StrategyDefinition = {
@@ -44,6 +46,7 @@ export type StrategyAllocation = {
   unrealized_pnl_quote: number | null;
   net_pnl_quote: number | null;
   allocation_state: AllocationState;
+  lifecycle_reason?: string | null;
   utilization_denominator_quote: number;
 };
 
@@ -118,6 +121,7 @@ export type UnifiedTradeFact = {
     | "blocked"
     | "pending"
     | "submitted"
+    | "submission_unknown"
     | "partially_filled"
     | "filled"
     | "cancelled"

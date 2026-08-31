@@ -96,7 +96,9 @@ class InMemoryRuleStrategyRepository:
         self.evaluations.append(journal)
         return journal
 
-    def get_evaluations(self, strategy_id: str, tenant_id: str, limit: int = 100):
+    def get_evaluations(
+        self, strategy_id: str, tenant_id: str, limit: int = 100, batch_id=None
+    ):
         if strategy_id != STRATEGY_ID:
             return []
         return list(reversed(self.evaluations[-limit:]))
@@ -795,6 +797,25 @@ def test_rule_strategy_api_requires_start_then_explains_and_journals_paper_evalu
     stopped = client.post(f"/rule-strategies/{STRATEGY_ID}/stop")
     assert stopped.status_code == 200
     assert stopped.json()["data"]["status"] == "stopped"
+
+
+def test_rule_strategy_api_returns_empty_trade_facts_after_start() -> None:
+    client = _client()
+    created = client.post(
+        "/rule-strategies",
+        json={
+            "name": "Trade facts after start",
+            "initial_capital_quote": 1_000,
+            "config": _config(),
+        },
+    )
+    assert created.status_code == 201
+    assert client.post(f"/rule-strategies/{STRATEGY_ID}/start").status_code == 200
+
+    response = client.get("/rule-strategies/all-trade-facts")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
 
 
 def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None:

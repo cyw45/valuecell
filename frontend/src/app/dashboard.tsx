@@ -214,6 +214,8 @@ const ALLOCATION_STATE_LABELS: Record<string, string> = {
   occupied: "已占用",
   partially_released: "部分释放",
   released: "已释放",
+  submission_unknown: "提交结果待对账",
+  recovery_required: "等待对账恢复",
   blocked: "已阻断",
 };
 
@@ -797,7 +799,7 @@ export default function DashboardPage() {
                   {demoPurchaseState.label}
                 </Badge>
                 <span className="text-muted-foreground text-xs">
-                  订单 {demoExecution?.trade_summary?.order_count ?? demoOrders.length} 笔 · 已成交 {demoExecution?.trade_summary?.filled_order_count ?? "—"} · 部分成交 {demoExecution?.trade_summary?.partially_filled_order_count ?? "—"} · 失败 {demoExecution?.trade_summary?.failed_order_count ?? "—"}
+                  订单 {demoExecution?.trade_summary?.order_count ?? demoOrders.length} 笔 · 已成交 {demoExecution?.trade_summary?.filled_order_count ?? "—"} · 部分成交 {demoExecution?.trade_summary?.partially_filled_order_count ?? "—"} · 待远端对账 {demoExecution?.trade_summary?.submission_unknown_orders ?? demoExecution?.trade_summary?.unknown_order_count ?? "—"} · 失败 {demoExecution?.trade_summary?.failed_order_count ?? "—"}
                 </span>
               </div>
             ) : null}
@@ -909,12 +911,18 @@ export default function DashboardPage() {
                         {
                           label: "策略归属 PnL · 归因",
                           value: formatQuote(sharedAccountSummary.strategy_pnl_total_quote),
-                          detail: "所有策略归属盈亏合计",
+                          detail: "所有策略归属盈亏合计；不含纸面账本",
                           tone: sharedAccountSummary.strategy_pnl_total_quote == null
                             ? "text-muted-foreground"
                             : sharedAccountSummary.strategy_pnl_total_quote >= 0
                               ? "text-emerald-600 dark:text-emerald-300"
                               : "text-rose-600 dark:text-rose-300",
+                        },
+                        {
+                          label: "未归因权益 · 钱包",
+                          value: formatQuote(sharedAccountSummary.wallet.unassigned_equity_quote),
+                          detail: "钱包中尚不能归属到策略的部分，不计入策略 PnL",
+                          tone: "text-amber-600 dark:text-amber-300",
                         },
                         {
                           label: "钱包 − 策略差额",
@@ -998,14 +1006,14 @@ export default function DashboardPage() {
                                     <Badge
                                       className={cn(
                                         "text-[10px]",
-                                        allocation.allocation_state === "blocked" &&
+                                        (allocation.allocation_state === "blocked" || allocation.allocation_state === "submission_unknown" || allocation.allocation_state === "recovery_required") &&
                                           "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300",
-                                        allocation.allocation_state !== "blocked" &&
+                                        allocation.allocation_state !== "blocked" && allocation.allocation_state !== "submission_unknown" && allocation.allocation_state !== "recovery_required" &&
                                           "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
                                       )}
                                       variant="outline"
                                     >
-                                      {ALLOCATION_STATE_LABELS[allocation.allocation_state] ?? allocation.allocation_state}
+                                      {ALLOCATION_STATE_LABELS[allocation.allocation_state] ?? allocation.allocation_state}{allocation.lifecycle_reason ? ` · ${allocation.lifecycle_reason}` : ""}
                                     </Badge>
                                   </TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.reserved_quote)}</TableCell>

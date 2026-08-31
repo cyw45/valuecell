@@ -412,6 +412,7 @@ function UnifiedTradeFactsCard({
     blocked: "已拦截",
     pending: "待处理",
     submitted: "已提交",
+    submission_unknown: "待远端对账（不可重提）",
     partially_filled: "部分成交",
     filled: "已成交",
     cancelled: "已取消",
@@ -467,12 +468,13 @@ function UnifiedTradeFactRow({ fact, statusLabel }: { fact: UnifiedTradeFact; st
       <TableCell><Badge variant={fact.status === "failed" || fact.status === "blocked" ? "destructive" : "outline"}>{statusLabel[fact.status] ?? fact.status}</Badge></TableCell>
       <TableCell className="text-right tabular-nums"><div>{fact.filled_quote ?? fact.requested_quote ?? "不可用"} USDT</div><div className="text-muted-foreground text-xs">数量 {fact.filled_quantity ?? fact.requested_quantity ?? "不可用"}</div></TableCell>
       <TableCell className="text-right tabular-nums"><div>{fact.average_fill_price ?? "不可用"}</div><div className="text-muted-foreground text-xs">费用 {fact.fee_quote == null ? "不可用" : `${fact.fee_quote} USDT`}</div></TableCell>
-      <TableCell className="max-w-48 whitespace-normal text-xs">{fact.failure_reason ?? fact.failure_code ?? "—"}</TableCell>
+      <TableCell className="max-w-48 whitespace-normal text-xs">{fact.failure_reason ?? fact.failure_code ?? explanation.block_reason ?? (fact.status === "submission_unknown" ? "提交结果未确认：正在向原交易所对账，系统不会重新提交订单。" : "—")}</TableCell>
       <TableCell className="min-w-64">
         <Collapsible>
           <CollapsibleTrigger className="rounded-md px-2 py-1 text-left text-primary text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">查看：{explanation.decision || "未提供"}</CollapsibleTrigger>
           <CollapsibleContent className="space-y-2 pt-2 text-xs">
             <div className="text-muted-foreground">{explanation.decision_reason || "暂无持久化解释。"}</div>
+            {explanation.block_reason ? <div className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-amber-800 dark:text-amber-200">启动/执行阻塞：{explanation.block_reason}</div> : null}
             {explanation.conditions.length === 0 ? <div className="text-muted-foreground">条件明细不可用</div> : explanation.conditions.map((condition) => <div className="rounded border bg-muted/30 p-2" key={`${condition.code}-${condition.data_at}`}><div className="font-medium">{condition.label || condition.code} · {condition.state}</div><div>实际值：{condition.actual ?? "不可用"}　{condition.operator ?? "对比"}　阈值：{condition.threshold ?? "不可用"}</div><div className="text-muted-foreground">{condition.detail}{condition.data_at ? ` · 数据时间 ${formatDate(condition.data_at)}` : ""}</div></div>)}
           </CollapsibleContent>
         </Collapsible>

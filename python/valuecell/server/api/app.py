@@ -193,6 +193,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_strategy_product_state,
         migrate_multi_strategy_account,
         migrate_fixed_strategy_paper_ledger,
+        migrate_shared_demo_execution_storage,
     )
 
     session = get_database_manager().get_session()
@@ -200,6 +201,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_rule_strategy_execution_attribution(session)
         migrate_rule_strategy_execution_batches(session)
         migrate_multi_strategy_account(session)
+        migrate_shared_demo_execution_storage(session)
         migrate_fixed_strategy_paper_ledger(session)
         migrate_strategy_product_state(session)
         migrate_rule_strategy_validation(session)

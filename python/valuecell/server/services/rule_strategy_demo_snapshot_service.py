@@ -12,6 +12,8 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyDemoAccountSnapshot,
     RuleStrategyOfficialTestBaseline,
 )
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
+from valuecell.server.db.models.shared_demo_execution import SharedDemoAccountSnapshot
 from valuecell.server.services.rule_strategy_pnl_service import (
     DailyPnlObservation,
     build_daily_pnl_points,
@@ -71,6 +73,33 @@ def list_demo_account_snapshots(
         RuleStrategyDemoAccountSnapshot.observed_at.asc(),
         RuleStrategyDemoAccountSnapshot.id.asc(),
     ).all()
+
+
+def get_latest_shared_demo_account_snapshot(
+    session: Session,
+    *,
+    tenant_id: str,
+    credential_id: str,
+) -> SharedDemoAccountSnapshot | None:
+    """Read the one account-scoped wallet fact for a Demo credential."""
+    account = (
+        session.query(StrategySharedAccount)
+        .filter_by(
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            environment="okx_demo",
+            active=True,
+        )
+        .first()
+    )
+    if account is None:
+        return None
+    return (
+        session.query(SharedDemoAccountSnapshot)
+        .filter_by(account_id=account.id)
+        .order_by(SharedDemoAccountSnapshot.observed_at.desc())
+        .first()
+    )
 
 
 def get_latest_demo_account_snapshot(

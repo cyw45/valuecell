@@ -112,8 +112,8 @@ function UnifiedFactCard({ fact, navigation }: { fact: UnifiedTradeFact; navigat
     <View style={styles.row}><Text style={[styles.action, side === "buy" ? styles.buy : styles.sell]}>{directionLabel(fact.side)}</Text><Text style={styles.symbol}>{fact.symbol}</Text><Text style={styles.time}>{formatTimestamp(fact.created_at)}</Text></View>
     <View style={styles.identityRow}><Text style={styles.strategyType}>{strategyKindLabel(fact.identity.kind)}</Text><Text style={[styles.status, statusStyle(fact.status)]}>{statusLabel(fact.status)}</Text></View>
     <View style={styles.metrics}><Text style={styles.metric}>请求额 {displayQuote(fact.requested_quote)}</Text><Text style={styles.metric}>成交额 {displayQuote(fact.filled_quote)}</Text><Text style={styles.metric}>数量 {displayNumber(fact.filled_quantity ?? fact.requested_quantity)}</Text><Text style={styles.metric}>均价 {displayQuote(fact.average_fill_price)}</Text><Text style={styles.metric}>手续费 {displayQuote(fact.fee_quote)}</Text></View>
-    {fact.failure_reason || fact.failure_code ? <Text style={styles.error}>失败原因：{fact.failure_reason ?? fact.failure_code}</Text> : null}
-    <Text style={styles.reason}>{fact.explanation?.decision_reason || "服务端未提供策略决策原因。"}</Text>
+    {fact.failure_reason || fact.failure_code || fact.explanation?.block_reason || fact.status === "submission_unknown" ? <Text style={styles.error}>{fact.failure_reason ?? fact.failure_code ?? fact.explanation?.block_reason ?? "提交结果未确认：正在向原交易所对账，系统不会重新提交订单。"}</Text> : null}
+    <Text style={styles.reason}>{fact.explanation?.decision_reason || "服务端未提供策略决策原因。"}{fact.explanation?.block_reason ? `\n启动/执行阻塞：${fact.explanation.block_reason}` : ""}</Text>
     <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={(event) => { event.stopPropagation(); setExpanded((value) => !value); }} style={styles.conditionsToggle}><Text style={styles.conditionsToggleText}>{expanded ? "收起持久化条件" : "查看持久化条件"}</Text><Text style={styles.conditionsCount}>{fact.explanation?.conditions?.length ?? 0} 项</Text></Pressable>
     {expanded ? <PersistedConditions conditions={fact.explanation?.conditions} /> : null}
     <Text style={styles.openHint}>点击查看持仓、盈亏、K 线与完整执行漏斗</Text>
@@ -130,13 +130,13 @@ function strategyKindLabel(kind: UnifiedTradeFact["identity"]["kind"]): string {
 }
 
 function statusLabel(status: UnifiedTradeFact["status"]): string {
-  return ({ signal: "信号", blocked: "已拦截", pending: "待处理", submitted: "已提交", partially_filled: "部分成交", filled: "已成交", cancelled: "已取消", failed: "失败" } as Record<string, string>)[status] ?? status;
+  return ({ signal: "信号", blocked: "已拦截", pending: "待处理", submitted: "已提交", submission_unknown: "待远端对账（不可重提）", partially_filled: "部分成交", filled: "已成交", cancelled: "已取消", failed: "失败" } as Record<string, string>)[status] ?? status;
 }
 
 function statusStyle(status: UnifiedTradeFact["status"]) {
   if (status === "filled") return styles.statusPositive;
   if (status === "failed" || status === "blocked" || status === "cancelled") return styles.statusNegative;
-  if (status === "partially_filled" || status === "pending") return styles.statusWarning;
+  if (status === "partially_filled" || status === "pending" || status === "submission_unknown") return styles.statusWarning;
   return styles.statusNeutral;
 }
 
@@ -156,9 +156,9 @@ function directionLabel(side: UnifiedTradeFact["side"]): string {
 function DemoOrderCard({ order, batchId, navigation, strategyId, strategyKind }: { order: SandboxOrder; batchId: string | null | undefined; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string; strategyKind?: UnifiedTradeFact["identity"]["kind"] }) {
   return <Pressable accessibilityRole="button" onPress={() => navigation.navigate("StrategyPositions", { strategyId, symbol: order.symbol, orderId: order.id, evaluationId: order.evaluation_id ?? undefined, batchId })} style={styles.card}>
     <View style={styles.row}><Text style={[styles.action, order.side === "buy" ? styles.buy : styles.sell]}>{order.side === "buy" ? "买入" : "卖出"}</Text><Text style={styles.symbol}>{order.symbol}</Text><Text style={styles.time}>{formatTimestamp(order.created_at)}</Text></View>
-    <View style={styles.identityRow}><Text style={styles.strategyType}>{strategyKind ? strategyKindLabel(strategyKind) : "策略类型未知"}</Text><Text style={styles.statusNeutral}>{order.status}</Text></View>
-    <View style={styles.metrics}><Text style={styles.metric}>状态 {order.status}</Text><Text style={styles.metric}>委托 {displayQuote(order.requested_quote)}</Text><Text style={styles.metric}>成交量 {displayNumber(order.filled_quantity)}</Text><Text style={styles.metric}>均价 {displayQuote(order.average_fill_price)}</Text><Text style={styles.metric}>手续费 —</Text></View>
-    {order.error_message || order.error_code ? <Text style={styles.error}>失败原因：{order.error_message ?? order.error_code}</Text> : null}
+    <View style={styles.identityRow}><Text style={styles.strategyType}>{strategyKind ? strategyKindLabel(strategyKind) : "策略类型未知"}</Text><Text style={styles.statusNeutral}>{order.status === "submission_unknown" ? "待远端对账（不可重提）" : order.status === "partially_filled" || order.status === "partial" ? "部分成交" : order.status}</Text></View>
+    <View style={styles.metrics}><Text style={styles.metric}>状态 {order.status === "submission_unknown" ? "待远端对账" : order.status}</Text><Text style={styles.metric}>委托 {displayQuote(order.requested_quote)}</Text><Text style={styles.metric}>成交量 {displayNumber(order.filled_quantity)}</Text><Text style={styles.metric}>均价 {displayQuote(order.average_fill_price)}</Text><Text style={styles.metric}>手续费 —</Text></View>
+    {order.error_message || order.error_code || order.status === "submission_unknown" ? <Text style={styles.error}>{order.error_message ?? order.error_code ?? "提交结果未确认：正在向原交易所对账，系统不会重新提交订单。"}</Text> : null}
     <Text style={styles.reason}>{order.decision_reason ?? order.decision_reason_code ?? "服务端未提供成交原因。"}</Text>
     <TradeDecisionConditions conditions={order.decision_conditions} side={order.side} />
     <Text style={styles.openHint}>点击查看持仓、盈亏、K 线与完整执行漏斗</Text>
