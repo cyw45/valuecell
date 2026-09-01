@@ -1,7 +1,7 @@
-"""Phase A contracts for concurrent strategy execution on one OKX wallet.
+"""Contracts for running configurable and code-owned strategies together.
 
-These contracts are additive. They do not alter the existing configurable rule
-strategy engine or perform venue I/O.
+These contracts describe the Phase A boundary only. They do not alter the
+existing configurable rule engine or execute venue I/O.
 """
 
 from __future__ import annotations
@@ -42,13 +42,13 @@ TradeFactStatus = Literal[
 
 
 class MultiStrategyModel(BaseModel):
-    """Strict wire model for shared strategy/account read models."""
+    """Strict, finite wire contract shared by strategy surfaces."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class StrategyDefinition(MultiStrategyModel):
-    """Stable metadata for configurable and code-owned strategies."""
+    """Stable metadata used by management screens and strategy registration."""
 
     kind: StrategyKind
     display_name: str = Field(min_length=1, max_length=120)
@@ -67,7 +67,9 @@ class StrategyDefinition(MultiStrategyModel):
         if self.parameter_source == "configurable" and not is_configurable:
             raise ValueError("only configurable_rule may expose configurable parameters")
         if self.editable != is_configurable:
-            raise ValueError("editable must match the parameter source")
+            raise ValueError("editable must match the strategy parameter source")
+        if self.parameter_source == "code" and self.rule_source.endswith(".txt") is False:
+            raise ValueError("code-owned strategies require a source specification")
         return self
 
 
@@ -75,7 +77,7 @@ STRATEGY_DEFINITIONS: tuple[StrategyDefinition, ...] = (
     StrategyDefinition(
         kind="configurable_rule",
         display_name="参数策略",
-        description="现有可配置参数策略，保持当前执行行为。",
+        description="现有可配置参数策略；保持当前执行行为。",
         rule_source="existing_rule_strategy",
         strategy_version="existing",
         parameter_source="configurable",
@@ -116,7 +118,7 @@ STRATEGY_DEFINITIONS: tuple[StrategyDefinition, ...] = (
 
 
 class StrategyIdentity(MultiStrategyModel):
-    """Identity carried by every strategy-attributed fact."""
+    """Strategy identity carried by every attributed fact."""
 
     strategy_id: str = Field(min_length=1, max_length=100)
     tenant_id: str = Field(min_length=1, max_length=36)
@@ -140,14 +142,14 @@ class StrategyAllocation(MultiStrategyModel):
     utilization_denominator_quote: float = Field(gt=0)
 
     @model_validator(mode="after")
-    def validate_occupation(self) -> "StrategyAllocation":
+    def validate_utilization_inputs(self) -> "StrategyAllocation":
         if self.occupied_quote > self.reserved_quote:
             raise ValueError("occupied quote cannot exceed reserved quote")
         return self
 
 
 class SharedWalletSummary(MultiStrategyModel):
-    """OKX-authoritative wallet facts, not strategy attribution."""
+    """Exchange-authoritative wallet facts, never strategy-attributed facts."""
 
     tenant_id: str = Field(min_length=1, max_length=36)
     credential_id: str = Field(min_length=1, max_length=36)
@@ -162,7 +164,7 @@ class SharedWalletSummary(MultiStrategyModel):
 
 
 class CapitalAllocatorSummary(MultiStrategyModel):
-    """Account-level funds available to concurrent strategies."""
+    """Account-level funds available for concurrent strategy execution."""
 
     wallet_equity_quote: float | None = None
     available_for_strategies_quote: float | None = None
@@ -175,9 +177,16 @@ class CapitalAllocatorSummary(MultiStrategyModel):
     allocations: list[StrategyAllocation] = Field(default_factory=list)
     observed_at: datetime
 
+    @model_validator(mode="after")
+    def validate_utilization(self) -> "CapitalAllocatorSummary":
+        expected = self.occupied_notional_quote + self.reserved_quote
+        if self.account_utilization_ratio > 1 and expected <= self.utilization_denominator_quote:
+            raise ValueError("account utilization ratio is inconsistent with allocator totals")
+        return self
+
 
 class AccountStrategyOverview(MultiStrategyModel):
-    """Wallet facts plus strategy attribution and reconciliation."""
+    """Combined wallet and attributed strategy summaries for one account."""
 
     wallet: SharedWalletSummary
     allocator: CapitalAllocatorSummary
@@ -194,7 +203,7 @@ class AccountStrategyOverview(MultiStrategyModel):
 
 
 class ExplanationCondition(MultiStrategyModel):
-    """Persisted condition facts displayed beside a trade decision."""
+    """One persisted condition with the facts needed for human review."""
 
     code: str = Field(min_length=1, max_length=128)
     label: str = Field(min_length=1, max_length=255)
@@ -207,7 +216,7 @@ class ExplanationCondition(MultiStrategyModel):
 
 
 class TradeExplanation(MultiStrategyModel):
-    """Durable explanation for a signal, order, or blocked decision."""
+    """Durable decision and execution explanation for a signal or trade."""
 
     decision: str = Field(min_length=1, max_length=64)
     decision_reason: str = Field(min_length=1, max_length=2_000)
