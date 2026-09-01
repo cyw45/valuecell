@@ -268,6 +268,42 @@ def _create_shared_demo_execution_identity_indexes(session: Session) -> None:
         session.execute(text(statement))
 
 
+def provision_quant_tables_with_shared_demo_constraints(session: Session) -> None:
+    """Provision quant tables in FK-safe order under one PostgreSQL DDL lock.
+
+    Existing installations need composite parent identities before PostgreSQL
+    accepts the shared-Demo foreign keys. Fresh installations first need those
+    parent tables themselves. Create non-shared tables, then their identity
+    indexes, then the shared-Demo tables while retaining one transaction-level
+    advisory lock for the complete sequence.
+    """
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "quant table provisioning supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": SHARED_DEMO_EXECUTION_MIGRATION_LOCK_KEY},
+        )
+
+    connection = session.connection()
+    shared_tables = [
+        table
+        for table in Base.metadata.sorted_tables
+        if table.name.startswith("shared_demo_")
+    ]
+    foundational_tables = [
+        table for table in Base.metadata.sorted_tables if table not in shared_tables
+    ]
+    Base.metadata.create_all(bind=connection, tables=foundational_tables)
+    _create_shared_demo_execution_identity_indexes(session)
+    Base.metadata.create_all(bind=connection, tables=shared_tables)
+    session.commit()
+
+
 def _migrate_strategy_capital_reservation_settlement_constraint(
     session: Session,
     dialect: str,

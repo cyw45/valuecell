@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from valuecell.server.services.rule_strategy_monitor_service import (
@@ -53,7 +52,7 @@ class MonitorRepository:
     def __init__(self) -> None:
         self.row = SimpleNamespace(
             id=1,
-            symbol="BTC-USDT",
+            symbol="APT-USDT",
             consecutive_low_volume_days=0,
         )
         self.saved: dict[str, object] = {}
@@ -72,32 +71,23 @@ class MonitorRepository:
         return self.row
 
 
-class MarketMetadataService:
-    def get_monitor_metadata(self, symbols: list[str]):
-        observed_at = datetime(2026, 8, 6, tzinfo=timezone.utc)
-        return {
-            symbol: SimpleNamespace(
-                provider="binance",
-                listing_first_tradable_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
-                listing_age_days=2_410,
-                average_quote_volume_30d=12_500_000.0,
-                price_quote=98_000.0,
-                price_observed_at=observed_at,
-            )
-            for symbol in symbols
-        }
+class RejectingMarketMetadataService:
+    def get_monitor_metadata(self, _symbols: list[str]):
+        raise AssertionError("monitor observation must not depend on provider metadata")
 
 
-def test_monitor_refresh_fetches_and_persists_exchange_facts():
+def test_monitor_refresh_observes_configured_symbols_without_provider_lookup():
     repository = MonitorRepository()
     service = RuleStrategyService(
         repository=repository,
-        market_service=MarketMetadataService(),
+        market_service=RejectingMarketMetadataService(),
     )
 
     service._refresh_monitor_admission("strategy-a", "tenant-a", force=True)
 
-    assert repository.saved["metadata_provider"] == "binance"
-    assert repository.saved["listing_age_days"] == 2_410
-    assert repository.saved["average_quote_volume_30d"] == 12_500_000.0
-    assert repository.saved["price_quote"] == 98_000.0
+    assert repository.saved["state"] == "admitted"
+    assert repository.saved["reason_code"] == "market_metadata_unavailable"
+    assert repository.saved["metadata_provider"] is None
+    assert repository.saved["listing_age_days"] is None
+    assert repository.saved["average_quote_volume_30d"] is None
+    assert repository.saved["price_quote"] is None
