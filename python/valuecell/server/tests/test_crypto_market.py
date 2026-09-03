@@ -61,6 +61,47 @@ def test_default_symbol_catalog_excludes_okx_delisted_markets():
     )
 
 
+@pytest.mark.asyncio
+async def test_market_service_isolates_unknown_usdt_symbol_failures(monkeypatch):
+    service = CryptoMarketService(providers=("gate",))
+
+    async def fake_fetch(*, symbol, interval, source_interval, lookback, providers, time_range):
+        del interval, source_interval, lookback, providers, time_range
+        if symbol == "INJ-USDT":
+            raise RuntimeError("provider does not list symbol")
+        return CryptoSymbolIndicatorsData(
+            symbol=symbol,
+            exchange_symbol=symbol.replace("-", "_"),
+            provider="gate",
+            interval="4h",
+            candles=[
+                CryptoCandleData(
+                    ts=BASE_TS,
+                    open=1.0,
+                    high=1.1,
+                    low=0.9,
+                    close=1.0,
+                    volume=10.0,
+                )
+            ],
+            indicators=[],
+            latest_price=1.0,
+            freshness_status="fresh",
+        )
+
+    monkeypatch.setattr(service, "_fetch_symbol_with_indicators", fake_fetch)
+
+    result = await service.get_indicators(
+        symbols=["BTC-USDT", "INJ-USDT"],
+        interval="4h",
+        lookback=80,
+        allow_dynamic_symbols=True,
+    )
+
+    assert [item.symbol for item in result.symbols] == ["BTC-USDT"]
+    assert result.failed_symbols == {"INJ-USDT": "provider does not list symbol"}
+
+
 @pytest.fixture(autouse=True)
 def reset_market_provider_attempts(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("VALUECELL_MARKET_DATA_PROVIDER_ATTEMPTS", raising=False)

@@ -328,8 +328,11 @@ class CryptoMarketService:
         providers: list[str] | None = None,
         from_ts_ms: int | None = None,
         to_ts_ms: int | None = None,
+        allow_dynamic_symbols: bool = False,
     ) -> CryptoMarketIndicatorsData:
-        normalized_symbols = self._normalize_symbols(symbols)
+        normalized_symbols = self._normalize_symbols(
+            symbols, allow_dynamic_symbols=allow_dynamic_symbols
+        )
         normalized_interval = self._normalize_interval(interval)
         normalized_lookback = self._normalize_lookback(lookback)
         time_range = self._normalize_time_range(from_ts_ms, to_ts_ms)
@@ -952,7 +955,9 @@ class CryptoMarketService:
             )
         return points
 
-    def _normalize_symbols(self, symbols: list[str]) -> list[str]:
+    def _normalize_symbols(
+        self, symbols: list[str], *, allow_dynamic_symbols: bool = False
+    ) -> list[str]:
         if not symbols:
             return ["BTC-USDT"]
         normalized: list[str] = []
@@ -960,7 +965,7 @@ class CryptoMarketService:
             symbol = raw_symbol.strip().upper().replace("/", "-")
             if not symbol.endswith("-USDT"):
                 raise ValueError(f"Only USDT crypto symbols are supported: {raw_symbol}")
-            if symbol not in self._symbol_set:
+            if not allow_dynamic_symbols and symbol not in self._symbol_set:
                 raise ValueError(f"Unsupported crypto symbol: {symbol}")
             if symbol not in normalized:
                 normalized.append(symbol)

@@ -765,6 +765,7 @@ class StrategyScheduler:
                 symbols=symbols,
                 interval="4h",
                 lookback=lookback,
+                allow_dynamic_symbols=True,
             )
         except Exception as exc:  # noqa: BLE001
             _safe_warning("FIXED_STRATEGY_MARKET_FETCH_FAILED", count=len(symbols), exc=exc)

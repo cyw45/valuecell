@@ -222,9 +222,9 @@ function formatValue(value: number | string | boolean | null): string {
 }
 
 export function formatConditionValues(
-  values: Record<string, number | string | boolean | null>,
+  values?: Record<string, number | string | boolean | null> | null,
 ): string {
-  const entries = Object.entries(values);
+  const entries = Object.entries(values ?? {});
   if (!entries.length) return "无实际值";
   return entries
     .map(([key, value]) => `${key}=${formatValue(value)}`)

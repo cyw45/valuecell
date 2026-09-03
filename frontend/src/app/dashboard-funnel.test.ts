@@ -105,4 +105,11 @@ describe("dashboard evaluation funnel", () => {
       "macd=1.2346 · signal=-0.5 · previous=不可用 · ready=是",
     );
   });
+
+  test("renders a legacy condition with null values without throwing", () => {
+    assert.equal(
+      formatConditionValues(null),
+      "无实际值",
+    );
+  });
 });
