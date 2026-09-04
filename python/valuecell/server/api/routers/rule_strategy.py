@@ -173,7 +173,7 @@ class FixedStrategyCreateRequest(BaseModel):
     kind: Literal["dual_ma_trend", "pair_rotation", "leader_breakout"]
     name: str = Field(min_length=1, max_length=200)
     initial_capital_quote: float = Field(gt=0, le=100_000_000)
-    environment: Literal["paper", "okx_demo"] = "paper"
+    environment: Literal["paper", "okx_demo"] = "okx_demo"
     credential_id: str | None = Field(default=None, min_length=1, max_length=36)
 class RuleStrategyManualCloseRequest(BaseModel):
     """Explicit, typed confirmation for one-symbol or all-position Demo close."""

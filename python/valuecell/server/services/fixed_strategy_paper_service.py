@@ -91,6 +91,7 @@ class FixedPaperEvaluationService:
             signal = evaluate_fixed_strategy(strategy_kind, request)
         result = {
             "strategy_kind": signal.kind,
+            "symbol": signal.symbol,
             "action": signal.action,
             "reason_code": signal.reason_code,
             "reason": signal.reason,

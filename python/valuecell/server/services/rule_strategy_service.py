@@ -108,17 +108,22 @@ class RuleStrategyService:
             strategy_version="existing",
             code_fingerprint="legacy-configurable",
             status="stopped",
-            paper_mode=True,
+            paper_mode=config.execution.environment == "paper",
             config=config.model_dump(mode="json"),
         )
         create_with_state = getattr(self.repository, "create_with_current_state", None)
         if create_with_state is None:
             strategy = self.repository.create(strategy)
         else:
+            scope = (
+                "paper_virtual"
+                if config.execution.environment == "paper"
+                else "shared_exchange_account"
+            )
             strategy = create_with_state(
                 strategy,
-                scope="paper_virtual",
-                credential_id=None,
+                scope=scope,
+                credential_id=config.execution.sandbox_connection_id,
                 symbol_candidates=config.symbols,
             )
         return self._strategy_data(strategy)
