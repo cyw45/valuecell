@@ -18,6 +18,16 @@ from valuecell.server.db.models.multi_strategy import (
     StrategySharedAccount,
 )
 from valuecell.server.db.models.rule_strategy import RuleStrategy
+from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoAccountSnapshot,
+    SharedDemoFill,
+    SharedDemoOrderProjection,
+    SharedDemoVenueOrder,
+)
+from valuecell.server.services.rule_strategy_demo_execution_read_model import (
+    _pnl_and_curve,
+    _shared_evidence_orders,
+)
 
 
 class SharedAccountSummaryUnavailable(RuntimeError):
@@ -43,6 +53,51 @@ def _active_reservations(
         )
         .all()
     )
+
+
+def _strategy_demo_pnl(
+    session: Session,
+    *,
+    tenant_id: str,
+    credential_id: str,
+    strategy_id: str,
+    account_id: str,
+) -> tuple[float | None, float | None, float | None]:
+    """Replay only strategy-owned Demo fills and mark open lots with wallet snapshots."""
+    venue_orders = session.query(SharedDemoVenueOrder).filter_by(
+        tenant_id=tenant_id,
+        credential_id=credential_id,
+        strategy_id=strategy_id,
+        account_id=account_id,
+        environment="okx_demo",
+    ).all()
+    order_ids = [row.order_id for row in venue_orders]
+    if not order_ids:
+        return None, None, None
+    projections = session.query(SharedDemoOrderProjection).filter(
+        SharedDemoOrderProjection.order_id.in_(order_ids)
+    ).all()
+    fills = session.query(SharedDemoFill).filter(
+        SharedDemoFill.order_id.in_(order_ids)
+    ).order_by(SharedDemoFill.occurred_at.asc()).all()
+    orders = _shared_evidence_orders(
+        [], fills=fills, venue_orders=venue_orders, projections=projections
+    )
+    snapshots = session.query(SharedDemoAccountSnapshot).filter_by(
+        account_id=account_id,
+        tenant_id=tenant_id,
+        credential_id=credential_id,
+        environment="okx_demo",
+    ).order_by(SharedDemoAccountSnapshot.observed_at.desc()).all()
+    positions = {"positions": list(snapshots[0].positions or [])} if snapshots else {"positions": []}
+    pnl, _ = _pnl_and_curve(orders, positions, (snapshots[0].observed_at.isoformat() if snapshots else datetime.now(timezone.utc).isoformat()))
+    realized = float(pnl["realized"]) if pnl.get("realized") is not None else None
+    unrealized = float(pnl["unrealized"]) if pnl.get("unrealized") is not None else None
+    if realized is None and unrealized is None:
+        return None, None, None
+    fees = sum(float(row.fee_quote or 0) for row in fills)
+    net = (realized or 0.0) + (unrealized or 0.0) - fees
+    return realized, unrealized, net
 
 
 def build_shared_account_overview(
@@ -105,11 +160,16 @@ def build_shared_account_overview(
             lifecycle_reason = "策略已运行，但当前批次尚无资金预留或订单事实。"
         elif account.attribution_status != "complete":
             lifecycle_reason = "共享钱包已同步，但策略归属成交仍待完整对账。"
-        # Shared-wallet strategy PnL must be derived from attributed Demo fills.
-        # Paper account rows are a separate ledger and cannot enter this read model.
-        realized = None
-        unrealized = None
-        net = None
+        realized, unrealized, net = _strategy_demo_pnl(
+            session,
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            strategy_id=strategy_id,
+            account_id=account.id,
+        )
+        initial_capital = strategy.config.get("initial_capital_quote") if isinstance(strategy.config, dict) else None
+        return_base = float(initial_capital) if initial_capital and float(initial_capital) > 0 else reserved or denominator
+        return_rate = net / return_base if net is not None and return_base > 0 else None
         allocations.append(
             StrategyAllocation(
                 strategy_id=strategy_id,
@@ -120,6 +180,7 @@ def build_shared_account_overview(
                 realized_pnl_quote=realized,
                 unrealized_pnl_quote=unrealized,
                 net_pnl_quote=net,
+                return_rate_pct=return_rate,
                 allocation_state=state,
                 lifecycle_reason=lifecycle_reason,
                 utilization_denominator_quote=denominator,

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildDemoEquityCurve,
   buildStrategyHoldingRows,
+  allocationPnlPresentation,
   demoOrderStatusLabel,
   demoPnlPresentation,
   demoPurchaseStatePresentation,
@@ -31,6 +32,19 @@ test("null amounts are never rendered as zero", () => {
   assert.equal(formatOptionalAmount(undefined), "—");
   assert.equal(formatOptionalAmount(0), "0.00");
   assert.equal(formatOptionalAmount("12.5"), "12.50");
+});
+
+test("allocation pnl keeps unavailable values explicit and formats return rate", () => {
+  assert.deepEqual(allocationPnlPresentation(null, null), {
+    value: "—",
+    returnRate: "—",
+    available: false,
+  });
+  assert.deepEqual(allocationPnlPresentation(18, 0.03), {
+    value: "18.00",
+    returnRate: "3.00%",
+    available: true,
+  });
 });
 
 test("strategy holdings exclude unrelated shared-account assets", () => {

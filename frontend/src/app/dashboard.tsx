@@ -48,6 +48,7 @@ import {
 import {
   buildDemoEquityCurve,
   buildStrategyHoldingRows,
+  allocationPnlPresentation,
   demoOrderStatusLabel,
   demoPnlPresentation,
   demoPurchaseStatePresentation,
@@ -976,22 +977,25 @@ export default function DashboardPage() {
                               <TableHead className="text-right">预留</TableHead>
                               <TableHead className="text-right">占用</TableHead>
                               <TableHead className="text-right">已释放</TableHead>
-                              <TableHead className="text-right">净 PnL</TableHead>
+                              <TableHead className="text-right">已实现</TableHead>
+                              <TableHead className="text-right">未实现</TableHead>
+                              <TableHead className="text-right">净 PnL / 收益率</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {sharedAccountSummary.allocator.allocations.length === 0 ? (
                               <TableRow>
-                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={6}>
+                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={8}>
                                   暂无策略分配记录。
                                 </TableCell>
                               </TableRow>
                             ) : (
                               sharedAccountSummary.allocator.allocations.map((allocation) => (
                                 <TableRow key={allocation.strategy_id}>
-                                  <TableCell>
-                                    <div className="flex min-w-32 flex-col gap-1">
-                                      <span className="font-medium">{allocation.kind}</span>
+                                <TableCell>
+                                    <div className="flex min-w-40 flex-col gap-1">
+                                      <span className="font-medium">{strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.name ?? allocation.kind}</span>
+                                      <span className="text-[10px] text-muted-foreground">{allocation.kind}</span>
                                       <span className="font-mono text-[10px] text-muted-foreground" title={allocation.strategy_id}>
                                         {allocation.strategy_id}
                                       </span>
@@ -1019,8 +1023,10 @@ export default function DashboardPage() {
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.reserved_quote)}</TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.occupied_quote)}</TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.released_quote)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.realized_pnl_quote)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.unrealized_pnl_quote)}</TableCell>
                                   <TableCell className={cn("text-right tabular-nums", allocation.net_pnl_quote == null ? "text-muted-foreground" : allocation.net_pnl_quote >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300")}>
-                                    {formatQuote(allocation.net_pnl_quote)}
+                                    {(() => { const pnl = allocationPnlPresentation(allocation.net_pnl_quote, allocation.return_rate_pct); return <><div>{pnl.value} USDT</div><div className="text-xs">收益率 {pnl.returnRate}</div></>; })()}
                                   </TableCell>
                                 </TableRow>
                               ))

@@ -16,6 +16,23 @@ export function formatOptionalAmount(value?: string | number | null): string {
   return Number.isFinite(numeric) ? numberFormatter.format(numeric) : "—";
 }
 
+export function allocationPnlPresentation(
+  value: number | null | undefined,
+  returnRate: number | null | undefined,
+) {
+  if (value == null || !Number.isFinite(value)) {
+    return { value: "—", returnRate: "—", available: false };
+  }
+  return {
+    value: formatOptionalAmount(value),
+    returnRate:
+      returnRate == null || !Number.isFinite(returnRate)
+        ? "—"
+        : `${(returnRate * 100).toFixed(2)}%`,
+    available: true,
+  };
+}
+
 export type StrategyHoldingRow = {
   symbol: string;
   position: {

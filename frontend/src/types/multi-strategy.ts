@@ -45,6 +45,7 @@ export type StrategyAllocation = {
   realized_pnl_quote: number | null;
   unrealized_pnl_quote: number | null;
   net_pnl_quote: number | null;
+  return_rate_pct: number | null;
   allocation_state: AllocationState;
   lifecycle_reason?: string | null;
   utilization_denominator_quote: number;
