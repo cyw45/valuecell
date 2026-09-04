@@ -48,6 +48,81 @@ def _condition(value: Any, observed_at: datetime) -> ExplanationCondition | None
     )
 
 
+def _shared_demo_facts(
+    identity: StrategyIdentity,
+    journal: Any,
+    conditions: list[ExplanationCondition],
+    reason: str,
+    shared_orders: list[Any],
+    shared_fills: list[Any],
+) -> list[UnifiedTradeFact]:
+    """Build one fact per shared Demo order without consulting Paper rows."""
+    fills_by_order: dict[str, list[Any]] = {}
+    for fill in shared_fills:
+        order_id = _field(fill, "order_id")
+        if order_id:
+            fills_by_order.setdefault(str(order_id), []).append(fill)
+    facts: list[UnifiedTradeFact] = []
+    for order in shared_orders:
+        order_id = str(_field(order, "order_id") or "")
+        if not order_id:
+            continue
+        side_value = str(_field(order, "side") or "")
+        side = side_value if side_value in {"buy", "sell", "short", "cover"} else None
+        symbol = _field(order, "symbol") or journal.result.get("symbol")
+        if side is None or not isinstance(symbol, str) or not symbol:
+            continue
+        fills = fills_by_order.get(order_id, [])
+        quantity = sum((_number(_field(item, "quantity")) or 0 for item in fills), 0.0)
+        quote = sum((_number(_field(item, "quote_amount")) or 0 for item in fills), 0.0)
+        fee = sum((_number(_field(item, "fee_quote")) or 0 for item in fills), 0.0)
+        price = quote / quantity if quantity > 0 and quote > 0 else None
+        status = str(_field(order, "status") or "pending")
+        status_map = {
+            "open": "submitted",
+            "rejected": "failed",
+            "partial": "partially_filled",
+        }
+        normalized_status = status_map.get(status, status)
+        if normalized_status not in {"signal", "blocked", "pending", "submitted", "submission_unknown", "partially_filled", "filled", "cancelled", "failed"}:
+            normalized_status = "pending"
+        facts.append(
+            UnifiedTradeFact(
+                identity=identity,
+                batch_id=_field(order, "batch_id") or getattr(journal, "batch_id", None),
+                evaluation_id=getattr(journal, "evaluation_id", None),
+                intent_id=_field(order, "intent_id"),
+                order_id=order_id,
+                fill_id=str(_field(fills[0], "fill_id")) if fills else None,
+                symbol=symbol,
+                side=side,
+                status=normalized_status,
+                requested_quote=_number(_field(order, "requested_quote")),
+                filled_quote=quote or None,
+                requested_quantity=_number(_field(order, "requested_quantity")),
+                filled_quantity=quantity or None,
+                average_fill_price=price,
+                fee_quote=fee or None,
+                created_at=getattr(journal, "created_at"),
+                filled_at=_field(fills[-1], "occurred_at") if fills else None,
+                explanation=TradeExplanation(
+                    decision=str(journal.result.get("action") or side),
+                    decision_reason=reason,
+                    conditions=conditions,
+                    execution_path="okx_demo",
+                    final_result=normalized_status,
+                ),
+            )
+        )
+    return facts
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
 def journal_trade_facts(
     strategy: Any,
     journal: Any,
@@ -109,6 +184,17 @@ def journal_trade_facts(
                     execution_path=str(trade.get("execution")) if trade.get("execution") else None,
                     final_result="paper_filled" if trade.get("execution") == "paper_filled" else None,
                 ),
+            )
+        )
+    if shared_orders:
+        facts.extend(
+            _shared_demo_facts(
+                identity,
+                journal,
+                conditions,
+                reason,
+                shared_orders,
+                shared_fills or [],
             )
         )
     return facts

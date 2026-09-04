@@ -27,6 +27,8 @@ AllocationState = Literal[
     "partially_released",
     "released",
     "blocked",
+    "submission_unknown",
+    "recovery_required",
 ]
 TradeFactSide = Literal["buy", "sell", "short", "cover"]
 TradeFactStatus = Literal[
@@ -34,6 +36,7 @@ TradeFactStatus = Literal[
     "blocked",
     "pending",
     "submitted",
+    "submission_unknown",
     "partially_filled",
     "filled",
     "cancelled",
