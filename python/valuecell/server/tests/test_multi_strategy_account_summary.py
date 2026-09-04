@@ -98,6 +98,7 @@ def test_summary_separates_wallet_and_strategy_allocation() -> None:
     assert overview.allocator.reserved_quote == 400
     assert overview.allocator.occupied_notional_quote == 300
     assert overview.allocator.allocations[0].net_pnl_quote is None
+    assert overview.allocator.allocations[0].lifecycle_reason is not None
     assert overview.strategy_pnl_total_quote is None
 
 

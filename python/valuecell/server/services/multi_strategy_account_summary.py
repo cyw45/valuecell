@@ -98,6 +98,13 @@ def build_shared_account_overview(
         occupied = sum(float(row.consumed_quote) for row in rows)
         released = sum(float(row.released_quote) for row in rows)
         state = "occupied" if occupied > 0 else "reserved" if reserved > 0 else "available"
+        lifecycle_reason = None
+        if strategy.status != "running":
+            lifecycle_reason = "策略当前未运行，尚未产生本批次执行事实。"
+        elif not rows:
+            lifecycle_reason = "策略已运行，但当前批次尚无资金预留或订单事实。"
+        elif account.attribution_status != "complete":
+            lifecycle_reason = "共享钱包已同步，但策略归属成交仍待完整对账。"
         # Shared-wallet strategy PnL must be derived from attributed Demo fills.
         # Paper account rows are a separate ledger and cannot enter this read model.
         realized = None
@@ -114,6 +121,7 @@ def build_shared_account_overview(
                 unrealized_pnl_quote=unrealized,
                 net_pnl_quote=net,
                 allocation_state=state,
+                lifecycle_reason=lifecycle_reason,
                 utilization_denominator_quote=denominator,
             )
         )
