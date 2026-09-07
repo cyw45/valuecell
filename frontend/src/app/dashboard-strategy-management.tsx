@@ -8,6 +8,7 @@ import {
   useRuleStrategies,
   useRuleStrategyLifecycleAction,
 } from "@/api/rule-strategy";
+import { useSandboxConnections } from "@/api/sandbox-exchange";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -156,6 +157,11 @@ export function DashboardStrategyManagement() {
   const [activeStrategyId, setActiveStrategyId] = useActiveRuleStrategyId();
   const strategiesQuery = useRuleStrategies(tenantId);
   const createFixed = useCreateFixedRuleStrategy();
+  const sandboxConnections = useSandboxConnections();
+  const okxDemoConnections = (sandboxConnections.data ?? []).filter(
+    (connection) => connection.provider === "okx" && connection.metadata.sandbox,
+  );
+  const [demoCredentialId, setDemoCredentialId] = useState("");
   const lifecycleAction = useRuleStrategyLifecycleAction();
   const strategies = strategiesQuery.data ?? [];
   const fixedDefinitions = [
@@ -186,12 +192,18 @@ export function DashboardStrategyManagement() {
     }
   };
   const createFixedStrategy = async (kind: "dual_ma_trend" | "pair_rotation" | "leader_breakout", name: string) => {
+    const credentialId = demoCredentialId || okxDemoConnections[0]?.id;
+    if (!credentialId) {
+      toast.error("请先在设置中验证一个 OKX Demo 连接。", { id: "fixed-demo-credential" });
+      return;
+    }
     try {
       await createFixed.mutateAsync({
         kind,
         name,
         initial_capital_quote: 10_000,
-        environment: "paper",
+        environment: "okx_demo",
+        credential_id: credentialId,
       });
       toast.success(`${name}已创建，规则固定且当前处于停止状态。`);
     } catch (error) {
@@ -218,6 +230,23 @@ export function DashboardStrategyManagement() {
         <section className="mb-4 rounded-lg border border-sky-500/20 bg-sky-500/5 p-3">
           <p className="font-medium text-sm">代码固定策略</p>
           <p className="mt-1 text-muted-foreground text-xs">规则由代码版本管理，创建后可统一启停，但不能在前端编辑参数。</p>
+          {okxDemoConnections.length > 0 ? (
+            <div className="mt-3 flex items-center gap-2">
+              <Label htmlFor="fixed-demo-credential" className="text-xs">共享 Demo 连接</Label>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+                id="fixed-demo-credential"
+                onChange={(event) => setDemoCredentialId(event.target.value)}
+                value={demoCredentialId || okxDemoConnections[0].id}
+              >
+                {okxDemoConnections.map((connection) => (
+                  <option key={connection.id} value={connection.id}>{connection.label}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <p className="mt-2 text-amber-600 text-xs">尚未验证 OKX Demo 连接，固定策略暂不能创建。</p>
+          )}
           <div className="mt-3 flex flex-wrap gap-2">
             {fixedDefinitions.map((definition) => <Button disabled={createFixed.isPending} key={definition.kind} onClick={() => void createFixedStrategy(definition.kind, definition.name)} size="sm" type="button" variant="outline">{definition.name}</Button>)}
           </div>

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { SandboxOrder } from "@/types/sandbox-exchange";
+import type { UnifiedTradeFact } from "@/types/multi-strategy";
 import {
   decisionConditions,
   decisionLabel,
   formatConditionValues,
+  formatTradeFactIdentifiers,
+  tradeFactStatusDescription,
 } from "./trades-strategy-conditions";
 
 const order: SandboxOrder = {
@@ -98,4 +101,26 @@ test("comparison values render as an explicit actual-value judgment", () => {
     formatConditionValues({ left: 11.544, comparator: "lt", right: 11.54495 }),
     "（实际值 11.544 < 目标值 11.54495）",
   );
+});
+
+test("trade facts expose every durable lifecycle identifier", () => {
+  const fact = {
+    batch_id: "batch-1",
+    intent_id: "intent-1",
+    order_id: "order-1",
+    fill_id: "fill-1",
+    reservation_id: "reservation-1",
+  } as UnifiedTradeFact & { reservation_id: string };
+  assert.deepEqual(formatTradeFactIdentifiers(fact), [
+    "批次 batch-1",
+    "预留 reservation-1",
+    "意图 intent-1",
+    "订单 order-1",
+    "成交 fill-1",
+  ]);
+});
+
+test("unknown submission copy states that resubmission is forbidden", () => {
+  assert.match(tradeFactStatusDescription("submission_unknown"), /不可重提/);
+  assert.match(tradeFactStatusDescription("recovery_required"), /恢复/);
 });

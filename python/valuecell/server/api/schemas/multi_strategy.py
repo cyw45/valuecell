@@ -27,6 +27,8 @@ AllocationState = Literal[
     "partially_released",
     "released",
     "blocked",
+    "submission_unknown",
+    "recovery_required",
 ]
 TradeFactSide = Literal["buy", "sell", "short", "cover"]
 TradeFactStatus = Literal[
@@ -34,6 +36,8 @@ TradeFactStatus = Literal[
     "blocked",
     "pending",
     "submitted",
+    "submission_unknown",
+    "recovery_required",
     "partially_filled",
     "filled",
     "cancelled",
@@ -138,7 +142,9 @@ class StrategyAllocation(MultiStrategyModel):
     realized_pnl_quote: float | None = None
     unrealized_pnl_quote: float | None = None
     net_pnl_quote: float | None = None
+    return_rate_pct: float | None = None
     allocation_state: AllocationState
+    lifecycle_reason: str | None = Field(default=None, max_length=1_000)
     utilization_denominator_quote: float = Field(gt=0)
 
     @model_validator(mode="after")
@@ -234,6 +240,7 @@ class UnifiedTradeFact(MultiStrategyModel):
     batch_id: str | None = Field(default=None, max_length=36)
     evaluation_id: str | None = Field(default=None, max_length=100)
     intent_id: str | None = Field(default=None, max_length=36)
+    reservation_id: str | None = Field(default=None, max_length=36)
     order_id: str | None = Field(default=None, max_length=128)
     fill_id: str | None = Field(default=None, max_length=36)
     symbol: str = Field(min_length=1, max_length=32)

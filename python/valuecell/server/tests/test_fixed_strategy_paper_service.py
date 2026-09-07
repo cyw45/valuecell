@@ -55,6 +55,7 @@ def test_fixed_paper_service_persists_signal_conditions_and_batch() -> None:
     assert evaluation_id == "fixed-evaluation-1"
     assert repository.journal.batch_id == "batch-a"
     assert repository.journal.result["conditions"]
+    assert repository.journal.result["symbol"] == "BTC-USDT"
     assert repository.journal.result["execution_ledger"] == "paper_signal_only"
 
 

@@ -8,6 +8,12 @@ from valuecell.server.api.schemas.multi_strategy import StrategyAllocation
 from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation, StrategySharedAccount
 from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyAccount
+from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoAccountSnapshot,
+    SharedDemoFill,
+    SharedDemoOrderProjection,
+    SharedDemoVenueOrder,
+)
 from valuecell.server.db.models.tenant import Tenant
 from valuecell.server.services.multi_strategy_account_summary import (
     SharedAccountSummaryUnavailable,
@@ -98,7 +104,147 @@ def test_summary_separates_wallet_and_strategy_allocation() -> None:
     assert overview.allocator.reserved_quote == 400
     assert overview.allocator.occupied_notional_quote == 300
     assert overview.allocator.allocations[0].net_pnl_quote is None
+    assert overview.allocator.allocations[0].lifecycle_reason is not None
     assert overview.strategy_pnl_total_quote is None
+
+
+def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:
+    session = _session()
+    session.add(
+        SharedDemoAccountSnapshot(
+            snapshot_id="snapshot-a",
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            observed_at=datetime(2026, 8, 28, 12, tzinfo=timezone.utc),
+            wallet_equity_quote=1_020,
+            available_quote=620,
+            balances=[],
+            positions=[],
+            open_orders=[],
+        )
+    )
+    session.add(
+        SharedDemoVenueOrder(
+            order_id="order-buy",
+            intent_id="intent-buy",
+            reservation_id="reservation-a",
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            strategy_id="strategy-a",
+            batch_id="batch-a",
+            client_order_id="client-buy",
+            symbol="BTC-USDT",
+            side="buy",
+            order_type="market",
+            leg_kind="entry",
+            requested_quantity=1,
+            requested_quote=100,
+        )
+    )
+    session.add(
+        SharedDemoVenueOrder(
+            order_id="order-sell",
+            intent_id="intent-sell",
+            reservation_id="reservation-a",
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            strategy_id="strategy-a",
+            batch_id="batch-a",
+            client_order_id="client-sell",
+            symbol="BTC-USDT",
+            side="sell",
+            order_type="market",
+            leg_kind="exit",
+            requested_quantity=1,
+            requested_quote=120,
+        )
+    )
+    session.add_all(
+        [
+            SharedDemoFill(
+                fill_id="fill-buy",
+                order_id="order-buy",
+                venue="okx",
+                venue_fill_id="venue-fill-buy",
+                account_id="account-a",
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                environment="okx_demo",
+                strategy_id="strategy-a",
+                batch_id="batch-a",
+                price=100,
+                quantity=1,
+                quote_amount=100,
+                occurred_at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc),
+                reconciliation_source="test",
+            ),
+            SharedDemoFill(
+                fill_id="fill-sell",
+                order_id="order-sell",
+                venue="okx",
+                venue_fill_id="venue-fill-sell",
+                account_id="account-a",
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                environment="okx_demo",
+                strategy_id="strategy-a",
+                batch_id="batch-a",
+                price=120,
+                quantity=1,
+                quote_amount=120,
+                fee_quote=2,
+                occurred_at=datetime(2026, 8, 28, 11, tzinfo=timezone.utc),
+                reconciliation_source="test",
+            ),
+        ]
+    )
+    session.add_all(
+        [
+            SharedDemoOrderProjection(
+                order_id="order-buy",
+                account_id="account-a",
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                environment="okx_demo",
+                strategy_id="strategy-a",
+                batch_id="batch-a",
+                status="filled",
+                filled_quantity=1,
+                filled_quote=100,
+            ),
+            SharedDemoOrderProjection(
+                order_id="order-sell",
+                account_id="account-a",
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                environment="okx_demo",
+                strategy_id="strategy-a",
+                batch_id="batch-a",
+                status="filled",
+                filled_quantity=1,
+                filled_quote=120,
+                fee_quote=2,
+            ),
+        ]
+    )
+    session.commit()
+
+    allocation = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    ).allocator.allocations[0]
+
+    assert allocation.realized_pnl_quote == pytest.approx(20)
+    assert allocation.unrealized_pnl_quote == pytest.approx(0)
+    assert allocation.net_pnl_quote == pytest.approx(18)
+    assert allocation.return_rate_pct == pytest.approx(18 / 600)
 
 
 def test_summary_requires_authoritative_allocator_equity() -> None:

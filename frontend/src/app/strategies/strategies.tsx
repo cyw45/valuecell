@@ -31,9 +31,11 @@ import {
   useParseRuleStrategyText,
   useRuleStrategies,
   useRuleStrategy,
+  useRuleStrategyDemoExecution,
   useStartRuleStrategy,
   useStopRuleStrategy,
   useUpdateRuleStrategy,
+  useSharedAccountSummary,
 } from "@/api/rule-strategy";
 import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
 import { useSandboxConnections } from "@/api/sandbox-exchange";
@@ -642,6 +644,18 @@ export function RuleStrategyConfiguration({
   const strategiesQuery = useRuleStrategies(tenantId);
   const symbolsQuery = useGetCryptoSymbols();
   const strategyQuery = useRuleStrategy(strategyId);
+  const demoExecutionQuery = useRuleStrategyDemoExecution(
+    strategyId || undefined,
+    strategyQuery.data?.config.execution.environment === "okx_demo",
+    1,
+    20,
+  );
+  const demoCredentialId = strategyQuery.data?.config.execution.sandbox_connection_id;
+  const sharedAccountQuery = useSharedAccountSummary(
+    strategyQuery.data?.config.execution.environment === "okx_demo"
+      ? demoCredentialId
+      : undefined,
+  );
   const createStrategy = useCreateRuleStrategy();
   const updateStrategy = useUpdateRuleStrategy(strategyId);
   const deleteStrategy = useDeleteRuleStrategy(strategyId);
@@ -2662,7 +2676,22 @@ export function RuleStrategyConfiguration({
             </CardContent>
           </Card>
 
-          {storedStrategy ? (
+          {storedStrategy?.config.execution.environment === "okx_demo" ? (
+            <Card className="gap-0 rounded-lg border-sky-500/30 py-0 shadow-none">
+              <CardHeader className="border-b px-4 py-4">
+                <CardTitle className="text-base">OKX Demo 策略归属</CardTitle>
+                <CardDescription>
+                  共享钱包是账户事实；以下 PnL 仅来自该策略已确认成交的归属重放。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-4 text-sm">
+                <SummaryRow label="共享钱包总权益" value={sharedAccountQuery.data?.wallet.total_equity_quote == null ? "不可用" : `${sharedAccountQuery.data.wallet.total_equity_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="策略占用资金" value={sharedAccountQuery.data?.allocator.allocations.find((allocation) => allocation.strategy_id === strategyId)?.occupied_quote == null ? "不可用" : `${sharedAccountQuery.data.allocator.allocations.find((allocation) => allocation.strategy_id === strategyId)?.occupied_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="策略净 PnL" value={demoExecutionQuery.data?.pnl.total == null ? "不可用" : `${Number(demoExecutionQuery.data.pnl.total).toFixed(2)} USDT`} />
+                <SummaryRow label="归因/同步状态" value={demoExecutionQuery.data?.lifecycle?.attribution_status === "complete" ? "归因完成" : "归因待完成"} />
+              </CardContent>
+            </Card>
+          ) : storedStrategy ? (
             <Card className="gap-0 rounded-lg py-0 shadow-none">
               <CardHeader className="border-b px-4 py-4">
                 <CardTitle className="text-base">Paper account</CardTitle>

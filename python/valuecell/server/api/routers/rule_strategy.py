@@ -16,6 +16,7 @@ from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.schemas.base import SuccessResponse
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.tenant_credential import TenantCredential
+from valuecell.server.db.models.rule_strategy import RuleStrategyExecutionIntent
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
@@ -173,7 +174,7 @@ class FixedStrategyCreateRequest(BaseModel):
     kind: Literal["dual_ma_trend", "pair_rotation", "leader_breakout"]
     name: str = Field(min_length=1, max_length=200)
     initial_capital_quote: float = Field(gt=0, le=100_000_000)
-    environment: Literal["paper", "okx_demo"] = "paper"
+    environment: Literal["paper", "okx_demo"] = "okx_demo"
     credential_id: str | None = Field(default=None, min_length=1, max_length=36)
 class RuleStrategyManualCloseRequest(BaseModel):
     """Explicit, typed confirmation for one-symbol or all-position Demo close."""
@@ -405,8 +406,52 @@ def create_rule_strategy_router(
                 limit=limit,
                 batch_id=effective_batch_id,
             )
+            execution = (strategy.config or {}).get("execution", {})
+            shared_evidence = {
+                "venue_orders": [],
+                "fills": [],
+            }
+            if execution.get("environment") == "okx_demo" and execution.get("sandbox_connection_id"):
+                shared_evidence = shared_demo_evidence_for_strategy(
+                    db,
+                    tenant_id=principal.tenant_id,
+                    credential_id=execution["sandbox_connection_id"],
+                    strategy_id=strategy.strategy_id,
+                    batch_id=effective_batch_id,
+                )
             for journal in journals:
-                facts.extend(journal_trade_facts(strategy, journal))
+                journal_orders = shared_evidence["venue_orders"]
+                journal_fills = shared_evidence["fills"]
+                if journal_orders:
+                    intent_ids = {
+                        str(intent.id): intent.evaluation_id
+                        for intent in db.query(RuleStrategyExecutionIntent)
+                        .filter_by(
+                            tenant_id=principal.tenant_id,
+                            strategy_id=strategy.strategy_id,
+                            batch_id=effective_batch_id,
+                        )
+                        .all()
+                    }
+                    matching_order_ids = {
+                        str(order.order_id)
+                        for order in journal_orders
+                        if intent_ids.get(str(order.intent_id)) == journal.evaluation_id
+                    }
+                    journal_orders = [
+                        order for order in journal_orders if str(order.order_id) in matching_order_ids
+                    ]
+                    journal_fills = [
+                        fill for fill in journal_fills if str(fill.order_id) in matching_order_ids
+                    ]
+                facts.extend(
+                    journal_trade_facts(
+                        strategy,
+                        journal,
+                        shared_orders=journal_orders,
+                        shared_fills=journal_fills,
+                    )
+                )
         facts.sort(key=lambda item: item.created_at, reverse=True)
         return SuccessResponse.create(
             data=[item.model_dump(mode="json") for item in facts[:limit]],
