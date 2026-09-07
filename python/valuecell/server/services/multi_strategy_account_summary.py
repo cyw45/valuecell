@@ -22,6 +22,7 @@ from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoFill,
     SharedDemoOrderProjection,
+    SharedDemoStrategyAllocationCap,
     SharedDemoVenueOrder,
 )
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
@@ -170,6 +171,19 @@ def build_shared_account_overview(
         initial_capital = strategy.config.get("initial_capital_quote") if isinstance(strategy.config, dict) else None
         return_base = float(initial_capital) if initial_capital and float(initial_capital) > 0 else reserved or denominator
         return_rate = net / return_base if net is not None and return_base > 0 else None
+        cap = (
+            session.query(SharedDemoStrategyAllocationCap)
+            .filter_by(
+                account_id=account.id,
+                tenant_id=tenant_id,
+                credential_id=credential_id,
+                environment=environment,
+                strategy_id=strategy_id,
+                active=1,
+            )
+            .order_by(SharedDemoStrategyAllocationCap.version.desc())
+            .first()
+        )
         allocations.append(
             StrategyAllocation(
                 strategy_id=strategy_id,
@@ -184,6 +198,8 @@ def build_shared_account_overview(
                 allocation_state=state,
                 lifecycle_reason=lifecycle_reason,
                 utilization_denominator_quote=denominator,
+                max_reserved_quote=(float(cap.max_reserved_quote) if cap else None),
+                max_occupied_quote=(float(cap.max_occupied_quote) if cap else None),
             )
         )
     total_strategy_pnl = None

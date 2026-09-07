@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine
@@ -12,6 +13,7 @@ from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoFill,
     SharedDemoOrderProjection,
+    SharedDemoStrategyAllocationCap,
     SharedDemoVenueOrder,
 )
 from valuecell.server.db.models.tenant import Tenant
@@ -106,6 +108,36 @@ def test_summary_separates_wallet_and_strategy_allocation() -> None:
     assert overview.allocator.allocations[0].net_pnl_quote is None
     assert overview.allocator.allocations[0].lifecycle_reason is not None
     assert overview.strategy_pnl_total_quote is None
+
+
+def test_summary_exposes_strategy_cap_and_actual_usage() -> None:
+    """The matrix must distinguish configured caps from live reservations."""
+    session = _session()
+    session.add(
+        SharedDemoStrategyAllocationCap(
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            strategy_id="strategy-a",
+            max_reserved_quote=Decimal("250"),
+            max_occupied_quote=Decimal("200"),
+            active=1,
+            version=1,
+            effective_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+
+    overview = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    )
+
+    allocation = overview.allocator.allocations[0]
+    assert allocation.max_reserved_quote == 250
+    assert allocation.max_occupied_quote == 200
 
 
 def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:

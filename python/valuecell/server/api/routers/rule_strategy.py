@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -16,7 +16,9 @@ from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.schemas.base import SuccessResponse
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.tenant_credential import TenantCredential
-from valuecell.server.db.models.rule_strategy import RuleStrategyExecutionIntent
+from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
+from valuecell.server.db.models.shared_demo_execution import SharedDemoStrategyAllocationCap
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
@@ -176,6 +178,21 @@ class FixedStrategyCreateRequest(BaseModel):
     initial_capital_quote: float = Field(gt=0, le=100_000_000)
     environment: Literal["paper", "okx_demo"] = "okx_demo"
     credential_id: str | None = Field(default=None, min_length=1, max_length=36)
+
+
+class StrategyAllocationCapRequest(BaseModel):
+    """User-managed live capital envelope for one shared Demo strategy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_reserved_quote: float = Field(ge=0)
+    max_occupied_quote: float = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_order(self) -> "StrategyAllocationCapRequest":
+        if self.max_occupied_quote > self.max_reserved_quote:
+            raise ValueError("max occupied quote cannot exceed max reserved quote")
+        return self
 class RuleStrategyManualCloseRequest(BaseModel):
     """Explicit, typed confirmation for one-symbol or all-position Demo close."""
 
@@ -379,6 +396,78 @@ def create_rule_strategy_router(
         except SharedAccountSummaryUnavailable as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         return SuccessResponse.create(data=data, msg="Shared account summary retrieved")
+
+    @router.put(
+        "/shared-account-summary/{strategy_id}/allocation-cap",
+        response_model=SuccessResponse[dict[str, Any]],
+    )
+    async def set_strategy_allocation_cap(
+        strategy_id: str,
+        request: StrategyAllocationCapRequest,
+        credential_id: str = Query(min_length=1, max_length=36),
+        principal: CurrentPrincipal = Depends(get_current_principal),
+        db: Session = Depends(get_db),
+    ) -> SuccessResponse[dict[str, Any]]:
+        """Create a new immutable cap version for one shared Demo strategy."""
+        require_strategy_manage(principal)
+        strategy = (
+            db.query(RuleStrategy)
+            .filter_by(strategy_id=strategy_id, tenant_id=principal.tenant_id, archived_at=None)
+            .first()
+        )
+        if strategy is None:
+            raise HTTPException(status_code=404, detail="strategy was not found")
+        execution = strategy.config.get("execution", {}) if isinstance(strategy.config, dict) else {}
+        if execution.get("environment") != "okx_demo" or execution.get("sandbox_connection_id") != credential_id:
+            raise HTTPException(status_code=422, detail="strategy is not bound to this OKX Demo account")
+        account = (
+            db.query(StrategySharedAccount)
+            .filter_by(
+                tenant_id=principal.tenant_id,
+                credential_id=credential_id,
+                environment="okx_demo",
+                active=True,
+            )
+            .first()
+        )
+        if account is None:
+            raise HTTPException(status_code=503, detail="shared Demo account is unavailable")
+        active_caps = db.query(SharedDemoStrategyAllocationCap).filter_by(
+            account_id=account.id,
+            tenant_id=principal.tenant_id,
+            credential_id=credential_id,
+            environment="okx_demo",
+            strategy_id=strategy_id,
+            active=1,
+        ).all()
+        next_version = max((int(row.version) for row in active_caps), default=0) + 1
+        for row in active_caps:
+            row.active = 0
+        cap = SharedDemoStrategyAllocationCap(
+            cap_id=str(uuid4()),
+            account_id=account.id,
+            tenant_id=principal.tenant_id,
+            credential_id=credential_id,
+            environment="okx_demo",
+            strategy_id=strategy_id,
+            max_reserved_quote=request.max_reserved_quote,
+            max_occupied_quote=request.max_occupied_quote,
+            active=1,
+            version=next_version,
+            effective_at=datetime.now(timezone.utc),
+        )
+        db.add(cap)
+        db.commit()
+        return SuccessResponse.create(
+            data={
+                "strategy_id": strategy_id,
+                "credential_id": credential_id,
+                "max_reserved_quote": request.max_reserved_quote,
+                "max_occupied_quote": request.max_occupied_quote,
+                "version": next_version,
+            },
+            msg="Strategy allocation cap updated",
+        )
 
     @router.get("/all-trade-facts", response_model=SuccessResponse[list[dict[str, Any]]])
     async def get_all_trade_facts(

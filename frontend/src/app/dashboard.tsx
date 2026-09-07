@@ -39,6 +39,7 @@ import {
   useRuleStrategyRiskState,
   useRuleStrategyTrades,
   useSharedAccountSummary,
+  useUpdateStrategyAllocationCap,
 } from "@/api/rule-strategy";
 import {
   buildDashboardFunnel,
@@ -113,6 +114,7 @@ import {
   demoExecutionCheckedAtLabel,
   demoExecutionUnvaluedAssetCount,
 } from "@/types/rule-strategy-demo-execution";
+import type { AccountStrategyOverview } from "@/types/multi-strategy";
 
 const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -222,6 +224,53 @@ const ALLOCATION_STATE_LABELS: Record<string, string> = {
 
 function formatQuote(value: number | null | undefined) {
   return value == null || !Number.isFinite(value) ? "—" : currency.format(value);
+}
+
+function StrategyAllocationCapEditor({
+  allocation,
+  credentialId,
+}: {
+  allocation: AccountStrategyOverview["allocator"]["allocations"][number];
+  credentialId: string;
+}) {
+  const updateCap = useUpdateStrategyAllocationCap();
+  const [reserved, setReserved] = useState(
+    allocation.max_reserved_quote == null ? "" : String(allocation.max_reserved_quote),
+  );
+  const [occupied, setOccupied] = useState(
+    allocation.max_occupied_quote == null ? "" : String(allocation.max_occupied_quote),
+  );
+  const save = async () => {
+    const maxReservedQuote = Number(reserved);
+    const maxOccupiedQuote = Number(occupied);
+    if (!Number.isFinite(maxReservedQuote) || !Number.isFinite(maxOccupiedQuote) || maxReservedQuote < 0 || maxOccupiedQuote < 0 || maxOccupiedQuote > maxReservedQuote) {
+      toast.error("请输入有效上限，已占用上限不能大于预留上限。");
+      return;
+    }
+    try {
+      await updateCap.mutateAsync({
+        strategyId: allocation.strategy_id,
+        credentialId,
+        maxReservedQuote,
+        maxOccupiedQuote,
+      });
+      toast.success("策略资金上限已更新。");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "资金上限更新失败。");
+    }
+  };
+  return (
+    <div className="flex min-w-52 flex-col gap-1.5">
+      <div className="flex items-center gap-1">
+        <Input aria-label="最大预留资金" className="h-7 w-24 text-xs" min={0} onChange={(event) => setReserved(event.target.value)} placeholder="预留上限" step="0.01" type="number" value={reserved} />
+        <Input aria-label="最大占用资金" className="h-7 w-24 text-xs" min={0} onChange={(event) => setOccupied(event.target.value)} placeholder="占用上限" step="0.01" type="number" value={occupied} />
+        <Button aria-label="保存策略资金上限" disabled={updateCap.isPending} onClick={() => void save()} size="icon" type="button" variant="outline">
+          <CircleDollarSign className="size-3.5" />
+        </Button>
+      </div>
+      <span className="text-[10px] text-muted-foreground">预留 / 占用上限（USDT）</span>
+    </div>
+  );
 }
 
 function TerminalValue({
@@ -959,14 +1008,19 @@ export default function DashboardPage() {
                     <div className="mt-5 border-border/70 border-t pt-4">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <div>
-                          <h3 className="font-medium text-sm">策略资金分配</h3>
+                          <h3 className="font-medium text-sm">四策略并发运行矩阵</h3>
                           <p className="mt-0.5 text-muted-foreground text-xs">
-                            allocator.allocations · 仅显示归属分配，不替代钱包总额
+                            每一行是一套独立策略；规则、批次和成交归属隔离，资金通过共享账户 allocator 竞争与释放
                           </p>
                         </div>
-                        <span className="text-muted-foreground text-xs">
-                          账户利用率 {(sharedAccountSummary.allocator.account_utilization_ratio * 100).toFixed(1)}%
-                        </span>
+                        <div className="text-right text-xs">
+                          <p className="font-medium text-foreground">
+                            {(strategiesQuery.data ?? []).filter((strategy) => strategy.status === "running").length} / {(strategiesQuery.data ?? []).length} 运行中
+                          </p>
+                          <p className="text-muted-foreground">
+                            账户利用率 {(sharedAccountSummary.allocator.account_utilization_ratio * 100).toFixed(1)}%
+                          </p>
+                        </div>
                       </div>
                       <div className="overflow-x-auto rounded-md border border-border/70">
                         <Table>
@@ -980,12 +1034,13 @@ export default function DashboardPage() {
                               <TableHead className="text-right">已实现</TableHead>
                               <TableHead className="text-right">未实现</TableHead>
                               <TableHead className="text-right">净 PnL / 收益率</TableHead>
+                              <TableHead>资金上限</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {sharedAccountSummary.allocator.allocations.length === 0 ? (
                               <TableRow>
-                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={8}>
+                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={9}>
                                   暂无策略分配记录。
                                 </TableCell>
                               </TableRow>
@@ -996,6 +1051,10 @@ export default function DashboardPage() {
                                     <div className="flex min-w-40 flex-col gap-1">
                                       <span className="font-medium">{strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.name ?? allocation.kind}</span>
                                       <span className="text-[10px] text-muted-foreground">{allocation.kind}</span>
+                                      <span className={cn("text-[10px]", strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.status === "running" ? "text-emerald-500" : "text-muted-foreground")}>
+                                        {strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.status === "running" ? "运行中" : "已停止"}
+                                        {strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.current_batch_id ? ` · 批次 ${strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.current_batch_id}` : " · 尚无当前批次"}
+                                      </span>
                                       <span className="font-mono text-[10px] text-muted-foreground" title={allocation.strategy_id}>
                                         {allocation.strategy_id}
                                       </span>
@@ -1027,6 +1086,12 @@ export default function DashboardPage() {
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.unrealized_pnl_quote)}</TableCell>
                                   <TableCell className={cn("text-right tabular-nums", allocation.net_pnl_quote == null ? "text-muted-foreground" : allocation.net_pnl_quote >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300")}>
                                     {(() => { const pnl = allocationPnlPresentation(allocation.net_pnl_quote, allocation.return_rate_pct); return <><div>{pnl.value} USDT</div><div className="text-xs">收益率 {pnl.returnRate}</div></>; })()}
+                                  </TableCell>
+                                  <TableCell>
+                                    <StrategyAllocationCapEditor
+                                      allocation={allocation}
+                                      credentialId={sharedCredentialId}
+                                    />
                                   </TableCell>
                                 </TableRow>
                               ))

@@ -91,6 +91,36 @@ export function useSharedAccountSummary(credentialId?: string) {
     enabled: Boolean(tenantId && credentialId),
   });
 }
+
+export function useUpdateStrategyAllocationCap() {
+  const queryClient = useQueryClient();
+  const { tenantId } = useSaaSSession();
+  return useMutation({
+    mutationFn: ({
+      strategyId,
+      credentialId,
+      maxReservedQuote,
+      maxOccupiedQuote,
+    }: {
+      strategyId: string;
+      credentialId: string;
+      maxReservedQuote: number;
+      maxOccupiedQuote: number;
+    }) => apiClient.put<ApiResponse<Record<string, unknown>>>(
+      `/rule-strategies/shared-account-summary/${encodeURIComponent(strategyId)}/allocation-cap?credential_id=${encodeURIComponent(credentialId)}`,
+      {
+        max_reserved_quote: maxReservedQuote,
+        max_occupied_quote: maxOccupiedQuote,
+      },
+      { requiresAuth: true },
+    ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: [...ruleStrategiesKey(tenantId), "shared-account-summary"],
+      });
+    },
+  });
+}
 const ruleStrategyDemoExecutionKey = (
   tenantId: string,
   strategyId: string,

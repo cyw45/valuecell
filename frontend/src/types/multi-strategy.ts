@@ -49,6 +49,8 @@ export type StrategyAllocation = {
   allocation_state: AllocationState;
   lifecycle_reason?: string | null;
   utilization_denominator_quote: number;
+  max_reserved_quote: number | null;
+  max_occupied_quote: number | null;
 };
 
 export type SharedWalletSummary = {
