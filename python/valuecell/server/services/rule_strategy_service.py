@@ -1558,7 +1558,7 @@ class RuleStrategyService:
             "mode": config.execution.environment,
             "config": config.model_dump(mode="json"),
             "execution_generation": strategy.execution_generation,
-            "account": self._account_from_history(
+            "account": self._current_paper_account(
                 strategy, strategy.tenant_id, config
             ).model_dump(mode="json"),
             "created_at": strategy.created_at,
