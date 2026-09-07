@@ -1,4 +1,5 @@
 import type { SandboxOrder } from "@/types/sandbox-exchange";
+import type { UnifiedTradeFact } from "@/types/multi-strategy";
 
 type DecisionCondition = NonNullable<SandboxOrder["decision_conditions"]>[number];
 
@@ -65,4 +66,21 @@ export function decisionLabel(order: SandboxOrder): string {
       .join("；")}`;
   }
   return order.decision_reason || order.decision_reason_code || "未记录策略原因";
+}
+
+export function formatTradeFactIdentifiers(fact: UnifiedTradeFact): string[] {
+  return [
+    ["批次", fact.batch_id],
+    ["预留", fact.reservation_id],
+    ["意图", fact.intent_id],
+    ["订单", fact.order_id],
+    ["成交", fact.fill_id],
+  ].flatMap(([label, value]) => (value ? [`${label} ${value}`] : []));
+}
+
+export function tradeFactStatusDescription(status: string): string {
+  if (status === "submission_unknown") return "提交结果未确认，待远端对账（不可重提）";
+  if (status === "recovery_required") return "需要人工恢复或对账后才能继续";
+  if (status === "partially_filled") return "部分成交，剩余数量仍待处理";
+  return status;
 }

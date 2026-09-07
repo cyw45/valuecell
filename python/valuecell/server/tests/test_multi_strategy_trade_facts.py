@@ -110,7 +110,45 @@ def test_journal_trade_facts_include_shared_demo_fill_and_execution_ids() -> Non
     assert facts[0].order_id == "order-a"
     assert facts[0].fill_id == "fill-a"
     assert facts[0].intent_id == "intent-a"
+    assert facts[0].reservation_id == "reservation-a"
     assert facts[0].filled_quantity == 1
     assert facts[0].average_fill_price == 101
     assert facts[0].fee_quote == 0.1
     assert facts[0].status == "filled"
+
+
+def test_journal_trade_facts_preserve_unknown_submission_status() -> None:
+    strategy = SimpleNamespace(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        strategy_version="v1",
+        code_fingerprint="fingerprint-a",
+    )
+    journal = SimpleNamespace(
+        evaluation_id="evaluation-a",
+        batch_id="batch-a",
+        created_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        result={"action": "long_entry", "symbol": "BTC-USDT", "reason": "entry", "conditions": []},
+        trades=[],
+    )
+    facts = journal_trade_facts(
+        strategy,
+        journal,
+        shared_orders=[
+            {
+                "order_id": "order-a",
+                "intent_id": "intent-a",
+                "reservation_id": "reservation-a",
+                "strategy_id": "strategy-a",
+                "batch_id": "batch-a",
+                "symbol": "BTC-USDT",
+                "side": "buy",
+                "requested_quote": "100",
+                "requested_quantity": "1",
+                "status": "submission_unknown",
+                "created_at": journal.created_at,
+            }
+        ],
+    )
+    assert facts[0].status == "submission_unknown"

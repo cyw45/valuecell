@@ -37,6 +37,7 @@ TradeFactStatus = Literal[
     "pending",
     "submitted",
     "submission_unknown",
+    "recovery_required",
     "partially_filled",
     "filled",
     "cancelled",
@@ -239,6 +240,7 @@ class UnifiedTradeFact(MultiStrategyModel):
     batch_id: str | None = Field(default=None, max_length=36)
     evaluation_id: str | None = Field(default=None, max_length=100)
     intent_id: str | None = Field(default=None, max_length=36)
+    reservation_id: str | None = Field(default=None, max_length=36)
     order_id: str | None = Field(default=None, max_length=128)
     fill_id: str | None = Field(default=None, max_length=36)
     symbol: str = Field(min_length=1, max_length=32)

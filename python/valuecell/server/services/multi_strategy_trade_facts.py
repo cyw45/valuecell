@@ -84,7 +84,7 @@ def _shared_demo_facts(
             "partial": "partially_filled",
         }
         normalized_status = status_map.get(status, status)
-        if normalized_status not in {"signal", "blocked", "pending", "submitted", "submission_unknown", "partially_filled", "filled", "cancelled", "failed"}:
+        if normalized_status not in {"signal", "blocked", "pending", "submitted", "submission_unknown", "recovery_required", "partially_filled", "filled", "cancelled", "failed"}:
             normalized_status = "pending"
         facts.append(
             UnifiedTradeFact(
@@ -92,6 +92,7 @@ def _shared_demo_facts(
                 batch_id=_field(order, "batch_id") or getattr(journal, "batch_id", None),
                 evaluation_id=getattr(journal, "evaluation_id", None),
                 intent_id=_field(order, "intent_id"),
+                reservation_id=_field(order, "reservation_id"),
                 order_id=order_id,
                 fill_id=str(_field(fills[0], "fill_id")) if fills else None,
                 symbol=symbol,
@@ -168,6 +169,7 @@ def journal_trade_facts(
                 identity=identity,
                 batch_id=getattr(journal, "batch_id", None),
                 evaluation_id=getattr(journal, "evaluation_id", None),
+                reservation_id=None,
                 symbol=symbol,
                 side=side,
                 status="filled" if trade.get("execution") == "paper_filled" else "signal",

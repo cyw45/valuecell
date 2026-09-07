@@ -112,6 +112,7 @@ export type UnifiedTradeFact = {
   batch_id: string | null;
   evaluation_id: string | null;
   intent_id: string | null;
+  reservation_id: string | null;
   order_id: string | null;
   fill_id: string | null;
   symbol: string;
@@ -123,6 +124,7 @@ export type UnifiedTradeFact = {
     | "pending"
     | "submitted"
     | "submission_unknown"
+    | "recovery_required"
     | "partially_filled"
     | "filled"
     | "cancelled"
