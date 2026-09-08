@@ -139,13 +139,11 @@ class RuleStrategyRepository:
                 }
                 for position in positions
             }
-            position_value = sum(
-                position.quantity
-                * position.entry_price
-                * (1 if position.side == "long" else -1)
-                for position in positions
+            equity = (
+                account.initial_capital_quote
+                + account.realized_pnl_quote
+                + account.unrealized_pnl_quote
             )
-            equity = account.quote_balance + position_value
             return {
                 "initial_capital_quote": account.initial_capital_quote,
                 "quote_balance": account.quote_balance,
