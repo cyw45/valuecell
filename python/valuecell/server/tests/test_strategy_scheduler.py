@@ -34,6 +34,74 @@ def test_scheduler_registers_all_fixed_strategy_engine_boundaries() -> None:
     assert strategy_scheduler.strategy_kind_has_scheduler("leader_breakout") is True
 
 
+def test_scheduler_keeps_four_paper_strategy_jobs_independent(monkeypatch) -> None:
+    strategies = [
+        SimpleNamespace(
+            strategy_id="configurable-a",
+            tenant_id="tenant-a",
+            strategy_kind="configurable_rule",
+            status="running",
+            config=RuleStrategyConfig(interval="5m").model_dump(mode="json"),
+        ),
+        SimpleNamespace(
+            strategy_id="dual-ma-a",
+            tenant_id="tenant-a",
+            strategy_kind="dual_ma_trend",
+            status="running",
+            config=RuleStrategyConfig(
+                interval="4h",
+                symbols=["BTC-USDT"],
+            ).model_dump(mode="json"),
+        ),
+        SimpleNamespace(
+            strategy_id="pair-a",
+            tenant_id="tenant-a",
+            strategy_kind="pair_rotation",
+            status="running",
+            config=RuleStrategyConfig(
+                interval="4h",
+                symbols=["BTC-USDT", "ETH-USDT"],
+            ).model_dump(mode="json"),
+        ),
+        SimpleNamespace(
+            strategy_id="leader-a",
+            tenant_id="tenant-a",
+            strategy_kind="leader_breakout",
+            status="running",
+            config=RuleStrategyConfig(
+                interval="4h",
+                symbols=["BTC-USDT"],
+            ).model_dump(mode="json"),
+        ),
+    ]
+    monkeypatch.setattr(
+        strategy_scheduler,
+        "RuleStrategyRepository",
+        lambda db_session: SimpleNamespace(list_running=lambda: strategies),
+    )
+    monkeypatch.setattr(
+        strategy_scheduler.TenantAccessService,
+        "access_for",
+        lambda _db, _tenant_id: SimpleNamespace(active=True),
+    )
+    scheduler = strategy_scheduler.StrategyScheduler()
+    fake_scheduler = FakeScheduler()
+    monkeypatch.setattr(scheduler, "_scheduler", fake_scheduler)
+
+    scheduler.sync_running_strategies(SimpleNamespace())
+
+    assert set(fake_scheduler.jobs) >= {
+        "configurable-a",
+        "dual-ma-a",
+        "pair-a",
+        "leader-a",
+    }
+    assert {
+        job.args[0] for job in fake_scheduler.jobs.values()
+        if job.id in {item.strategy_id for item in strategies}
+    } == {item.strategy_id for item in strategies}
+
+
 
 class DurableQuery:
     def __init__(self, session, model):

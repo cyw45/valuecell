@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from valuecell.server.api.schemas.fixed_strategy import FixedStrategySignal
 from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.rule_strategy import RuleStrategy
+from valuecell.server.db.models.fixed_strategy_paper import FixedPaperPosition
 from valuecell.server.db.models.tenant import Tenant
 from valuecell.server.services.fixed_strategy_paper_ledger import FixedPaperLedger
 
@@ -41,3 +42,46 @@ def test_fixed_paper_accounts_remain_isolated_by_strategy_and_batch() -> None:
     assert account_a.quote_balance == 400
     assert account_b.quote_balance == 600
     assert account_a.account_id != account_b.account_id
+
+
+def test_all_fixed_paper_strategies_can_fill_same_symbol_without_cross_account_state() -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.add_all(
+        [
+            RuleStrategy(
+                strategy_id=strategy_id,
+                tenant_id="tenant-a",
+                name=strategy_id,
+                config={},
+            )
+            for strategy_id in ("dual-ma", "pair", "leader")
+        ]
+    )
+    session.commit()
+    ledger = FixedPaperLedger(session)
+
+    accounts = [
+        ledger.account(
+            tenant_id="tenant-a",
+            strategy_id=strategy_id,
+            batch_id=f"batch-{strategy_id}",
+            initial_capital_quote=Decimal("600"),
+        )
+        for strategy_id in ("dual-ma", "pair", "leader")
+    ]
+    for account, evaluation_id in zip(accounts, ("eval-dual", "eval-pair", "eval-leader")):
+        ledger.apply_signal(
+            account=account,
+            signal=_signal("BTC-USDT"),
+            evaluation_id=evaluation_id,
+            price=Decimal("100"),
+            quantity=Decimal("2"),
+        )
+    session.commit()
+
+    assert session.query(FixedPaperPosition).count() == 3
+    assert {account.quote_balance for account in accounts} == {400}
+    assert len({account.account_id for account in accounts}) == 3
