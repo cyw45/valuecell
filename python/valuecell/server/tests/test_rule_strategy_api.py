@@ -103,6 +103,18 @@ class InMemoryRuleStrategyRepository:
             return []
         return list(reversed(self.evaluations[-limit:]))
 
+    def get_evaluation(self, evaluation_id: str, strategy_id: str, tenant_id: str):
+        if strategy_id != STRATEGY_ID:
+            return None
+        return next(
+            (
+                item
+                for item in self.evaluations
+                if item.evaluation_id == evaluation_id
+            ),
+            None,
+        )
+
     def update_evaluation_execution(
         self, tenant_id, strategy_id, evaluation_id, execution
     ):
@@ -841,6 +853,31 @@ def test_rule_strategy_logs_include_fixed_paper_fill_facts(monkeypatch) -> None:
             realized_pnl_quote=0.0,
         )
     ]
+    repository.evaluations = [
+        SimpleNamespace(
+            evaluation_id="evaluation-a",
+            created_at=CREATED_AT,
+            result={
+                "reason_code": "ma_bullish_cross",
+                "reason": "短均线上穿长均线并且收盘价确认趋势。",
+                "conditions": [
+                    {
+                        "code": "ma_cross",
+                        "label": "均线金叉",
+                        "state": "triggered",
+                        "detail": "SMA10 crossed above SMA20.",
+                        "values": {
+                            "left": 102.5,
+                            "right": 100.0,
+                            "comparator": "crossed_above",
+                        },
+                    }
+                ],
+                "indicators": {"sma_fast": 102.5, "sma_slow": 100.0},
+                "sizing": {"requested_quote": 202.0},
+            },
+        )
+    ]
     client = _client(repository)
 
     response = client.get(f"/rule-strategies/{STRATEGY_ID}/trades")
@@ -857,6 +894,23 @@ def test_rule_strategy_logs_include_fixed_paper_fill_facts(monkeypatch) -> None:
             "quote_amount": 202.0,
             "realized_pnl_quote": 0.0,
             "execution": "paper_filled",
+            "reason_code": "ma_bullish_cross",
+            "reason": "短均线上穿长均线并且收盘价确认趋势。",
+            "conditions": [
+                {
+                    "code": "ma_cross",
+                    "label": "均线金叉",
+                    "state": "triggered",
+                    "detail": "SMA10 crossed above SMA20.",
+                    "values": {
+                        "left": 102.5,
+                        "right": 100.0,
+                        "comparator": "crossed_above",
+                    },
+                }
+            ],
+            "indicators": {"sma_fast": 102.5, "sma_slow": 100.0},
+            "sizing": {"requested_quote": 202.0},
         }
     ]
 
@@ -875,14 +929,17 @@ def test_fixed_strategy_account_reads_fixed_paper_ledger(monkeypatch) -> None:
     repository.get_fixed_paper_account = lambda *_args, **_kwargs: {
         "initial_capital_quote": 1000,
         "quote_balance": 798,
+        "reserved_quote": 12,
+        "occupied_quote": 202,
         "realized_pnl_quote": 0,
-        "unrealized_pnl_quote": 0,
-        "equity_quote": 798,
+        "unrealized_pnl_quote": 20,
+        "equity_quote": 1020,
         "positions": {
             "BTC-USDT": {
+                "side": "long",
                 "quantity": 2,
                 "entry_price": 101,
-                "mark_price": 101,
+                "mark_price": None,
             }
         },
     }
@@ -891,8 +948,19 @@ def test_fixed_strategy_account_reads_fixed_paper_ledger(monkeypatch) -> None:
     response = client.get(f"/rule-strategies/{STRATEGY_ID}/account")
 
     assert response.status_code == 200
-    assert response.json()["data"]["quote_balance"] == 798
-    assert response.json()["data"]["positions"]["BTC-USDT"]["quantity"] == 2
+    account = response.json()["data"]
+    assert account["quote_balance"] == 798
+    assert account["reserved_quote"] == 12
+    assert account["occupied_quote"] == 202
+    assert account["return_rate_pct"] == pytest.approx(0.02)
+    assert account["batch_id"] == "batch-a"
+    assert account["batch_status"] == "running"
+    assert account["positions"]["BTC-USDT"] == {
+        "side": "long",
+        "quantity": 2,
+        "entry_price": 101,
+        "mark_price": None,
+    }
 
 
 def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None:

@@ -2705,8 +2705,24 @@ export function RuleStrategyConfiguration({
                   value={`${storedStrategy.account.quote_balance.toFixed(2)} USDT`}
                 />
                 <SummaryRow
+                  label="Reserved"
+                  value={storedStrategy.account.reserved_quote == null ? "不可用" : `${storedStrategy.account.reserved_quote.toFixed(2)} USDT`}
+                />
+                <SummaryRow
+                  label="Occupied"
+                  value={storedStrategy.account.occupied_quote == null ? "不可用" : `${storedStrategy.account.occupied_quote.toFixed(2)} USDT`}
+                />
+                <SummaryRow
                   label="Equity"
                   value={`${storedStrategy.account.equity_quote.toFixed(2)} USDT`}
+                />
+                <SummaryRow
+                  label="Return"
+                  value={storedStrategy.account.return_rate_pct == null ? "不可用" : `${(storedStrategy.account.return_rate_pct * 100).toFixed(2)}%`}
+                />
+                <SummaryRow
+                  label="Batch"
+                  value={storedStrategy.account.batch_status === "running" ? "运行中" : storedStrategy.account.batch_id ? "已停止" : "未启动"}
                 />
                 <SummaryRow
                   label="Realized PnL"

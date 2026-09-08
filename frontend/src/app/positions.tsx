@@ -118,8 +118,10 @@ export default function PositionsPage() {
       quantity: position.quantity,
       entryPrice: position.entry_price,
       currentPrice: position.mark_price,
-      value: position.quantity * position.mark_price,
-      pnl: position.quantity * (position.mark_price - position.entry_price),
+      value: position.mark_price == null ? null : position.quantity * position.mark_price,
+      pnl: position.mark_price == null
+        ? null
+        : position.quantity * (position.mark_price - position.entry_price),
     }));
   }, [account.data?.positions, demo.data, isDemo]);
   const selectedOrder = demo.data?.orders.find((order) => order.id === orderId);

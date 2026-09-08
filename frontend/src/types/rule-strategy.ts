@@ -29,18 +29,24 @@ export interface RuleStrategyMarketSnapshot {
 }
 
 export interface RuleStrategyPaperPosition {
+  side?: "long" | "short";
   quantity: number;
   entry_price: number;
-  mark_price: number;
+  mark_price: number | null;
 }
 
 export interface RuleStrategyPaperAccount {
   initial_capital_quote: number;
   quote_balance: number;
+  reserved_quote?: number;
+  occupied_quote?: number;
   positions: Record<string, RuleStrategyPaperPosition>;
   realized_pnl_quote: number;
   unrealized_pnl_quote: number;
   equity_quote: number;
+  return_rate_pct?: number;
+  batch_id?: string;
+  batch_status?: "running" | "stopped";
 }
 
 export interface MovingAverageRuleConfig {
@@ -444,9 +450,11 @@ export interface RuleStrategyTradeLogEntry {
   evaluation_id: string;
   evaluated_at: string;
   action: Exclude<RuleStrategyAction, "no_op">;
-  reason_code: string;
-  reason: string;
-  sizing: RuleStrategySizing;
+  reason_code?: string | null;
+  reason?: string | null;
+  sizing?: RuleStrategySizing | null;
+  conditions?: RuleStrategyCondition[];
+  indicators?: RuleStrategyIndicators | Record<string, unknown>;
   execution: "paper_filled";
   symbol: string;
   price: number;

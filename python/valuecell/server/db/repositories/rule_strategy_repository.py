@@ -130,9 +130,10 @@ class RuleStrategyRepository:
             )
             position_data = {
                 position.symbol: {
+                    "side": position.side,
                     "quantity": position.quantity,
                     "entry_price": position.entry_price,
-                    "mark_price": position.entry_price,
+                    "mark_price": None,
                     "highest_price": None,
                     "addition_count": 0,
                 }
@@ -148,6 +149,8 @@ class RuleStrategyRepository:
             return {
                 "initial_capital_quote": account.initial_capital_quote,
                 "quote_balance": account.quote_balance,
+                "reserved_quote": account.reserved_quote,
+                "occupied_quote": account.occupied_quote,
                 "positions": position_data,
                 "realized_pnl_quote": account.realized_pnl_quote,
                 "unrealized_pnl_quote": account.unrealized_pnl_quote,

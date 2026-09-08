@@ -353,7 +353,18 @@ export default function TradesPage() {
                         <TableCell className="text-right tabular-nums">{trade.price.toFixed(4)}</TableCell>
                         <TableCell className="text-right tabular-nums">{trade.quote_amount.toFixed(2)} USDT</TableCell>
                         <TableCell className="text-right tabular-nums">{trade.realized_pnl_quote.toFixed(2)} USDT</TableCell>
-                        <TableCell className="whitespace-normal break-words">{trade.reason}</TableCell>
+                        <TableCell className="max-w-96 whitespace-normal break-words">
+                          <div>{trade.reason || "服务端未记录决策原因"}</div>
+                          {trade.reason_code ? <div className="text-muted-foreground">规则：{trade.reason_code}</div> : null}
+                          {(trade.conditions ?? []).map((condition) => (
+                            <div className="text-muted-foreground text-xs" key={`${trade.evaluation_id}-${condition.code}`}>
+                              {condition.label || condition.code}：{condition.state === "triggered" ? "满足" : condition.state === "not_triggered" ? "不满足" : "不可用"}{formatConditionValues(condition.values)}
+                            </div>
+                          ))}
+                          {trade.indicators && Object.keys(trade.indicators).length > 0 ? (
+                            <div className="text-muted-foreground text-xs">指标：{Object.entries(trade.indicators).map(([key, value]) => `${key}=${String(value)}`).join("，")}</div>
+                          ) : null}
+                        </TableCell>
                         <TableCell><Badge variant="outline">{trade.execution.replace("_", " ")}</Badge></TableCell>
                       </TableRow>
                     ))}

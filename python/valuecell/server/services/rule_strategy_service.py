@@ -1003,7 +1003,19 @@ class RuleStrategyService:
                     batch_id=selected_batch_id,
                 )
                 if fixed_account is not None:
-                    return fixed_account
+                    account_snapshot = dict(fixed_account)
+                    initial_capital = float(account_snapshot["initial_capital_quote"])
+                    equity = float(account_snapshot["equity_quote"])
+                    account_snapshot["return_rate_pct"] = (
+                        (equity - initial_capital) / initial_capital
+                    )
+                    account_snapshot["batch_id"] = selected_batch_id
+                    account_snapshot["batch_status"] = (
+                        strategy.status
+                        if selected_batch_id == strategy.current_batch_id
+                        else "stopped"
+                    )
+                    return account_snapshot
         if batch_id is not None:
             batch = self.resolve_batch(strategy_id, tenant_id, batch_id)
             if batch is None:
@@ -1465,6 +1477,14 @@ class RuleStrategyService:
                 limit=limit,
                 batch_id=getattr(batch, "batch_id", None),
             )
+            journal_reader = getattr(self.repository, "get_evaluation", None)
+            journals = {
+                fill.evaluation_id: journal_reader(
+                    fill.evaluation_id, strategy_id, tenant_id
+                )
+                for fill in fills
+                if callable(journal_reader)
+            }
             return {
                 "strategy_id": strategy_id,
                 "mode": "paper",
@@ -1479,6 +1499,41 @@ class RuleStrategyService:
                         "quote_amount": fill.quote_amount,
                         "realized_pnl_quote": fill.realized_pnl_quote,
                         "execution": "paper_filled",
+                        "reason_code": (
+                            (journals.get(fill.evaluation_id).result or {}).get(
+                                "reason_code"
+                            )
+                            if journals.get(fill.evaluation_id) is not None
+                            else None
+                        ),
+                        "reason": (
+                            (journals.get(fill.evaluation_id).result or {}).get(
+                                "reason"
+                            )
+                            if journals.get(fill.evaluation_id) is not None
+                            else None
+                        ),
+                        "conditions": (
+                            (journals.get(fill.evaluation_id).result or {}).get(
+                                "conditions", []
+                            )
+                            if journals.get(fill.evaluation_id) is not None
+                            else []
+                        ),
+                        "indicators": (
+                            (journals.get(fill.evaluation_id).result or {}).get(
+                                "indicators", {}
+                            )
+                            if journals.get(fill.evaluation_id) is not None
+                            else {}
+                        ),
+                        "sizing": (
+                            (journals.get(fill.evaluation_id).result or {}).get(
+                                "sizing"
+                            )
+                            if journals.get(fill.evaluation_id) is not None
+                            else None
+                        ),
                     }
                     for fill in fills
                 ],

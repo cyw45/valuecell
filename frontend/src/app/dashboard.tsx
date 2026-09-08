@@ -696,9 +696,12 @@ export default function DashboardPage() {
                 : Number(position.unrealized_pnl_usdt),
           }))
         : Object.entries(account?.positions ?? {}).map(([symbol, position]) => {
-            const value = position.quantity * position.mark_price;
-            const profit =
-              position.quantity * (position.mark_price - position.entry_price);
+            const value = position.mark_price == null
+              ? null
+              : position.quantity * position.mark_price;
+            const profit = position.mark_price == null
+              ? null
+              : position.quantity * (position.mark_price - position.entry_price);
             return { symbol, position, value, profit };
           }),
     [account?.positions, isOkxDemo, strategyPositions],
