@@ -88,3 +88,27 @@ def test_fixed_paper_ledger_records_short_profit() -> None:
     )
     session.commit()
     assert account.realized_pnl_quote == 20
+
+
+def test_fixed_paper_ledger_marks_open_positions_to_market() -> None:
+    session = _session()
+    ledger = FixedPaperLedger(session)
+    account = ledger.account(
+        tenant_id="tenant-a",
+        strategy_id="strategy-a",
+        batch_id="batch-a",
+        initial_capital_quote=Decimal("1000"),
+    )
+    ledger.apply_signal(
+        account=account,
+        signal=_signal("long_entry"),
+        evaluation_id="evaluation-entry",
+        price=Decimal("100"),
+        quantity=Decimal("2"),
+    )
+
+    equity = ledger.mark_to_market(account=account, marks={"BTC-USDT": Decimal("112")})
+    session.commit()
+
+    assert equity == Decimal("1024")
+    assert account.unrealized_pnl_quote == 24

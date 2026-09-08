@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from valuecell.server.services.rule_strategy_pnl_service import (
     DailyPnlObservation,
     build_daily_pnl_points,
+    observation_from_journal,
 )
 
 
@@ -52,3 +54,23 @@ def test_daily_pnl_uses_final_fact_per_utc_day_without_gap_filling():
             "action": "close",
         },
     ]
+
+
+def test_fixed_paper_execution_account_is_eligible_for_pnl_curve():
+    journal = SimpleNamespace(
+        created_at=datetime(2026, 9, 8, 4, tzinfo=timezone.utc),
+        result={
+            "action": "long_entry",
+            "execution": {
+                "execution_ledger": "paper",
+                "paper_fill": True,
+                "account": {
+                    "source": "fixed_paper_ledger",
+                    "equity_quote": 1_024,
+                },
+            },
+        },
+    )
+    observation = observation_from_journal(journal)
+    assert observation is not None
+    assert observation.equity_quote == 1_024

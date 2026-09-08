@@ -208,6 +208,7 @@ class FixedPaperEvaluationService:
                 price=price,
                 quantity=quantity,
             )
+            equity = ledger.mark_to_market(account=account, marks={signal.symbol: price})
             session.commit()
             return {
                 "execution": "paper_filled" if fill is not None else "paper_signal_only",
@@ -217,6 +218,12 @@ class FixedPaperEvaluationService:
                 "filled_side": fill.side if fill is not None else None,
                 "filled_quantity": float(fill.quantity) if fill is not None else None,
                 "filled_price": float(fill.price) if fill is not None else None,
+                "account": {
+                    "source": "fixed_paper_ledger",
+                    "equity_quote": float(equity),
+                    "realized_pnl_quote": account.realized_pnl_quote,
+                    "unrealized_pnl_quote": account.unrealized_pnl_quote,
+                },
             }
         except Exception:
             session.rollback()

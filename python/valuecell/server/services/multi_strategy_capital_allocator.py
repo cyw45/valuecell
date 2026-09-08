@@ -381,9 +381,12 @@ class SharedCapitalAllocator:
         if reservation is None:
             raise CapitalAllocationError("capital reservation was not found")
         if reservation.status not in {"reserved", *_RECOVERY_OUTCOMES}:
-            raise CapitalAllocationError(
-                "capital reservation is already terminal"
-            )
+            prior_consumed = _amount(
+                reservation.consumed_quote, "reservation occupied quote"
+            ) or _ZERO
+            if reservation.status == outcome and prior_consumed == consumed:
+                return reservation
+            raise CapitalAllocationError("capital reservation is already terminal")
         live_reserved = _amount(reservation.reserved_quote, "reservation reserved quote")
         if live_reserved is None or live_reserved < _ZERO:
             raise CapitalAllocationError("reservation reserved quote is invalid")

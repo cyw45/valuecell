@@ -68,6 +68,9 @@ def observation_from_journal(journal: Any) -> DailyPnlObservation | None:
     """Extract an eligible paper-account close from one evaluation journal."""
     result = journal.result or {}
     account = result.get("account")
+    execution = result.get("execution")
+    if not isinstance(account, dict) and isinstance(execution, dict):
+        account = execution.get("account")
     if (
         not isinstance(account, dict)
         or account.get("source") == "okx_demo"

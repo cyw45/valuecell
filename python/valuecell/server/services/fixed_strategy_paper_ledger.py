@@ -57,6 +57,42 @@ class FixedPaperLedger:
             self._session.flush()
         return account
 
+    def mark_to_market(
+        self,
+        *,
+        account: FixedPaperAccount,
+        marks: dict[str, Decimal],
+    ) -> Decimal:
+        """Persist unrealized PnL only when every open position has a valid mark."""
+        positions = (
+            self._session.query(FixedPaperPosition)
+            .filter_by(
+                tenant_id=account.tenant_id,
+                strategy_id=account.strategy_id,
+                batch_id=account.batch_id,
+                status="open",
+            )
+            .all()
+        )
+        unrealized = Decimal("0")
+        position_value = Decimal("0")
+        for position in positions:
+            mark = marks.get(position.symbol)
+            if mark is None or not mark.is_finite() or mark <= 0:
+                raise FixedPaperLedgerError("Paper position mark price is unavailable")
+            quantity = Decimal(str(position.quantity))
+            entry_price = Decimal(str(position.entry_price))
+            if position.side == "long":
+                unrealized += (mark - entry_price) * quantity
+                position_value += mark * quantity
+            else:
+                unrealized += (entry_price - mark) * quantity
+                position_value -= mark * quantity
+        account.unrealized_pnl_quote = float(unrealized)
+        account.version = int(account.version) + 1
+        self._session.flush()
+        return Decimal(str(account.quote_balance)) + position_value
+
     def apply_signal(
         self,
         *,

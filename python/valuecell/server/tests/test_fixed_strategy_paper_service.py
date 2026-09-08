@@ -1,6 +1,8 @@
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from datetime import datetime, timezone
 
@@ -15,6 +17,10 @@ from valuecell.server.services.fixed_strategy_paper_service import (
     FixedDemoExecutionAdapter,
     FixedPaperEvaluationService,
 )
+from valuecell.server.db.connection import get_database_manager
+from valuecell.server.db.models.base import Base
+from valuecell.server.db.models.rule_strategy import RuleStrategy
+from valuecell.server.db.models.tenant import Tenant
 
 
 class RecordingRepository:
@@ -104,6 +110,30 @@ def test_fixed_paper_fill_execution_is_recorded_once_for_evaluation() -> None:
     """Paper execution must create one idempotent fill after a signal."""
     service = FixedPaperEvaluationService()
     assert hasattr(service, "record_paper_fill")
+
+
+def test_fixed_paper_fill_execution_contains_account_equity_for_pnl_curve(monkeypatch) -> None:
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.add(
+        RuleStrategy(
+            strategy_id="strategy-a",
+            tenant_id="tenant-a",
+            name="Fixed",
+            config={"initial_capital_quote": 1000},
+        )
+    )
+    session.commit()
+    monkeypatch.setattr(get_database_manager(), "get_session", lambda: session)
+    result = FixedPaperEvaluationService().record_paper_fill(
+        tenant_id="tenant-a", strategy_id="strategy-a", batch_id="batch-a",
+        signal=_signal("dual_ma_trend", "long_entry"), evaluation_id="evaluation-account-equity",
+        initial_capital_quote=Decimal("1000"), price=Decimal("100"), order_quote_amount=Decimal("200"),
+    )
+    assert result["paper_fill"] is True
+    assert result["account"]["equity_quote"] == 1000
 
 
 def test_fixed_evaluation_is_idempotent_for_same_batch_and_observation() -> None:

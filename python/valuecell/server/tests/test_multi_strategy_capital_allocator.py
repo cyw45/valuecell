@@ -192,6 +192,39 @@ def test_confirmed_exit_releases_only_matching_occupied_capital() -> None:
         )
 
 
+def test_released_occupied_capital_can_be_reused_by_another_strategy() -> None:
+    session = _session()
+    allocator = SharedCapitalAllocator(session)
+    first = _reserve(allocator, strategy_id="strategy-a", requested_quote="600")
+    allocator.settle(
+        first.reservation_id,
+        consumed_quote=Decimal("600"),
+        outcome="occupied",
+        reason="filled",
+    )
+    allocator.release_occupied(
+        account_id="account-a",
+        tenant_id="tenant-a",
+        reservation_id=first.reservation_id,
+        released_quote=Decimal("600"),
+        reason="confirmed_exit_fill",
+    )
+
+    second = _reserve(
+        allocator,
+        strategy_id="strategy-b",
+        batch_id="batch-b",
+        idempotency_key="reserve-b",
+        requested_quote="600",
+    )
+
+    assert second.status == "reserved"
+    account = session.query(StrategySharedAccount).one()
+    assert account.reusable_quote == 1_000
+    assert account.reserved_quote == 600
+    assert allocator.available_capacity(account_id="account-a", tenant_id="tenant-a") == 400
+
+
 def test_ambiguous_submission_keeps_live_reserve_locked() -> None:
     session = _session()
     allocator = SharedCapitalAllocator(session)
@@ -247,6 +280,41 @@ def test_reconciled_ambiguous_submission_settles_once() -> None:
     assert settled.released_quote == 180
     assert account.reserved_quote == 0
     assert account.occupied_notional_quote == 320
+
+
+def test_repeated_recovery_settlement_is_idempotent_after_restart() -> None:
+    session = _session()
+    allocator = SharedCapitalAllocator(session)
+    reservation = _reserve(allocator, requested_quote="500")
+    allocator.settle(
+        reservation.reservation_id,
+        consumed_quote=Decimal("0"),
+        outcome="submission_unknown",
+        reason="timeout_after_submit",
+    )
+    allocator.settle(
+        reservation.reservation_id,
+        consumed_quote=Decimal("320"),
+        outcome="partially_released",
+        reason="reconciled_terminal_partial_fill",
+    )
+    session.commit()
+
+    restarted_allocator = SharedCapitalAllocator(session)
+    repeated = restarted_allocator.settle(
+        reservation.reservation_id,
+        consumed_quote=Decimal("320"),
+        outcome="partially_released",
+        reason="reconciled_terminal_partial_fill",
+    )
+
+    account = session.query(StrategySharedAccount).one()
+    assert repeated.status == "partially_released"
+    assert repeated.consumed_quote == 320
+    assert repeated.released_quote == 180
+    assert account.reserved_quote == 0
+    assert account.occupied_notional_quote == 320
+    assert account.reusable_quote == 680
 
 
 def test_stale_account_facts_fail_closed() -> None:
