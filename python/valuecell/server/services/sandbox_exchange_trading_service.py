@@ -958,7 +958,11 @@ class SandboxExchangeTradingService:
         if status not in ORDER_TERMINAL or intent.reservation_id is None:
             return
         reservation = self.db.get(StrategyCapitalReservation, intent.reservation_id)
-        if reservation is None or reservation.status != "reserved":
+        if reservation is None or reservation.status not in {
+            "reserved",
+            "submission_unknown",
+            "recovery_required",
+        }:
             return
         live_reserved = Decimal(str(reservation.reserved_quote))
         if cumulative_quote <= 0:

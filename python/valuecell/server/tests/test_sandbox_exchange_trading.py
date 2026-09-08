@@ -1,6 +1,8 @@
 import base64
 from collections.abc import Generator
 from dataclasses import dataclass
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -22,6 +24,10 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyEvaluationJournal,
     RuleStrategyExecutionBatch,
     RuleStrategyExecutionIntent,
+)
+from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation
+from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoExecutionReservation,
 )
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
@@ -496,6 +502,71 @@ def test_list_orders_exposes_same_tenant_intent_error_message(sandbox_client):
 
     assert response.status_code == 200
     assert response.json()["data"][0]["error_message"] == "Order does not satisfy OKX Demo minimum size"
+
+
+def test_terminal_reconciliation_settles_submission_unknown_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(credential_module, "get_settings", lambda: SettingsFixture())
+    reservation = SimpleNamespace(
+        reservation_id="reservation-a",
+        status="submission_unknown",
+        reserved_quote=100,
+    )
+    shared_reservation = SimpleNamespace(reservation_id="reservation-a")
+    added: list[object] = []
+
+    class FakeSession:
+        def get(self, model, row_id):
+            assert row_id == "reservation-a"
+            if model is StrategyCapitalReservation:
+                return reservation
+            if model is SharedDemoExecutionReservation:
+                return shared_reservation
+            return None
+
+        def add(self, value):
+            added.append(value)
+
+    settled = SimpleNamespace(
+        reserved_quote=0,
+        consumed_quote=60,
+        released_quote=40,
+    )
+    settle_calls: list[tuple[str, Decimal, str]] = []
+
+    class FakeAllocator:
+        def __init__(self, _session):
+            pass
+
+        def settle(self, reservation_id, *, consumed_quote, outcome, reason):
+            settle_calls.append((reservation_id, consumed_quote, outcome))
+            assert reason == "venue_filled"
+            return settled
+
+    monkeypatch.setattr(trading_module, "SharedCapitalAllocator", FakeAllocator)
+    service = trading_module.SandboxExchangeTradingService(FakeSession())
+    intent = SimpleNamespace(reservation_id="reservation-a")
+    binding = SimpleNamespace(
+        reservation_id="reservation-a",
+        account_id="account-a",
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+        environment="okx_demo",
+        strategy_id="strategy-a",
+        batch_id="batch-a",
+    )
+
+    service._settle_shared_demo_reservation(
+        intent,
+        binding,
+        "filled",
+        Decimal("60"),
+        "venue_reconciliation",
+    )
+
+    assert settle_calls == [("reservation-a", Decimal("60"), "partially_released")]
+    assert len(added) == 1
 
 
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):
