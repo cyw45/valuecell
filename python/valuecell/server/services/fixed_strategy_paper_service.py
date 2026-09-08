@@ -13,8 +13,11 @@ from valuecell.server.api.schemas.fixed_strategy import (
 )
 from valuecell.server.api.schemas.rule_strategy import RuleStrategyConfig
 from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
+from valuecell.server.db.models.fixed_strategy_paper import FixedPaperPosition
+from valuecell.server.db.connection import get_database_manager
 from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
 from valuecell.server.services.fixed_strategy_dispatcher import evaluate_fixed_strategy
+from valuecell.server.services.fixed_strategy_paper_ledger import FixedPaperLedger
 
 _FIXED_KINDS = {"dual_ma_trend", "pair_rotation", "leader_breakout"}
 
@@ -132,3 +135,75 @@ class FixedPaperEvaluationService:
         )
         if journal is None:
             raise LookupError(f"Fixed evaluation '{evaluation_id}' was not found")
+
+    def record_paper_fill(
+        self,
+        *,
+        tenant_id: str,
+        strategy_id: str,
+        batch_id: str | None,
+        signal: FixedStrategySignal,
+        evaluation_id: str,
+        initial_capital_quote: Decimal,
+        price: Decimal,
+        order_quote_amount: Decimal,
+    ) -> dict[str, Any]:
+        """Apply an executable Paper signal to the isolated fixed ledger."""
+        if batch_id is None:
+            return {
+                "execution": "paper_blocked_missing_batch",
+                "execution_ledger": "paper",
+                "paper_fill": False,
+            }
+        if signal.action not in {"long_entry", "short_entry", "exit"}:
+            return {
+                "execution": "paper_signal_only",
+                "execution_ledger": "paper",
+                "paper_fill": False,
+            }
+        session = get_database_manager().get_session()
+        try:
+            ledger = FixedPaperLedger(session)
+            account = ledger.account(
+                tenant_id=tenant_id,
+                strategy_id=strategy_id,
+                batch_id=batch_id,
+                initial_capital_quote=initial_capital_quote,
+            )
+            position = (
+                session.query(FixedPaperPosition)
+                .filter_by(
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                    batch_id=batch_id,
+                    symbol=signal.symbol,
+                    status="open",
+                )
+                .first()
+            )
+            quantity = (
+                Decimal(str(position.quantity))
+                if signal.action == "exit" and position is not None
+                else order_quote_amount / price
+            )
+            fill = ledger.apply_signal(
+                account=account,
+                signal=signal,
+                evaluation_id=evaluation_id,
+                price=price,
+                quantity=quantity,
+            )
+            session.commit()
+            return {
+                "execution": "paper_filled" if fill is not None else "paper_signal_only",
+                "execution_ledger": "paper",
+                "paper_fill": fill is not None,
+                "fill_id": fill.fill_id if fill is not None else None,
+                "filled_quantity": float(fill.quantity) if fill is not None else None,
+                "filled_price": float(fill.price) if fill is not None else None,
+            }
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()

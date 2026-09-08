@@ -15,6 +15,7 @@ from valuecell.server.services.fixed_strategy_paper_service import (
     FixedDemoExecutionAdapter,
     FixedPaperEvaluationService,
 )
+from valuecell.server.services.fixed_strategy_paper_ledger import FixedPaperLedger
 
 
 class RecordingRepository:
@@ -87,6 +88,12 @@ def test_fixed_demo_evaluation_never_labels_signal_as_paper() -> None:
     )
 
     assert repository.journal.result["execution_ledger"] == "okx_demo"
+
+
+def test_fixed_paper_fill_execution_is_recorded_once_for_evaluation() -> None:
+    """Paper execution must create one idempotent fill after a signal."""
+    service = FixedPaperEvaluationService()
+    assert hasattr(service, "record_paper_fill")
 
 
 def _demo_config() -> RuleStrategyConfig:

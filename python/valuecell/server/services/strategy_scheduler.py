@@ -822,13 +822,33 @@ class StrategyScheduler:
                 btc_request=btc_request,
                 environment=config.execution.environment,
             )
-            if demo_adapter is None:
-                return
             latest_candle = max(
                 (candle for candle in request.candles if candle.symbol == signal.symbol),
                 key=lambda candle: candle.timestamp_ms,
                 default=None,
             )
+            if demo_adapter is None:
+                execution = paper_service.record_paper_fill(
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                    batch_id=batch_id,
+                    signal=signal,
+                    evaluation_id=evaluation_id,
+                    initial_capital_quote=Decimal(str(config.initial_capital_quote)),
+                    price=Decimal(str(latest_candle.close)) if latest_candle is not None else Decimal("0"),
+                    order_quote_amount=Decimal(str(config.risk.order_quote_amount)),
+                ) if latest_candle is not None else {
+                    "execution": "paper_blocked_market_evidence",
+                    "execution_ledger": "paper",
+                    "paper_fill": False,
+                }
+                paper_service.update_execution(
+                    tenant_id=tenant_id,
+                    strategy_id=strategy_id,
+                    evaluation_id=evaluation_id,
+                    execution=execution,
+                )
+                return
             if latest_candle is None:
                 if signal.action in {"long_entry", "short_entry", "exit"}:
                     paper_service.update_execution(
