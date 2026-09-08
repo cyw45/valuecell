@@ -177,6 +177,27 @@ def test_summary_keeps_unknown_submission_capital_in_live_reservation() -> None:
     assert allocation.allocation_state == "submission_unknown"
 
 
+def test_summary_accepts_settled_occupied_capital_with_no_outstanding_reserve() -> None:
+    session = _session()
+    reservation = session.query(StrategyCapitalReservation).first()
+    reservation.status = "occupied"
+    reservation.reserved_quote = 0
+    reservation.consumed_quote = 300
+    reservation.released_quote = 100
+    session.commit()
+
+    overview = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    )
+
+    allocation = overview.allocator.allocations[0]
+    assert allocation.reserved_quote == 0
+    assert allocation.occupied_quote == 300
+    assert allocation.allocation_state == "occupied"
+
+
 def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:
     session = _session()
     session.add(

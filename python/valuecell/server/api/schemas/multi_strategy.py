@@ -154,8 +154,6 @@ class StrategyAllocation(MultiStrategyModel):
 
     @model_validator(mode="after")
     def validate_utilization_inputs(self) -> "StrategyAllocation":
-        if self.occupied_quote > self.reserved_quote:
-            raise ValueError("occupied quote cannot exceed reserved quote")
         return self
 
 
