@@ -861,6 +861,40 @@ def test_rule_strategy_logs_include_fixed_paper_fill_facts(monkeypatch) -> None:
     ]
 
 
+def test_fixed_strategy_account_reads_fixed_paper_ledger(monkeypatch) -> None:
+    repository = InMemoryRuleStrategyRepository()
+    strategy = SimpleNamespace(
+        strategy_id=STRATEGY_ID,
+        tenant_id=FIXED_PRINCIPAL.tenant_id,
+        strategy_kind="dual_ma_trend",
+        status="running",
+        current_batch_id="batch-a",
+        config={"initial_capital_quote": 1000},
+    )
+    repository.strategy = strategy
+    repository.get_fixed_paper_account = lambda *_args, **_kwargs: {
+        "initial_capital_quote": 1000,
+        "quote_balance": 798,
+        "realized_pnl_quote": 0,
+        "unrealized_pnl_quote": 0,
+        "equity_quote": 798,
+        "positions": {
+            "BTC-USDT": {
+                "quantity": 2,
+                "entry_price": 101,
+                "mark_price": 101,
+            }
+        },
+    }
+    client = _client(repository)
+
+    response = client.get(f"/rule-strategies/{STRATEGY_ID}/account")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["quote_balance"] == 798
+    assert response.json()["data"]["positions"]["BTC-USDT"]["quantity"] == 2
+
+
 def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None:
     client = _client()
     assert (

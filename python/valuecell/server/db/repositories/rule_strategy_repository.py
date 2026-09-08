@@ -22,7 +22,11 @@ from ..models.rule_strategy import (
     RuleStrategyMonitorSymbol,
     RuleStrategyRiskState,
 )
-from ..models.fixed_strategy_paper import FixedPaperFill
+from ..models.fixed_strategy_paper import (
+    FixedPaperAccount,
+    FixedPaperFill,
+    FixedPaperPosition,
+)
 from ..models.sandbox_exchange_order import SandboxExchangeOrder
 
 
@@ -89,6 +93,66 @@ class RuleStrategyRepository:
             for fill in fills:
                 session.expunge(fill)
             return fills
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def get_fixed_paper_account(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        *,
+        batch_id: str,
+    ) -> dict[str, object] | None:
+        """Return a fixed Paper account with batch-owned open positions."""
+        session = self._get_session()
+        try:
+            account = (
+                session.query(FixedPaperAccount)
+                .filter_by(
+                    strategy_id=strategy_id,
+                    tenant_id=tenant_id,
+                    batch_id=batch_id,
+                )
+                .first()
+            )
+            if account is None:
+                return None
+            positions = (
+                session.query(FixedPaperPosition)
+                .filter_by(
+                    strategy_id=strategy_id,
+                    tenant_id=tenant_id,
+                    batch_id=batch_id,
+                    status="open",
+                )
+                .all()
+            )
+            position_data = {
+                position.symbol: {
+                    "quantity": position.quantity,
+                    "entry_price": position.entry_price,
+                    "mark_price": position.entry_price,
+                    "highest_price": None,
+                    "addition_count": 0,
+                }
+                for position in positions
+            }
+            position_value = sum(
+                position.quantity
+                * position.entry_price
+                * (1 if position.side == "long" else -1)
+                for position in positions
+            )
+            equity = account.quote_balance + position_value
+            return {
+                "initial_capital_quote": account.initial_capital_quote,
+                "quote_balance": account.quote_balance,
+                "positions": position_data,
+                "realized_pnl_quote": account.realized_pnl_quote,
+                "unrealized_pnl_quote": account.unrealized_pnl_quote,
+                "equity_quote": equity,
+            }
         finally:
             if self.db_session is None:
                 session.close()

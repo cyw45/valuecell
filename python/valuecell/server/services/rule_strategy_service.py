@@ -989,6 +989,21 @@ class RuleStrategyService:
         self, strategy_id: str, tenant_id: str, batch_id: str | None = None
     ) -> dict[str, Any]:
         strategy = self._require_strategy(strategy_id, tenant_id)
+        fixed_account_reader = getattr(self.repository, "get_fixed_paper_account", None)
+        if (
+            getattr(strategy, "strategy_kind", None)
+            in {"dual_ma_trend", "pair_rotation", "leader_breakout"}
+            and callable(fixed_account_reader)
+        ):
+            selected_batch_id = batch_id or getattr(strategy, "current_batch_id", None)
+            if selected_batch_id is not None:
+                fixed_account = fixed_account_reader(
+                    strategy_id,
+                    tenant_id,
+                    batch_id=selected_batch_id,
+                )
+                if fixed_account is not None:
+                    return fixed_account
         if batch_id is not None:
             batch = self.resolve_batch(strategy_id, tenant_id, batch_id)
             if batch is None:
