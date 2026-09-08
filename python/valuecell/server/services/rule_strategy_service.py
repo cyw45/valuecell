@@ -1432,6 +1432,42 @@ class RuleStrategyService:
         if batch is None and not legacy_repository:
             return {"strategy_id": strategy_id, "mode": "paper", "entries": []}
         entries: list[dict[str, Any]] = []
+        strategy = self.repository.get(strategy_id, tenant_id)
+        fixed_fill_reader = getattr(self.repository, "get_fixed_paper_fills", None)
+        if (
+            log_type == "trades"
+            and strategy is not None
+            and getattr(strategy, "strategy_kind", None) in {
+                "dual_ma_trend",
+                "pair_rotation",
+                "leader_breakout",
+            }
+            and callable(fixed_fill_reader)
+        ):
+            fills = fixed_fill_reader(
+                strategy_id,
+                tenant_id,
+                limit=limit,
+                batch_id=getattr(batch, "batch_id", None),
+            )
+            return {
+                "strategy_id": strategy_id,
+                "mode": "paper",
+                "entries": [
+                    {
+                        "evaluation_id": fill.evaluation_id,
+                        "evaluated_at": fill.created_at,
+                        "action": fill.action,
+                        "symbol": fill.symbol,
+                        "price": fill.price,
+                        "quantity": fill.quantity,
+                        "quote_amount": fill.quote_amount,
+                        "realized_pnl_quote": fill.realized_pnl_quote,
+                        "execution": "paper_filled",
+                    }
+                    for fill in fills
+                ],
+            }
         reader = self.repository.get_evaluations
         if legacy_repository:
             journals = reader(strategy_id, tenant_id, limit=limit)

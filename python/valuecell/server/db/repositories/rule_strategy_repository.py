@@ -22,6 +22,7 @@ from ..models.rule_strategy import (
     RuleStrategyMonitorSymbol,
     RuleStrategyRiskState,
 )
+from ..models.fixed_strategy_paper import FixedPaperFill
 from ..models.sandbox_exchange_order import SandboxExchangeOrder
 
 
@@ -63,6 +64,31 @@ class RuleStrategyRepository:
             for strategy in strategies:
                 session.expunge(strategy)
             return strategies
+        finally:
+            if self.db_session is None:
+                session.close()
+
+    def get_fixed_paper_fills(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        *,
+        limit: int = 100,
+        batch_id: str | None = None,
+    ) -> list[FixedPaperFill]:
+        """Read batch-scoped fixed Paper fills for the strategy trade log."""
+        session = self._get_session()
+        try:
+            query = session.query(FixedPaperFill).filter(
+                FixedPaperFill.strategy_id == strategy_id,
+                FixedPaperFill.tenant_id == tenant_id,
+            )
+            if batch_id is not None:
+                query = query.filter(FixedPaperFill.batch_id == batch_id)
+            fills = query.order_by(FixedPaperFill.created_at.desc()).limit(limit).all()
+            for fill in fills:
+                session.expunge(fill)
+            return fills
         finally:
             if self.db_session is None:
                 session.close()

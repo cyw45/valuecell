@@ -818,6 +818,49 @@ def test_rule_strategy_api_returns_empty_trade_facts_after_start() -> None:
     assert response.json()["data"] == []
 
 
+def test_rule_strategy_logs_include_fixed_paper_fill_facts(monkeypatch) -> None:
+    repository = InMemoryRuleStrategyRepository()
+    strategy = SimpleNamespace(
+        strategy_id=STRATEGY_ID,
+        tenant_id=FIXED_PRINCIPAL.tenant_id,
+        strategy_kind="dual_ma_trend",
+        status="running",
+        current_batch_id="batch-a",
+        config={"initial_capital_quote": 1000},
+    )
+    repository.strategy = strategy
+    repository.get_fixed_paper_fills = lambda *_args, **_kwargs: [
+        SimpleNamespace(
+            evaluation_id="evaluation-a",
+            created_at=CREATED_AT,
+            action="long_entry",
+            symbol="BTC-USDT",
+            price=101.0,
+            quantity=2.0,
+            quote_amount=202.0,
+            realized_pnl_quote=0.0,
+        )
+    ]
+    client = _client(repository)
+
+    response = client.get(f"/rule-strategies/{STRATEGY_ID}/trades")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["entries"] == [
+        {
+            "evaluation_id": "evaluation-a",
+            "evaluated_at": CREATED_AT.isoformat().replace("+00:00", "Z"),
+            "action": "long_entry",
+            "symbol": "BTC-USDT",
+            "price": 101.0,
+            "quantity": 2.0,
+            "quote_amount": 202.0,
+            "realized_pnl_quote": 0.0,
+            "execution": "paper_filled",
+        }
+    ]
+
+
 def test_rule_strategy_api_returns_grouped_durable_evaluation_feedback() -> None:
     client = _client()
     assert (
