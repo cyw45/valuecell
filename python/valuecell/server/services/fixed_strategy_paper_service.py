@@ -204,6 +204,7 @@ class FixedPaperEvaluationService:
                 "execution_ledger": "paper",
                 "paper_fill": fill is not None,
                 "fill_id": fill.fill_id if fill is not None else None,
+                "filled_side": fill.side if fill is not None else None,
                 "filled_quantity": float(fill.quantity) if fill is not None else None,
                 "filled_price": float(fill.price) if fill is not None else None,
             }

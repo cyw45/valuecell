@@ -188,6 +188,50 @@ def journal_trade_facts(
                 ),
             )
         )
+    execution = result.get("execution")
+    if (
+        not facts
+        and isinstance(execution, dict)
+        and execution.get("execution") == "paper_filled"
+        and execution.get("paper_fill") is True
+    ):
+        action = str(result.get("action") or "")
+        recorded_side = execution.get("filled_side")
+        side = recorded_side if recorded_side in {"buy", "sell", "short", "cover"} else (
+            "buy"
+            if action in {"long_entry", "buy", "entry", "add"}
+            else "sell"
+            if action in {"exit", "short_entry", "sell", "reduce", "close"}
+            else None
+        )
+        symbol = result.get("symbol")
+        quantity = _number(execution.get("filled_quantity"))
+        price = _number(execution.get("filled_price"))
+        if side is not None and isinstance(symbol, str) and symbol and quantity and price:
+            facts.append(
+                UnifiedTradeFact(
+                    identity=identity,
+                    batch_id=getattr(journal, "batch_id", None),
+                    evaluation_id=getattr(journal, "evaluation_id", None),
+                    fill_id=str(execution.get("fill_id")) if execution.get("fill_id") else None,
+                    symbol=symbol,
+                    side=side,
+                    status="filled",
+                    requested_quote=quantity * price,
+                    filled_quote=quantity * price,
+                    filled_quantity=quantity,
+                    average_fill_price=price,
+                    created_at=observed_at,
+                    filled_at=observed_at,
+                    explanation=TradeExplanation(
+                        decision=action,
+                        decision_reason=reason,
+                        conditions=conditions,
+                        execution_path="paper",
+                        final_result="paper_filled",
+                    ),
+                )
+            )
     if shared_orders:
         facts.extend(
             _shared_demo_facts(

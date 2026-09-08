@@ -152,3 +152,45 @@ def test_journal_trade_facts_preserve_unknown_submission_status() -> None:
         ],
     )
     assert facts[0].status == "submission_unknown"
+
+
+def test_journal_trade_facts_restore_fixed_paper_fill_from_execution_result() -> None:
+    observed_at = datetime(2026, 8, 28, tzinfo=timezone.utc)
+    strategy = SimpleNamespace(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        strategy_version="v1",
+        code_fingerprint="fingerprint-a",
+    )
+    journal = SimpleNamespace(
+        evaluation_id="evaluation-a",
+        batch_id="batch-a",
+        created_at=observed_at,
+        result={
+            "action": "exit",
+            "symbol": "BTC-USDT",
+            "reason": "SMA10 上穿 SMA20",
+            "conditions": [],
+            "execution": {
+                "execution": "paper_filled",
+                "execution_ledger": "paper",
+                "paper_fill": True,
+                "fill_id": "fill-a",
+                "filled_side": "sell",
+                "filled_quantity": 2,
+                "filled_price": 101,
+            },
+        },
+        trades=[],
+    )
+
+    facts = journal_trade_facts(strategy, journal)
+
+    assert len(facts) == 1
+    assert facts[0].status == "filled"
+    assert facts[0].side == "sell"
+    assert facts[0].fill_id == "fill-a"
+    assert facts[0].filled_quantity == 2
+    assert facts[0].average_fill_price == 101
+    assert facts[0].filled_quote == 202
