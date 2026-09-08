@@ -20,11 +20,22 @@ from valuecell.server.services.fixed_strategy_paper_service import (
 class RecordingRepository:
     def __init__(self) -> None:
         self.journal = None
+        self.append_count = 0
 
     def append_evaluation(self, journal):
+        self.append_count += 1
         self.journal = journal
-        journal.evaluation_id = "fixed-evaluation-1"
         return journal
+
+    def get_evaluation(self, evaluation_id, strategy_id, tenant_id):
+        if (
+            self.journal is not None
+            and self.journal.evaluation_id == evaluation_id
+            and self.journal.strategy_id == strategy_id
+            and self.journal.tenant_id == tenant_id
+        ):
+            return self.journal
+        return None
 
 
 def test_fixed_paper_service_persists_signal_conditions_and_batch() -> None:
@@ -52,7 +63,7 @@ def test_fixed_paper_service_persists_signal_conditions_and_batch() -> None:
         ),
     )
     assert signal.action == "long_entry"
-    assert evaluation_id == "fixed-evaluation-1"
+    assert evaluation_id.startswith("fixed_")
     assert repository.journal.batch_id == "batch-a"
     assert repository.journal.result["conditions"]
     assert repository.journal.result["symbol"] == "BTC-USDT"
@@ -93,6 +104,85 @@ def test_fixed_paper_fill_execution_is_recorded_once_for_evaluation() -> None:
     """Paper execution must create one idempotent fill after a signal."""
     service = FixedPaperEvaluationService()
     assert hasattr(service, "record_paper_fill")
+
+
+def test_fixed_evaluation_is_idempotent_for_same_batch_and_observation() -> None:
+    repository = RecordingRepository()
+    candles = [
+        FixedCandle(
+            symbol="BTC-USDT",
+            timestamp_ms=1_700_000_000_000 + index * 14_400_000,
+            open=close,
+            high=close + 1,
+            low=close - 1,
+            close=close,
+            volume=1,
+        )
+        for index, close in enumerate([100] * 21 + [101])
+    ]
+    service = FixedPaperEvaluationService(repository)
+    first = service.evaluate_and_record(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        batch_id="batch-a",
+        request=FixedEngineInput(
+            candles=candles,
+            observed_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        ),
+    )
+    second = service.evaluate_and_record(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        batch_id="batch-a",
+        request=FixedEngineInput(
+            candles=candles,
+            observed_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert second[1] == first[1]
+    assert repository.append_count == 1
+
+
+def test_fixed_evaluation_identity_changes_for_new_execution_batch() -> None:
+    repository = RecordingRepository()
+    candles = [
+        FixedCandle(
+            symbol="BTC-USDT",
+            timestamp_ms=1_700_000_000_000 + index * 14_400_000,
+            open=close,
+            high=close + 1,
+            low=close - 1,
+            close=close,
+            volume=1,
+        )
+        for index, close in enumerate([100] * 21 + [101])
+    ]
+    request = FixedEngineInput(
+        candles=candles,
+        observed_at=datetime(2026, 8, 28, tzinfo=timezone.utc),
+    )
+    service = FixedPaperEvaluationService(repository)
+
+    first = service.evaluate_and_record(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        batch_id="batch-a",
+        request=request,
+    )
+    second = service.evaluate_and_record(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        batch_id="batch-b",
+        request=request,
+    )
+
+    assert second[1] != first[1]
+    assert repository.append_count == 2
 
 
 def _demo_config() -> RuleStrategyConfig:

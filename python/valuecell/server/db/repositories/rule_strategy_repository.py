@@ -352,6 +352,28 @@ class RuleStrategyRepository:
             if self.db_session is None:
                 session.close()
 
+    def get_evaluation(
+        self, evaluation_id: str, strategy_id: str, tenant_id: str
+    ) -> RuleStrategyEvaluationJournal | None:
+        """Read one tenant- and strategy-owned evaluation for idempotent dispatch."""
+        session = self._get_session()
+        try:
+            journal = (
+                session.query(RuleStrategyEvaluationJournal)
+                .filter_by(
+                    evaluation_id=evaluation_id,
+                    strategy_id=strategy_id,
+                    tenant_id=tenant_id,
+                )
+                .first()
+            )
+            if journal is not None:
+                session.expunge(journal)
+            return journal
+        finally:
+            if self.db_session is None:
+                session.close()
+
     def get_evaluations_for_export(
         self,
         strategy_id: str,

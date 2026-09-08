@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid5
 
 from valuecell.server.api.schemas.fixed_strategy import (
     FixedEngineInput,
@@ -97,6 +97,16 @@ class FixedPaperEvaluationService:
             )
         else:
             signal = evaluate_fixed_strategy(strategy_kind, request)
+        evaluation_key = (
+            f"fixed-paper:{tenant_id}:{strategy_id}:{batch_id or 'unbatched'}:"
+            f"{strategy_kind}:{signal.symbol}:{signal.observed_at.isoformat()}"
+        )
+        evaluation_id = f"fixed_{uuid5(NAMESPACE_URL, evaluation_key).hex}"
+        existing_reader = getattr(self._repository, "get_evaluation", None)
+        if callable(existing_reader):
+            existing = existing_reader(evaluation_id, strategy_id, tenant_id)
+            if existing is not None:
+                return signal, evaluation_id
         result = {
             "strategy_kind": signal.kind,
             "symbol": signal.symbol,
@@ -114,7 +124,7 @@ class FixedPaperEvaluationService:
         }
         journal = self._repository.append_evaluation(
             RuleStrategyEvaluationJournal(
-                evaluation_id=f"fixed_{uuid4().hex}",
+            evaluation_id=evaluation_id,
                 tenant_id=tenant_id,
                 strategy_id=strategy_id,
                 batch_id=batch_id,
