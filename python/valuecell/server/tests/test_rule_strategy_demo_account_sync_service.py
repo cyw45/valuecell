@@ -15,6 +15,7 @@ from valuecell.server.db.models.rule_strategy import (
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoAccountSyncState,
+    SharedDemoStrategyAllocationCap,
 )
 
 
@@ -67,7 +68,8 @@ def test_sync_fetches_shared_credential_once_and_deduplicates_snapshot(monkeypat
                         "execution": {
                             "environment": "okx_demo",
                             "sandbox_connection_id": "credential-a",
-                        }
+                        },
+                        "initial_capital_quote": 300,
                     },
                 ),
                 RuleStrategy(
@@ -79,7 +81,8 @@ def test_sync_fetches_shared_credential_once_and_deduplicates_snapshot(monkeypat
                         "execution": {
                             "environment": "okx_demo",
                             "sandbox_connection_id": "credential-a",
-                        }
+                        },
+                        "initial_capital_quote": 200,
                     },
                 ),
             ]
@@ -116,6 +119,9 @@ def test_sync_fetches_shared_credential_once_and_deduplicates_snapshot(monkeypat
         assert shared_state.sync_status == "healthy"
         assert shared_state.reconciliation_status == "pending"
         assert session.query(StrategySharedAccount).count() == 1
+        caps = session.query(SharedDemoStrategyAllocationCap).all()
+        assert {cap.strategy_id for cap in caps} == {"strategy-a", "strategy-b"}
+        assert {float(cap.max_reserved_quote) for cap in caps} == {200.0, 300.0}
         states = session.query(RuleStrategyDemoAccountSyncState).all()
         assert {state.strategy_id for state in states} == {"strategy-a", "strategy-b"}
         assert all(state.latest_snapshot_id is not None for state in states)

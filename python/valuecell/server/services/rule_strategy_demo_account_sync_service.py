@@ -19,6 +19,9 @@ from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoAccountSyncState,
 )
+from valuecell.server.services.shared_demo_allocation_cap_service import (
+    ensure_initial_strategy_cap,
+)
 from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     get_latest_demo_account_snapshot,
     record_demo_account_snapshot,
@@ -227,6 +230,27 @@ def _strategies(session: Session) -> dict[tuple[str, str], list[RuleStrategy]]:
     return grouped
 
 
+def _ensure_initial_caps(
+    session: Session,
+    *,
+    account: StrategySharedAccount,
+    strategies: list[RuleStrategy],
+) -> None:
+    """Create initial caps for Demo strategies created before first sync."""
+    for strategy in strategies:
+        config = strategy.config if isinstance(strategy.config, dict) else {}
+        initial = config.get("initial_capital_quote")
+        if not isinstance(initial, (int, float)) or initial <= 0:
+            continue
+        ensure_initial_strategy_cap(
+            session,
+            tenant_id=account.tenant_id,
+            strategy_id=strategy.strategy_id,
+            credential_id=account.credential_id,
+            initial_capital_quote=float(initial),
+        )
+
+
 def _record_failure(
     session: Session,
     strategy: RuleStrategy,
@@ -305,6 +329,7 @@ async def sync_demo_account_snapshots(session: Session) -> dict[str, int]:
             observed_at = positions.get("checked_at") or account.get("checked_at")
             shared = _shared_account(session, tenant_id, credential_id)
             _update_shared_account(shared, account, observed_at)
+            _ensure_initial_caps(session, account=shared, strategies=strategies)
             _record_shared_snapshot(
                 session,
                 account=shared,

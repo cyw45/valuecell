@@ -16,9 +16,9 @@ from valuecell.server.api.auth import CurrentPrincipal, get_current_principal
 from valuecell.server.api.schemas.base import SuccessResponse
 from valuecell.server.db.connection import get_db
 from valuecell.server.db.models.tenant_credential import TenantCredential
-from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
 from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.db.models.shared_demo_execution import SharedDemoStrategyAllocationCap
+from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionIntent
 from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyCandle,
     RuleStrategyConfig,
@@ -100,6 +100,9 @@ from valuecell.server.services.rule_strategy_validation_service import (
     RuleStrategyValidationWindowError,
 )
 from valuecell.server.services.multi_strategy_trade_facts import journal_trade_facts
+from valuecell.server.services.shared_demo_allocation_cap_service import (
+    ensure_initial_strategy_cap,
+)
 from valuecell.server.services.rule_strategy_validation_export_service import (
     RuleStrategyValidationExportService,
 )
@@ -324,15 +327,25 @@ def create_rule_strategy_router(
                     status_code=422,
                     detail={"code": "okx_demo_connection_invalid", "error_code": "credential_or_permission_error"},
                 )
-        return SuccessResponse.create(
-            data=rule_service.create(
+        data = rule_service.create(
                 principal.tenant_id,
                 request.name,
                 request.description,
                 request.config.model_copy(
                     update={"initial_capital_quote": request.initial_capital_quote}
                 ),
-            ),
+            )
+        if request.config.execution.environment == "okx_demo":
+            ensure_initial_strategy_cap(
+                db,
+                tenant_id=principal.tenant_id,
+                strategy_id=str(data["strategy_id"]),
+                credential_id=request.config.execution.sandbox_connection_id,
+                initial_capital_quote=request.initial_capital_quote,
+            )
+            db.commit()
+        return SuccessResponse.create(
+            data=data,
             msg=(
                 "OKX Demo rule strategy created"
                 if request.config.execution.environment == "okx_demo"
@@ -377,6 +390,15 @@ def create_rule_strategy_router(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if request.environment == "okx_demo":
+            ensure_initial_strategy_cap(
+                db,
+                tenant_id=principal.tenant_id,
+                strategy_id=str(data["strategy_id"]),
+                credential_id=request.credential_id,
+                initial_capital_quote=request.initial_capital_quote,
+            )
+            db.commit()
         return SuccessResponse.create(data=data, msg="Fixed rule strategy created")
 
     @router.get("/shared-account-summary", response_model=SuccessResponse[dict[str, Any]])

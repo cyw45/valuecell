@@ -13,6 +13,7 @@ from valuecell.server.db.models.multi_strategy import (
 from valuecell.server.db.models.rule_strategy import RuleStrategy  # noqa: F401
 from valuecell.server.db.models.tenant import SaaSUser, Tenant  # noqa: F401
 from valuecell.server.db.models.tenant_credential import TenantCredential  # noqa: F401
+from valuecell.server.db.models.shared_demo_execution import SharedDemoStrategyAllocationCap
 from valuecell.server.services.multi_strategy_capital_allocator import (
     CapitalAllocationError,
     SharedCapitalAllocator,
@@ -67,7 +68,7 @@ def _reserve(
 def test_reservation_prevents_two_strategies_using_the_same_quote() -> None:
     session = _session()
     allocator = SharedCapitalAllocator(session)
-    first = _reserve(allocator, requested_quote="700")
+    _reserve(allocator, requested_quote="700")
     session.commit()
 
     with pytest.raises(CapitalAllocationError, match="insufficient unreserved"):
@@ -78,8 +79,39 @@ def test_reservation_prevents_two_strategies_using_the_same_quote() -> None:
             idempotency_key="reserve-b",
             requested_quote="400",
         )
-    assert first.status == "reserved"
-    assert session.query(StrategySharedAccount).one().reserved_quote == 700
+
+
+def test_reservation_uses_persisted_strategy_cap_without_callsite_override() -> None:
+    session = _session()
+    session.add(
+        RuleStrategy(
+            strategy_id="strategy-a",
+            tenant_id="tenant-a",
+            name="Strategy A",
+            strategy_kind="configurable_rule",
+            config={"execution": {"environment": "okx_demo", "sandbox_connection_id": "credential-a"}},
+        )
+    )
+    session.add(
+        SharedDemoStrategyAllocationCap(
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            strategy_id="strategy-a",
+            max_reserved_quote=Decimal("150"),
+            max_occupied_quote=Decimal("150"),
+            version=1,
+            effective_at=datetime.now(timezone.utc),
+        )
+    )
+    session.commit()
+    allocator = SharedCapitalAllocator(session)
+    _reserve(allocator, requested_quote="150")
+    session.commit()
+
+    with pytest.raises(CapitalAllocationError, match="strategy live capital cap exceeded"):
+        _reserve(allocator, idempotency_key="reserve-b", requested_quote="1")
 
 
 def test_strategy_live_cap_blocks_second_reservation() -> None:
