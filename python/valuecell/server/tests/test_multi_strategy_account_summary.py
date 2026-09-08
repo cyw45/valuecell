@@ -140,6 +140,25 @@ def test_summary_exposes_strategy_cap_and_actual_usage() -> None:
     assert allocation.max_occupied_quote == 200
 
 
+def test_summary_returns_strategy_runtime_and_aggregate_pnl() -> None:
+    session = _session()
+    strategy = session.query(RuleStrategy).first()
+    strategy.status = "running"
+    strategy.current_batch_id = "batch-a"
+    session.commit()
+    overview = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    )
+
+    allocation = overview.allocator.allocations[0]
+    assert allocation.status == "running"
+    assert allocation.current_batch_id == "batch-a"
+    assert allocation.utilization_ratio == 0.7
+    assert overview.strategy_pnl_total_quote is None
+
+
 def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:
     session = _session()
     session.add(

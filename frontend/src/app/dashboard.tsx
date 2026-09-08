@@ -1030,6 +1030,7 @@ export default function DashboardPage() {
                               <TableHead>状态</TableHead>
                               <TableHead className="text-right">预留</TableHead>
                               <TableHead className="text-right">占用</TableHead>
+                              <TableHead className="text-right">利用率</TableHead>
                               <TableHead className="text-right">已释放</TableHead>
                               <TableHead className="text-right">已实现</TableHead>
                               <TableHead className="text-right">未实现</TableHead>
@@ -1040,7 +1041,7 @@ export default function DashboardPage() {
                           <TableBody>
                             {sharedAccountSummary.allocator.allocations.length === 0 ? (
                               <TableRow>
-                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={9}>
+                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={10}>
                                   暂无策略分配记录。
                                 </TableCell>
                               </TableRow>
@@ -1051,9 +1052,9 @@ export default function DashboardPage() {
                                     <div className="flex min-w-40 flex-col gap-1">
                                       <span className="font-medium">{strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.name ?? allocation.kind}</span>
                                       <span className="text-[10px] text-muted-foreground">{allocation.kind}</span>
-                                      <span className={cn("text-[10px]", strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.status === "running" ? "text-emerald-500" : "text-muted-foreground")}>
-                                        {strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.status === "running" ? "运行中" : "已停止"}
-                                        {strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.current_batch_id ? ` · 批次 ${strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.current_batch_id}` : " · 尚无当前批次"}
+                                      <span className={cn("text-[10px]", allocation.status === "running" ? "text-emerald-500" : "text-muted-foreground")}>
+                                        {allocation.status === "running" ? "运行中" : allocation.status === "paused" ? "已暂停" : allocation.status === "archived" ? "已归档" : "已停止"}
+                                        {allocation.current_batch_id ? ` · 批次 ${allocation.current_batch_id}` : " · 尚无当前批次"}
                                       </span>
                                       <span className="font-mono text-[10px] text-muted-foreground" title={allocation.strategy_id}>
                                         {allocation.strategy_id}
@@ -1081,6 +1082,7 @@ export default function DashboardPage() {
                                   </TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.reserved_quote)}</TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.occupied_quote)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">{(allocation.utilization_ratio * 100).toFixed(1)}%</TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.released_quote)}</TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.realized_pnl_quote)}</TableCell>
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.unrealized_pnl_quote)}</TableCell>

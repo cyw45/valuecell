@@ -51,6 +51,9 @@ export type StrategyAllocation = {
   utilization_denominator_quote: number;
   max_reserved_quote: number | null;
   max_occupied_quote: number | null;
+  status: "running" | "stopped" | "archived" | "paused";
+  current_batch_id: string | null;
+  utilization_ratio: number;
 };
 
 export type SharedWalletSummary = {

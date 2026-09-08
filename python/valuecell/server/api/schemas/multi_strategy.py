@@ -148,6 +148,9 @@ class StrategyAllocation(MultiStrategyModel):
     utilization_denominator_quote: float = Field(gt=0)
     max_reserved_quote: float | None = Field(default=None, ge=0)
     max_occupied_quote: float | None = Field(default=None, ge=0)
+    status: Literal["running", "stopped", "archived", "paused"]
+    current_batch_id: str | None = None
+    utilization_ratio: float = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_utilization_inputs(self) -> "StrategyAllocation":

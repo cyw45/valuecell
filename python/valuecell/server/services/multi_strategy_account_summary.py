@@ -200,9 +200,17 @@ def build_shared_account_overview(
                 utilization_denominator_quote=denominator,
                 max_reserved_quote=(float(cap.max_reserved_quote) if cap else None),
                 max_occupied_quote=(float(cap.max_occupied_quote) if cap else None),
+                status=str(strategy.status),
+                current_batch_id=getattr(strategy, "current_batch_id", None),
+                utilization_ratio=(reserved + occupied) / denominator,
             )
         )
-    total_strategy_pnl = None
+    known_net_pnl = [allocation.net_pnl_quote for allocation in allocations]
+    total_strategy_pnl = (
+        sum(value for value in known_net_pnl if value is not None)
+        if known_net_pnl and all(value is not None for value in known_net_pnl)
+        else None
+    )
     wallet = SharedWalletSummary(
         tenant_id=tenant_id,
         credential_id=credential_id,
