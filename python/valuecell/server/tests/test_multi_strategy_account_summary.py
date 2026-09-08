@@ -159,6 +159,24 @@ def test_summary_returns_strategy_runtime_and_aggregate_pnl() -> None:
     assert overview.strategy_pnl_total_quote is None
 
 
+def test_summary_keeps_unknown_submission_capital_in_live_reservation() -> None:
+    session = _session()
+    reservation = session.query(StrategyCapitalReservation).first()
+    reservation.status = "submission_unknown"
+    reservation.reason = "venue response timed out"
+    session.commit()
+
+    overview = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    )
+
+    allocation = overview.allocator.allocations[0]
+    assert allocation.reserved_quote == 400
+    assert allocation.allocation_state == "submission_unknown"
+
+
 def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:
     session = _session()
     session.add(

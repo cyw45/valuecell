@@ -50,7 +50,15 @@ def _active_reservations(
         .filter(
             StrategyCapitalReservation.account_id == account_id,
             StrategyCapitalReservation.tenant_id == tenant_id,
-            StrategyCapitalReservation.status.in_(("reserved", "occupied", "partially_released")),
+            StrategyCapitalReservation.status.in_(
+                (
+                    "reserved",
+                    "occupied",
+                    "partially_released",
+                    "submission_unknown",
+                    "recovery_required",
+                )
+            ),
         )
         .all()
     )
@@ -153,7 +161,20 @@ def build_shared_account_overview(
         reserved = sum(float(row.reserved_quote) for row in rows)
         occupied = sum(float(row.consumed_quote) for row in rows)
         released = sum(float(row.released_quote) for row in rows)
-        state = "occupied" if occupied > 0 else "reserved" if reserved > 0 else "available"
+        recovery_rows = [
+            row for row in rows if row.status in {"submission_unknown", "recovery_required"}
+        ]
+        state = (
+            "recovery_required"
+            if any(row.status == "recovery_required" for row in recovery_rows)
+            else "submission_unknown"
+            if recovery_rows
+            else "occupied"
+            if occupied > 0
+            else "reserved"
+            if reserved > 0
+            else "available"
+        )
         lifecycle_reason = None
         if strategy.status != "running":
             lifecycle_reason = "策略当前未运行，尚未产生本批次执行事实。"
