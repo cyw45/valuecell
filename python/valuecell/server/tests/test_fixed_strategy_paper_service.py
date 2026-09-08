@@ -15,7 +15,6 @@ from valuecell.server.services.fixed_strategy_paper_service import (
     FixedDemoExecutionAdapter,
     FixedPaperEvaluationService,
 )
-from valuecell.server.services.fixed_strategy_paper_ledger import FixedPaperLedger
 
 
 class RecordingRepository:
@@ -167,3 +166,24 @@ async def test_fixed_demo_adapter_blocks_short_without_venue_submission() -> Non
 
     assert result is not None
     assert result["execution"] == "blocked_execution_environment"
+
+
+@pytest.mark.asyncio
+async def test_fixed_demo_exit_requests_full_attributed_position_close() -> None:
+    calls = []
+
+    async def shared_boundary(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"execution": "okx_demo_submitted"}
+
+    await FixedDemoExecutionAdapter(shared_boundary).execute(
+        tenant_id="tenant-a",
+        strategy_id="strategy-a",
+        config=_demo_config(),
+        signal=_signal("dual_ma_trend", "exit"),
+        price=Decimal("100"),
+        candle_timestamp_ms=1_700_000_000_000,
+        evaluation_id="evaluation-a",
+    )
+
+    assert calls[0][1] == {"close_all_attributed": True}

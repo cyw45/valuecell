@@ -1006,6 +1006,8 @@ class StrategyScheduler:
         price: Decimal,
         candle_timestamp_ms: int,
         evaluation_id: str | None = None,
+        *,
+        close_all_attributed: bool = False,
     ) -> dict[str, Any]:
         if config.execution.environment == "paper":
             return {
@@ -1024,6 +1026,7 @@ class StrategyScheduler:
             price,
             candle_timestamp_ms,
             evaluation_id,
+            close_all_attributed=close_all_attributed,
         )
         return {
             **execution,
@@ -1044,6 +1047,8 @@ class StrategyScheduler:
         price: Decimal,
         candle_timestamp_ms: int,
         evaluation_id: str | None = None,
+        *,
+        close_all_attributed: bool = False,
     ) -> dict[str, Any]:
         """Fence, reserve, and route while the strategy row lock is held.
 
@@ -1186,6 +1191,8 @@ class StrategyScheduler:
                         "sandbox": True,
                         "reason": "strategy has no confirmed inventory to sell",
                     }
+                if close_all_attributed:
+                    requested_quote = held_quantity * price
                 if requested_quote / price > held_quantity:
                     return {
                         "execution": "blocked",

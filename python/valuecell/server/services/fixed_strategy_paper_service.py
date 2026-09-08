@@ -51,7 +51,7 @@ class FixedDemoExecutionAdapter:
         action = {"long_entry": "buy", "exit": "sell"}.get(signal.action)
         if action is None:
             return None
-        return await self._execution_boundary(
+        arguments = (
             tenant_id,
             strategy_id,
             config,
@@ -62,6 +62,11 @@ class FixedDemoExecutionAdapter:
             candle_timestamp_ms,
             evaluation_id,
         )
+        if signal.action == "exit":
+            return await self._execution_boundary(
+                *arguments, close_all_attributed=True
+            )
+        return await self._execution_boundary(*arguments)
 
 
 class FixedPaperEvaluationService:
