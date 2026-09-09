@@ -210,6 +210,24 @@ class ExecutionGate(MultiStrategyModel):
     unresolved_submission_count: int = Field(ge=0)
 
 
+class EquityCurvePoint(MultiStrategyModel):
+    """One persisted wallet equity observation and its derived deltas."""
+
+    ts: datetime
+    equity_quote: float = Field(ge=0)
+    cumulative_pnl: float
+    daily_pnl_quote: float
+    action: Literal["wallet_snapshot"]
+
+
+class EquityCurve(MultiStrategyModel):
+    """A fail-closed, source-labelled equity curve."""
+
+    status: Literal["available", "unavailable"]
+    reason_code: str | None = None
+    points: list[EquityCurvePoint] = Field(default_factory=list)
+
+
 class AccountStrategyOverview(MultiStrategyModel):
     """Combined wallet and attributed strategy summaries for one account."""
 
@@ -220,6 +238,7 @@ class AccountStrategyOverview(MultiStrategyModel):
     data_complete: bool
     incomplete_reason: str | None = None
     execution_gate: "ExecutionGate"
+    wallet_equity_curve: EquityCurve
 
     @model_validator(mode="after")
     def validate_completeness_reason(self) -> "AccountStrategyOverview":

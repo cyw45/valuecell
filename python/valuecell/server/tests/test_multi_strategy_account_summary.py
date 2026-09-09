@@ -377,6 +377,63 @@ def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:
     assert allocation.turnover_ratio == pytest.approx(220 / 600)
 
 
+def test_summary_exposes_wallet_equity_curve_from_authoritative_snapshots() -> None:
+    session = _session()
+    session.add_all(
+        [
+            SharedDemoAccountSnapshot(
+                snapshot_id="snapshot-1",
+                account_id="account-a",
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                environment="okx_demo",
+                observed_at=datetime(2026, 8, 28, 9, tzinfo=timezone.utc),
+                wallet_equity_quote=1_000,
+                available_quote=600,
+                balances=[],
+                positions=[],
+                open_orders=[],
+            ),
+            SharedDemoAccountSnapshot(
+                snapshot_id="snapshot-2",
+                account_id="account-a",
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                environment="okx_demo",
+                observed_at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc),
+                wallet_equity_quote=1_012.5,
+                available_quote=612.5,
+                balances=[],
+                positions=[],
+                open_orders=[],
+            ),
+        ]
+    )
+    session.commit()
+
+    overview = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    )
+
+    assert overview.wallet_equity_curve.status == "available"
+    assert [point.model_dump(mode="json") for point in overview.wallet_equity_curve.points] == [
+        {
+            "ts": "2026-08-28T09:00:00Z",
+            "equity_quote": 1_000.0,
+            "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
+            "action": "wallet_snapshot",
+        },
+        {
+            "ts": "2026-08-28T10:00:00Z",
+            "equity_quote": 1_012.5,
+            "cumulative_pnl": 12.5,
+            "daily_pnl_quote": 12.5,
+            "action": "wallet_snapshot",
+        },
+    ]
 def test_summary_leaves_win_rate_unavailable_until_a_sell_fill_exists() -> None:
     session = _session()
     session.add(

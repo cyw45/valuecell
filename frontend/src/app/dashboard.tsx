@@ -1043,6 +1043,37 @@ export default function DashboardPage() {
                       </div>
                     ) : null}
                     <div className="mt-5 border-border/70 border-t pt-4">
+                      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+                        <div>
+                          <h3 className="font-medium text-sm">OKX 共享钱包权益曲线</h3>
+                          <p className="mt-0.5 text-muted-foreground text-xs">
+                            仅来自后台持久化的钱包快照，用于核对四策略共同作用后的账户总金额变化
+                          </p>
+                        </div>
+                        <span className="text-muted-foreground text-xs">
+                          {sharedAccountSummary.wallet_equity_curve.points.length} 个快照
+                        </span>
+                      </div>
+                      {sharedAccountSummary.wallet_equity_curve.status === "available" && sharedAccountSummary.wallet_equity_curve.points.length > 0 ? (
+                        <PnlLineChart
+                          data={sharedAccountSummary.wallet_equity_curve.points}
+                          height={220}
+                          mode="equity"
+                          range={equityRange}
+                          theme={isDark ? "dark" : "light"}
+                        />
+                      ) : (
+                        <div className="grid h-40 place-items-center text-center text-muted-foreground text-sm">
+                          尚无可用的钱包权益快照，后台同步成功后自动显示。
+                        </div>
+                      )}
+                      {sharedAccountSummary.wallet_equity_curve.points.length === 1 ? (
+                        <p className="mt-2 text-center text-muted-foreground text-xs">
+                          当前只有一个账户快照，下一次同步后将形成变化曲线。
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className="mt-5 border-border/70 border-t pt-4">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <h3 className="font-medium text-sm">四策略并发运行矩阵</h3>

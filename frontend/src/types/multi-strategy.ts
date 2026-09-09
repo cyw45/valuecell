@@ -102,6 +102,17 @@ export type AccountStrategyOverview = {
     reasons: string[];
     unresolved_submission_count: number;
   };
+  wallet_equity_curve: {
+    status: "available" | "unavailable";
+    reason_code: string | null;
+    points: Array<{
+      ts: string;
+      equity_quote: number;
+      cumulative_pnl: number;
+      daily_pnl_quote: number;
+      action: "wallet_snapshot";
+    }>;
+  };
 };
 
 export type ExplanationCondition = {

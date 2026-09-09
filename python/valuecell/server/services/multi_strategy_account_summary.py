@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 from valuecell.server.api.schemas.multi_strategy import (
     AccountStrategyOverview,
     CapitalAllocatorSummary,
+    EquityCurve,
+    EquityCurvePoint,
     ExecutionGate,
     SharedWalletSummary,
     StrategyAllocation,
@@ -55,6 +57,50 @@ class _StrategyDemoStats:
         if self.completed_trade_count == 0:
             return None
         return self.winning_trade_count / self.completed_trade_count
+
+
+def _wallet_equity_curve(
+    session: Session,
+    *,
+    account_id: str,
+    tenant_id: str,
+    credential_id: str,
+) -> EquityCurve:
+    """Build an account curve only from exchange-observed persisted snapshots."""
+    snapshots = (
+        session.query(SharedDemoAccountSnapshot)
+        .filter_by(
+            account_id=account_id,
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            environment="okx_demo",
+        )
+        .filter(SharedDemoAccountSnapshot.wallet_equity_quote.is_not(None))
+        .order_by(SharedDemoAccountSnapshot.observed_at.asc())
+        .all()
+    )
+    if not snapshots:
+        return EquityCurve(
+            status="unavailable",
+            reason_code="no_wallet_snapshots",
+            points=[],
+        )
+    baseline = float(snapshots[0].wallet_equity_quote)
+    previous = baseline
+    points = []
+    for snapshot in snapshots:
+        equity = float(snapshot.wallet_equity_quote)
+        points.append(
+            EquityCurvePoint(
+                ts=_aware_utc(snapshot.observed_at),
+                equity_quote=equity,
+                cumulative_pnl=equity - baseline,
+                daily_pnl_quote=equity - previous,
+                action="wallet_snapshot",
+            )
+        )
+        previous = equity
+    return EquityCurve(status="available", reason_code=None, points=points)
 
 
 def _strategy_demo_stats(
@@ -128,6 +174,11 @@ def _strategy_demo_stats(
 
 def _observed_at(account: StrategySharedAccount) -> datetime:
     return account.observed_at or datetime.now(timezone.utc)
+
+
+def _aware_utc(value: datetime) -> datetime:
+    """Normalize SQLite naive timestamps to the API's UTC contract."""
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
 
 
 def _available_for_strategies(account: StrategySharedAccount) -> float | None:
@@ -406,6 +457,12 @@ def build_shared_account_overview(
         wallet_strategy_reconciliation_delta_quote=None,
         data_complete=account.attribution_status == "complete",
         execution_gate=_execution_gate(session, account, available_for_strategies),
+        wallet_equity_curve=_wallet_equity_curve(
+            session,
+            account_id=account.id,
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+        ),
         incomplete_reason=(
             None
             if account.attribution_status == "complete"
