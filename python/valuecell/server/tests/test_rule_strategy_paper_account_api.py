@@ -14,6 +14,7 @@ from valuecell.server.api.schemas.rule_strategy import (
     RuleStrategyPosition,
 )
 from valuecell.server.db.models.rule_strategy import RuleStrategyEvaluationJournal
+from valuecell.server.db.models.rule_strategy import RuleStrategyExecutionBatch
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
 
 
@@ -84,6 +85,69 @@ class PaperAccountRepository:
             if journal.strategy_id == strategy_id and journal.tenant_id == tenant_id
         ]
         return list(reversed(matching[-limit:]))
+
+
+class BatchPaperAccountRepository(PaperAccountRepository):
+    """Repository double that exercises the route's real batch-aware branch."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches = {}
+
+    def get_batch(self, batch_id: str, strategy_id: str, tenant_id: str):
+        return self.batches.get((tenant_id, strategy_id, batch_id))
+
+    def get_evaluations(
+        self,
+        strategy_id: str,
+        tenant_id: str,
+        limit: int = 100,
+        batch_id: str | None = None,
+    ):
+        matching = super().get_evaluations(strategy_id, tenant_id, limit)
+        if batch_id is not None:
+            matching = [item for item in matching if item.batch_id == batch_id]
+        return matching
+
+    def get_evaluations_for_export(self, strategy_id: str, tenant_id: str):
+        return list(
+            reversed(
+                [
+                    item
+                    for item in self.evaluations
+                    if item.strategy_id == strategy_id and item.tenant_id == tenant_id
+                ]
+            )
+        )
+
+
+def _batch_curve_client() -> tuple[TestClient, BatchPaperAccountRepository]:
+    repository = BatchPaperAccountRepository()
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(RuleStrategyService(repository=repository)))
+    app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
+        user_id="user-a", tenant_id="tenant-a"
+    )
+    return TestClient(app), repository
+
+
+def _install_batch(repository: BatchPaperAccountRepository, strategy_id: str, batch_id: str):
+    strategy = repository.get(strategy_id, "tenant-a")
+    assert strategy is not None
+    strategy.current_batch_id = batch_id
+    repository.update(strategy)
+    batch = RuleStrategyExecutionBatch(
+        batch_id=batch_id,
+        strategy_id=strategy_id,
+        tenant_id="tenant-a",
+        strategy_name_snapshot=strategy.name,
+        execution_generation=1,
+        status="running",
+        config_snapshot={**strategy.config, "initial_capital_quote": 1_000},
+        started_at=datetime(2026, 7, 12, tzinfo=timezone.utc),
+    )
+    repository.batches[("tenant-a", strategy_id, batch_id)] = batch
+    return batch
 
 
 def _config() -> dict:
@@ -303,6 +367,138 @@ def test_pnl_curve_skips_demo_and_incomplete_legacy_account_snapshots():
             "action": "initial",
         }
     ]
+
+
+def test_pnl_curve_skips_nested_demo_execution_account_snapshot():
+    repository = PaperAccountRepository()
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(RuleStrategyService(repository=repository)))
+    app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
+        user_id="user-a", tenant_id="tenant-a"
+    )
+    client = TestClient(app)
+    strategy_id = _create_strategy(client, "Nested Demo exclusion")
+    repository.append_evaluation(
+        RuleStrategyEvaluationJournal(
+            evaluation_id="nested-demo-snapshot",
+            strategy_id=strategy_id,
+            tenant_id="tenant-a",
+            created_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+            result={
+                "action": "buy",
+                "execution": {
+                    "execution_ledger": "okx_demo",
+                    "account": {"equity_quote": 1_500.0},
+                },
+            },
+            signals=[],
+            trades=[],
+            funding=[],
+        )
+    )
+
+    response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [
+        {
+            "ts": "2026-07-12T00:00:00Z",
+            "cumulative_pnl": 0.0,
+            "daily_pnl_quote": 0.0,
+            "equity_quote": 1_000.0,
+            "action": "initial",
+        }
+    ]
+
+
+def test_pnl_curve_reads_fixed_paper_execution_account_for_selected_batch():
+    client, repository = _batch_curve_client()
+    strategy_id = _create_strategy(client, "Fixed Paper route curve")
+    _install_batch(repository, strategy_id, "batch-current")
+    repository.evaluations.append(
+        RuleStrategyEvaluationJournal(
+            evaluation_id="fixed-paper-route-evaluation",
+            strategy_id=strategy_id,
+            tenant_id="tenant-a",
+            batch_id="batch-current",
+            created_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+            result={
+                "action": "long_entry",
+                "execution": {
+                    "execution_ledger": "paper",
+                    "paper_fill": True,
+                    "account": {
+                        "source": "fixed_paper_ledger",
+                        "equity_quote": 1_024.0,
+                    },
+                },
+            },
+        )
+    )
+
+    response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"][-1]["equity_quote"] == 1_024.0
+    assert response.json()["data"][-1]["cumulative_pnl"] == 24.0
+
+
+def test_pnl_curve_excludes_journals_from_other_batches():
+    client, repository = _batch_curve_client()
+    strategy_id = _create_strategy(client, "Batch isolated curve")
+    _install_batch(repository, strategy_id, "batch-current")
+    repository.evaluations.extend(
+        [
+            RuleStrategyEvaluationJournal(
+                evaluation_id="old-batch-evaluation",
+                strategy_id=strategy_id,
+                tenant_id="tenant-a",
+                batch_id="batch-old",
+                created_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+                result={
+                    "action": "sell",
+                    "execution": {"execution_ledger": "paper", "account": {"equity_quote": 2_000}},
+                },
+            ),
+            RuleStrategyEvaluationJournal(
+                evaluation_id="current-batch-evaluation",
+                strategy_id=strategy_id,
+                tenant_id="tenant-a",
+                batch_id="batch-current",
+                created_at=datetime(2026, 7, 14, tzinfo=timezone.utc),
+                result={
+                    "action": "hold",
+                    "execution": {"execution_ledger": "paper", "account": {"equity_quote": 1_010}},
+                },
+            ),
+        ]
+    )
+
+    response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"][-1]["equity_quote"] == 1_010.0
+    assert all(point["equity_quote"] != 2_000.0 for point in response.json()["data"])
+
+
+def test_pnl_curve_returns_empty_when_strategy_has_no_current_batch():
+    client, repository = _batch_curve_client()
+    strategy_id = _create_strategy(client, "No current batch curve")
+    repository.evaluations.append(
+        RuleStrategyEvaluationJournal(
+            evaluation_id="historical-evaluation",
+            strategy_id=strategy_id,
+            tenant_id="tenant-a",
+            batch_id="batch-old",
+            created_at=datetime(2026, 7, 13, tzinfo=timezone.utc),
+            result={"account": {"equity_quote": 1_500}},
+        )
+    )
+
+    response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == []
 
 
 def test_fixed_paper_pnl_curve_exposes_marked_equity_snapshot():

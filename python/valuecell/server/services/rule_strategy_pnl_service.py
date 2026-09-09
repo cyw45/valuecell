@@ -69,6 +69,8 @@ def observation_from_journal(journal: Any) -> DailyPnlObservation | None:
     result = journal.result or {}
     account = result.get("account")
     execution = result.get("execution")
+    if isinstance(execution, dict) and execution.get("execution_ledger") == "okx_demo":
+        return None
     if not isinstance(account, dict) and isinstance(execution, dict):
         account = execution.get("account")
     if (
