@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from valuecell.server.api.schemas.multi_strategy import (
     AccountStrategyOverview,
     CapitalAllocatorSummary,
+    ExecutionGate,
     SharedWalletSummary,
     StrategyAllocation,
 )
@@ -24,6 +25,7 @@ from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoOrderProjection,
     SharedDemoStrategyAllocationCap,
     SharedDemoVenueOrder,
+    SharedDemoAccountSyncState,
 )
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     _pnl_and_curve,
@@ -46,6 +48,32 @@ def _available_for_strategies(account: StrategySharedAccount) -> float | None:
     if account.available_quote is None:
         return None
     return max(0.0, float(account.available_quote) - float(account.reserved_quote))
+
+
+def _execution_gate(
+    session: Session, account: StrategySharedAccount, available: float | None
+) -> ExecutionGate:
+    """Derive a fail-closed account entry gate from persisted facts only."""
+    reasons: list[str] = []
+    state = session.get(SharedDemoAccountSyncState, account.id)
+    unresolved = int(state.unresolved_submission_count) if state else 0
+    if account.sync_status != "healthy":
+        reasons.append("共享钱包同步状态不是 healthy")
+    if account.attribution_status != "complete":
+        reasons.append("策略成交归因尚未完整")
+    if unresolved > 0:
+        reasons.append(f"存在 {unresolved} 个待远端对账订单")
+    if available is None:
+        reasons.append("策略可分配余额不可用")
+    elif available <= 0:
+        reasons.append("当前没有可分配的开仓资金")
+    status = "ready" if not reasons else "blocked" if unresolved > 0 or available == 0 else "protected"
+    return ExecutionGate(
+        status=status,
+        can_open_positions=status == "ready",
+        reasons=reasons,
+        unresolved_submission_count=unresolved,
+    )
 
 
 def _active_reservations(
@@ -252,9 +280,10 @@ def build_shared_account_overview(
         attribution_status=account.attribution_status,
         unassigned_equity_quote=None,
     )
+    available_for_strategies = _available_for_strategies(account)
     allocator = CapitalAllocatorSummary(
         wallet_equity_quote=account.wallet_equity_quote,
-        available_for_strategies_quote=_available_for_strategies(account),
+        available_for_strategies_quote=available_for_strategies,
         reserved_quote=account.reserved_quote,
         occupied_notional_quote=account.occupied_notional_quote,
         pending_settlement_quote=account.pending_settlement_quote,
@@ -272,6 +301,7 @@ def build_shared_account_overview(
         strategy_pnl_total_quote=total_strategy_pnl,
         wallet_strategy_reconciliation_delta_quote=None,
         data_complete=account.attribution_status == "complete",
+        execution_gate=_execution_gate(session, account, available_for_strategies),
         incomplete_reason=(
             None
             if account.attribution_status == "complete"

@@ -194,6 +194,15 @@ class CapitalAllocatorSummary(MultiStrategyModel):
         return self
 
 
+class ExecutionGate(MultiStrategyModel):
+    """Account-level admission result for new shared-Demo entries."""
+
+    status: Literal["ready", "protected", "blocked"]
+    can_open_positions: bool
+    reasons: list[str] = Field(default_factory=list)
+    unresolved_submission_count: int = Field(ge=0)
+
+
 class AccountStrategyOverview(MultiStrategyModel):
     """Combined wallet and attributed strategy summaries for one account."""
 
@@ -203,6 +212,7 @@ class AccountStrategyOverview(MultiStrategyModel):
     wallet_strategy_reconciliation_delta_quote: float | None = None
     data_complete: bool
     incomplete_reason: str | None = None
+    execution_gate: "ExecutionGate"
 
     @model_validator(mode="after")
     def validate_completeness_reason(self) -> "AccountStrategyOverview":

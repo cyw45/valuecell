@@ -11,6 +11,7 @@ from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation
 from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyAccount
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
+    SharedDemoAccountSyncState,
     SharedDemoFill,
     SharedDemoOrderProjection,
     SharedDemoStrategyAllocationCap,
@@ -109,6 +110,37 @@ def test_summary_separates_wallet_and_strategy_allocation() -> None:
     assert overview.allocator.allocations[0].lifecycle_reason is not None
     assert overview.strategy_pnl_total_quote is None
     assert overview.allocator.available_for_strategies_quote == 0
+    assert overview.execution_gate.status == "blocked"
+    assert overview.execution_gate.can_open_positions is False
+    assert "当前没有可分配的开仓资金" in overview.execution_gate.reasons
+
+
+def test_summary_protects_new_entries_when_sync_or_reconciliation_is_not_healthy() -> None:
+    session = _session()
+    account = session.query(StrategySharedAccount).one()
+    account.sync_status = "stale"
+    session.add(
+        SharedDemoAccountSyncState(
+            account_id=account.id,
+            tenant_id=account.tenant_id,
+            credential_id=account.credential_id,
+            environment="okx_demo",
+            sync_status="stale",
+            reconciliation_status="blocked",
+            unresolved_submission_count=2,
+        )
+    )
+    session.commit()
+
+    overview = build_shared_account_overview(
+        session, tenant_id="tenant-a", credential_id="credential-a"
+    )
+
+    assert overview.execution_gate.status == "blocked"
+    assert overview.execution_gate.unresolved_submission_count == 2
+    assert overview.execution_gate.can_open_positions is False
+    assert "共享钱包同步状态不是 healthy" in overview.execution_gate.reasons
+    assert "存在 2 个待远端对账订单" in overview.execution_gate.reasons
 
 
 def test_summary_exposes_strategy_cap_and_actual_usage() -> None:

@@ -89,6 +89,12 @@ export type AccountStrategyOverview = {
   wallet_strategy_reconciliation_delta_quote: number | null;
   data_complete: boolean;
   incomplete_reason: string | null;
+  execution_gate: {
+    status: "ready" | "protected" | "blocked";
+    can_open_positions: boolean;
+    reasons: string[];
+    unresolved_submission_count: number;
+  };
 };
 
 export type ExplanationCondition = {

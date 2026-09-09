@@ -926,6 +926,27 @@ export default function DashboardPage() {
                                 ? "数据不完整"
                                 : "已同步"}
                   </Badge>
+                  {sharedAccountSummary ? (
+                    <Badge
+                      className={cn(
+                        "shrink-0",
+                        sharedAccountSummary.execution_gate.status === "ready" &&
+                          "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+                        sharedAccountSummary.execution_gate.status === "protected" &&
+                          "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+                        sharedAccountSummary.execution_gate.status === "blocked" &&
+                          "border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-300",
+                      )}
+                      variant="outline"
+                      title={sharedAccountSummary.execution_gate.reasons.join("；") || "可进行新的 Demo 开仓"}
+                    >
+                      {sharedAccountSummary.execution_gate.status === "ready"
+                        ? "可开仓"
+                        : sharedAccountSummary.execution_gate.status === "protected"
+                          ? "只读保护"
+                          : "开仓已阻断"}
+                    </Badge>
+                  ) : null}
                 </div>
               </CardHeader>
               <CardContent className="p-4 sm:p-5">
@@ -1013,6 +1034,12 @@ export default function DashboardPage() {
                               ? "钱包同步状态异常，权威余额可能暂时不可用。"
                               : "部分策略归因尚未完成，归属 PnL 仅供参考。")}
                         </span>
+                      </div>
+                    ) : null}
+                    {sharedAccountSummary.execution_gate.reasons.length > 0 ? (
+                      <div className="mt-3 rounded-md border border-rose-500/20 bg-rose-500/5 px-3 py-2 text-rose-700 text-xs dark:text-rose-300">
+                        <span className="font-medium">新开仓门禁：</span>
+                        {sharedAccountSummary.execution_gate.reasons.join("；")}
                       </div>
                     ) : null}
                     <div className="mt-5 border-border/70 border-t pt-4">
