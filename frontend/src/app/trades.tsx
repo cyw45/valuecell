@@ -49,6 +49,7 @@ import {
   decisionLabel,
   formatConditionValues,
   formatTradeFactIdentifiers,
+  formatTradeFactExecution,
   tradeFactStatusDescription,
 } from "./trades-strategy-conditions";
 import {
@@ -489,6 +490,7 @@ function UnifiedTradeFactRow({ fact, statusLabel }: { fact: UnifiedTradeFact; st
           <CollapsibleContent className="space-y-2 pt-2 text-xs">
             <div className="text-muted-foreground">{explanation.decision_reason || "暂无持久化解释。"}</div>
             <div className="flex flex-wrap gap-x-3 gap-y-1 rounded border bg-muted/20 p-2 font-mono text-[11px]">{formatTradeFactIdentifiers(fact).map((identifier) => <span key={identifier}>{identifier}</span>)}</div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 rounded border bg-muted/20 p-2 text-[11px]">{formatTradeFactExecution(fact).map((item) => <span key={item}>{item}</span>)}</div>
             {explanation.block_reason ? <div className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-amber-800 dark:text-amber-200">启动/执行阻塞：{explanation.block_reason}</div> : null}
             {explanation.conditions.length === 0 ? <div className="text-muted-foreground">条件明细不可用</div> : explanation.conditions.map((condition) => <div className="rounded border bg-muted/30 p-2" key={`${condition.code}-${condition.data_at}`}><div className="font-medium">{condition.label || condition.code} · {condition.state}</div><div>实际值：{condition.actual ?? "不可用"}　{condition.operator ?? "对比"}　阈值：{condition.threshold ?? "不可用"}</div><div className="text-muted-foreground">{condition.detail}{condition.data_at ? ` · 数据时间 ${formatDate(condition.data_at)}` : ""}</div></div>)}
           </CollapsibleContent>

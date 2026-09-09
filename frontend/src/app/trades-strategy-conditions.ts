@@ -78,6 +78,14 @@ export function formatTradeFactIdentifiers(fact: UnifiedTradeFact): string[] {
   ].flatMap(([label, value]) => (value ? [`${label} ${value}`] : []));
 }
 
+export function formatTradeFactExecution(fact: UnifiedTradeFact): string[] {
+  return [
+    ["执行路径", fact.explanation.execution_path],
+    ["风控", fact.explanation.risk_check],
+    ["最终结果", fact.explanation.final_result],
+  ].flatMap(([label, value]) => (value ? [`${label} ${value}`] : []));
+}
+
 export function tradeFactStatusDescription(status: string): string {
   if (status === "submission_unknown") return "提交结果未确认，待远端对账（不可重提）";
   if (status === "recovery_required") return "需要人工恢复或对账后才能继续";

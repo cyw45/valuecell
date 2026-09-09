@@ -7,6 +7,7 @@ import {
   decisionLabel,
   formatConditionValues,
   formatTradeFactIdentifiers,
+  formatTradeFactExecution,
   tradeFactStatusDescription,
 } from "./trades-strategy-conditions";
 
@@ -123,4 +124,19 @@ test("trade facts expose every durable lifecycle identifier", () => {
 test("unknown submission copy states that resubmission is forbidden", () => {
   assert.match(tradeFactStatusDescription("submission_unknown"), /不可重提/);
   assert.match(tradeFactStatusDescription("recovery_required"), /恢复/);
+});
+
+test("trade facts expose persisted execution and risk outcomes", () => {
+  const fact = {
+    explanation: {
+      execution_path: "okx_demo",
+      risk_check: "passed",
+      final_result: "partially_filled",
+    },
+  } as UnifiedTradeFact;
+  assert.deepEqual(formatTradeFactExecution(fact), [
+    "执行路径 okx_demo",
+    "风控 passed",
+    "最终结果 partially_filled",
+  ]);
 });
