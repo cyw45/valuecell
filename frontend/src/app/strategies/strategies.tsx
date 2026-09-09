@@ -32,6 +32,7 @@ import {
   useRuleStrategies,
   useRuleStrategy,
   useRuleStrategyDemoExecution,
+  useRuleStrategyPnlCurve,
   useStartRuleStrategy,
   useStopRuleStrategy,
   useUpdateRuleStrategy,
@@ -74,6 +75,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { strategyPickerItems } from "@/hooks/active-rule-strategy-selection";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { cn } from "@/lib/utils";
+import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
 import { useSaaSSession } from "@/store/system-store";
 import type {
   AdvancedRuleSetConfig,
@@ -654,6 +656,11 @@ export function RuleStrategyConfiguration({
   const sharedAccountQuery = useSharedAccountSummary(
     strategyQuery.data?.config.execution.environment === "okx_demo"
       ? demoCredentialId
+      : undefined,
+  );
+  const pnlCurveQuery = useRuleStrategyPnlCurve(
+    strategyQuery.data?.config.execution.environment === "paper"
+      ? strategyId || undefined
       : undefined,
   );
   const createStrategy = useCreateRuleStrategy();
@@ -2692,6 +2699,7 @@ export function RuleStrategyConfiguration({
               </CardContent>
             </Card>
           ) : storedStrategy ? (
+            <div className="grid gap-4">
             <Card className="gap-0 rounded-lg py-0 shadow-none">
               <CardHeader className="border-b px-4 py-4">
                 <CardTitle className="text-base">Paper account</CardTitle>
@@ -2734,6 +2742,26 @@ export function RuleStrategyConfiguration({
                 />
               </CardContent>
             </Card>
+            <Card className="gap-0 rounded-lg py-0 shadow-none">
+              <CardHeader className="border-b px-4 py-4">
+                <CardTitle className="text-base">Paper equity curve</CardTitle>
+                <CardDescription>
+                  仅使用当前执行批次服务端记录的 Paper equity 和 PnL。
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="px-2 py-3 sm:px-4">
+                {pnlCurveQuery.isLoading ? (
+                  <div className="grid h-52 place-items-center text-muted-foreground text-sm">正在读取资金曲线…</div>
+                ) : pnlCurveQuery.data && pnlCurveQuery.data.length > 0 ? (
+                  <PnlLineChart data={pnlCurveQuery.data} height={220} mode="equity" />
+                ) : (
+                  <div className="grid h-52 place-items-center text-center text-muted-foreground text-sm">
+                    当前执行批次还没有足够的服务端估值事实。
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            </div>
           ) : null}
 
           <Card className="gap-0 rounded-lg border-sky-500/30 py-0 shadow-none">

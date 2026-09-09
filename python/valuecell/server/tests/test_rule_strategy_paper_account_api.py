@@ -305,6 +305,49 @@ def test_pnl_curve_skips_demo_and_incomplete_legacy_account_snapshots():
     ]
 
 
+def test_fixed_paper_pnl_curve_exposes_marked_equity_snapshot():
+    repository = PaperAccountRepository()
+    app = FastAPI()
+    app.include_router(create_rule_strategy_router(RuleStrategyService(repository=repository)))
+    app.dependency_overrides[get_current_principal] = lambda: CurrentPrincipal(
+        user_id="user-a", tenant_id="tenant-a"
+    )
+    client = TestClient(app)
+    strategy_id = _create_strategy(client, "Fixed Paper curve")
+    repository.append_evaluation(
+        RuleStrategyEvaluationJournal(
+            evaluation_id="fixed-paper-evaluation",
+            strategy_id=strategy_id,
+            tenant_id="tenant-a",
+            result={
+                "action": "long_entry",
+                "execution": {
+                    "execution_ledger": "paper",
+                    "paper_fill": True,
+                    "account": {
+                        "source": "fixed_paper_ledger",
+                        "equity_quote": 1_024.0,
+                    },
+                },
+            },
+            signals=[],
+            trades=[],
+            funding=[],
+        )
+    )
+
+    response = client.get(f"/rule-strategies/{strategy_id}/pnl-curve")
+
+    assert response.status_code == 200
+    assert response.json()["data"][-1] == {
+        "ts": "2026-07-12T00:00:00Z",
+        "cumulative_pnl": 24.0,
+        "daily_pnl_quote": 24.0,
+        "equity_quote": 1_024.0,
+        "action": "long_entry",
+    }
+
+
 def test_batch_cycle_uses_fixed_amount_and_blocks_unaffordable_entries():
     repository = PaperAccountRepository()
     service = RuleStrategyService(repository=repository)
