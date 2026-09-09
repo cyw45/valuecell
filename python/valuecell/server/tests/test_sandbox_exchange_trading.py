@@ -29,6 +29,7 @@ from valuecell.server.db.models.rule_strategy import (
 from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation
 from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.db.models.shared_demo_execution import (
+    SharedDemoFill,
     SharedDemoExecutionReservation,
     SharedDemoOrderProjection,
 )
@@ -36,6 +37,7 @@ from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrd
 from valuecell.server.db.models.tenant_credential import TenantCredential
 from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
 from valuecell.server.services.rule_strategy_service import RuleStrategyService
+from valuecell.server.services.multi_strategy_capital_allocator import SharedCapitalAllocator
 
 TEST_MASTER_KEY = base64.urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("ascii")
 
@@ -807,6 +809,107 @@ def test_sell_fill_releases_matching_strategy_occupied_capital(monkeypatch):
         "reason": "venue_exit_fill",
         "reservation_id": "reservation-exit",
     }]
+
+
+def test_sell_intent_without_quote_reservation_records_fact_and_releases_only_owner():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        now = datetime.now(timezone.utc)
+        session.add_all([
+            RuleStrategy(strategy_id="strategy-a", tenant_id="tenant-a", name="A", config={}),
+            RuleStrategy(strategy_id="strategy-b", tenant_id="tenant-a", name="B", config={}),
+            TenantCredential(
+                id="credential-exit", tenant_id="tenant-a", created_by_user_id="user-a",
+                kind="exchange", provider="okx", label="exit", encrypted_payload="cipher",
+                nonce="nonce", metadata_json={"sandbox": True}, revoked=False,
+            ),
+            StrategySharedAccount(
+                id="account-exit", tenant_id="tenant-a", credential_id="credential-exit",
+                environment="okx_demo", wallet_equity_quote=1_000, available_quote=1_000,
+                reserved_quote=0, occupied_notional_quote=300, pending_settlement_quote=300,
+                reusable_quote=700, sync_status="healthy", attribution_status="complete",
+                observed_at=now,
+            ),
+            StrategyCapitalReservation(
+                reservation_id="occupied-a", account_id="account-exit", tenant_id="tenant-a",
+                strategy_id="strategy-a", batch_id="batch-a", idempotency_key="buy-a",
+                symbol="BTC/USDT", side="buy", requested_quote=150, reserved_quote=0,
+                consumed_quote=150, released_quote=0, status="occupied",
+            ),
+            StrategyCapitalReservation(
+                reservation_id="occupied-b", account_id="account-exit", tenant_id="tenant-a",
+                strategy_id="strategy-b", batch_id="batch-b", idempotency_key="buy-b",
+                symbol="BTC/USDT", side="buy", requested_quote=150, reserved_quote=0,
+                consumed_quote=150, released_quote=0, status="occupied",
+            ),
+            RuleStrategyExecutionBatch(
+                batch_id="batch-a", strategy_id="strategy-a", tenant_id="tenant-a",
+                strategy_name_snapshot="A", execution_generation=1, status="running", config_snapshot={},
+            ),
+            RuleStrategyExecutionIntent(
+                id="sell-intent-a", strategy_id="strategy-a", evaluation_id="eval-sell-a",
+                execution_generation=1, execution_source="rule_strategy", tenant_id="tenant-a",
+                batch_id="batch-a", credential_id="credential-exit", idempotency_key="sell-a",
+                symbol="BTC/USDT", side="sell", order_type="market", requested_quote="150",
+                execution_target="okx_demo", status="submitted",
+            ),
+        ])
+        session.flush()
+        order = SandboxExchangeOrder(
+            id="sandbox-sell-a", tenant_id="tenant-a", credential_id="credential-exit",
+            provider="okx", client_order_id="sell-a", symbol="BTC/USDT", side="sell",
+            order_type="market", requested_quote="150", requested_quantity="1",
+            status="open", sandbox=True, strategy_id="strategy-a", evaluation_id="eval-sell-a",
+            execution_generation=1, execution_source="rule_strategy", execution_intent_id="sell-intent-a",
+            batch_id="batch-a",
+        )
+        session.add(order)
+        session.commit()
+
+        service = object.__new__(trading_module.SandboxExchangeTradingService)
+        service.db = session
+        service._sync_shared_demo_evidence(
+            order,
+            {
+                "id": "venue-sell-a", "status": "closed", "amount": "1", "filled": "1",
+                "cost": "150", "average": "150", "timestamp": 1710000000000,
+            },
+            source="reconciliation",
+        )
+        service._sync_shared_demo_evidence(
+            order,
+            {
+                "id": "venue-sell-a", "status": "closed", "amount": "1", "filled": "1",
+                "cost": "150", "average": "150", "timestamp": 1710000000000,
+            },
+            source="reconciliation",
+        )
+        session.commit()
+
+        owner = session.get(StrategyCapitalReservation, "occupied-a")
+        other = session.get(StrategyCapitalReservation, "occupied-b")
+        account = session.get(StrategySharedAccount, "account-exit")
+        assert owner is not None and other is not None and account is not None
+        assert owner.consumed_quote == 0
+        assert owner.released_quote == 150
+        assert other.consumed_quote == 150
+        assert account.occupied_notional_quote == 150
+        assert account.reusable_quote == 850
+        assert session.query(SharedDemoFill).count() == 1
+
+        allocator = SharedCapitalAllocator(session)
+        reused = allocator.reserve(
+            account_id="account-exit", tenant_id="tenant-a", strategy_id="strategy-b",
+            batch_id="batch-b", idempotency_key="reuse-b", symbol="ETH/USDT", side="buy",
+            requested_quote=Decimal("150"),
+        )
+        assert reused.status == "reserved"
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):

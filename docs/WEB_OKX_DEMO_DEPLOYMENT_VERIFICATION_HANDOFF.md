@@ -14,6 +14,7 @@
 - 共享钱包余额不能直接复制为策略余额或策略 PnL。
 - `FixedPaper*` 和 `RuleStrategyAccount` 不能作为 OKX Demo 成交成功证据。
 - `submission_unknown` 只能按原 client order ID 对账，禁止重新提交。
+- Demo `sell/exit` 不会申请开仓 quote reservation；服务器必须验证它仍会生成共享 order/fill 事实，并只释放卖出策略自己、当前 batch、当前 symbol 的 occupied capital。用于事实归属的微量占位 reservation 不计入 allocator 资金。
 - 本次代码没有新增数据库 migration；不要删除或重建现有数据库、volume、订单或成交。
 
 ## 2. 部署前检查
@@ -137,11 +138,13 @@ docker logs --since 15m "$BACKEND_CID" 2>&1
 
 ### C. 同 symbol 跨策略卖出隔离
 
-只让策略 A 获得某 symbol 的确认成交，然后让策略 B 产生 sell/exit：
+只让策略 A 获得某 symbol 的确认成交，然后分别验证 A/B 的 sell/exit：
 
 - B 必须被策略归属库存不足阻断。
 - 共享钱包原始币余额不能授权 B 卖出 A 的仓位。
 - A 才能卖出自己的确认归属数量。
+- A 的 sell/exit intent 即使没有 quote reservation，也必须出现共享 order projection 和 fill；对应的占用资金只从 A 回流，B 的 occupied 不变。
+- 重复提交同一累计成交事实不得新增 fill 或重复增加可复用资金。
 
 若 B 卖出了 A 的归属仓位，立即停止测试。
 

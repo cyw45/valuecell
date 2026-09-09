@@ -17,7 +17,7 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyEvaluationJournal,
     RuleStrategyExecutionIntent,
 )
-from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation
+from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation, StrategySharedAccount
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoExecutionIntent,
     SharedDemoExecutionReservation,
@@ -46,6 +46,7 @@ INTENT_SUBMISSION_UNKNOWN = "submission_unknown"
 INTENT_SUBMITTED = "submitted"
 INTENT_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected", "stale"})
 ORDER_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected"})
+EXIT_ATTRIBUTION_QUOTE = Decimal("0.00000001")
 
 SandboxProvider = Literal["binance", "okx"]
 
@@ -827,9 +828,13 @@ class SandboxExchangeTradingService:
         self, intent: RuleStrategyExecutionIntent,
     ) -> SharedDemoExecutionIntent | None:
         """Mirror the allocator reservation binding once for shared Demo evidence."""
-        if not intent.reservation_id or not intent.batch_id or not intent.credential_id:
+        if not intent.batch_id or not intent.credential_id:
             return None
-        reservation = self.db.get(StrategyCapitalReservation, intent.reservation_id)
+        reservation = (
+            self.db.get(StrategyCapitalReservation, intent.reservation_id)
+            if intent.reservation_id
+            else self._ensure_exit_attribution_reservation(intent)
+        )
         if reservation is None or reservation.tenant_id != intent.tenant_id:
             return None
         binding = self.db.query(SharedDemoExecutionIntent).filter_by(intent_id=intent.id).first()
@@ -857,6 +862,53 @@ class SandboxExchangeTradingService:
         self.db.add(binding)
         self.db.flush()
         return binding
+
+    def _ensure_exit_attribution_reservation(
+        self, intent: RuleStrategyExecutionIntent,
+    ) -> StrategyCapitalReservation | None:
+        """Give sell facts a durable identity without reserving meaningful quote funds."""
+        if intent.side != "sell":
+            return None
+        accounts = (
+            self.db.query(StrategySharedAccount)
+            .filter_by(
+                tenant_id=intent.tenant_id,
+                credential_id=intent.credential_id,
+                environment="okx_demo",
+                active=True,
+            )
+            .all()
+        )
+        if len(accounts) != 1:
+            return None
+        account = accounts[0]
+        idempotency_key = f"demo-exit:{intent.id}"
+        reservation = (
+            self.db.query(StrategyCapitalReservation)
+            .filter_by(tenant_id=intent.tenant_id, idempotency_key=idempotency_key)
+            .first()
+        )
+        if reservation is not None:
+            return reservation
+        reservation = StrategyCapitalReservation(
+            reservation_id=f"exit-{intent.id}",
+            account_id=account.id,
+            tenant_id=intent.tenant_id,
+            strategy_id=intent.strategy_id,
+            batch_id=intent.batch_id,
+            idempotency_key=idempotency_key,
+            symbol=intent.symbol,
+            side="sell",
+            requested_quote=float(EXIT_ATTRIBUTION_QUOTE),
+            reserved_quote=float(EXIT_ATTRIBUTION_QUOTE),
+            consumed_quote=0,
+            released_quote=0,
+            status="released",
+            reason="sell facts use position-owned capital; no quote reservation",
+        )
+        self.db.add(reservation)
+        self.db.flush()
+        return reservation
 
 
     def _sync_shared_demo_evidence(
