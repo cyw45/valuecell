@@ -969,6 +969,9 @@ export function RuleStrategyConfiguration({
     stopStrategy.isPending ||
     parseStrategyText.isPending;
   const storedStrategy = creatingDraft ? undefined : strategyQuery.data;
+  const sharedAllocation = sharedAccountQuery.data?.allocator.allocations.find(
+    (allocation) => allocation.strategy_id === strategyId,
+  );
   const managementActions = strategyManagementActions({
     selectedStatus: storedStrategy?.status,
   });
@@ -2694,7 +2697,13 @@ export function RuleStrategyConfiguration({
               <CardContent className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-4 text-sm">
                 <SummaryRow label="共享钱包总权益" value={sharedAccountQuery.data?.wallet.total_equity_quote == null ? "不可用" : `${sharedAccountQuery.data.wallet.total_equity_quote.toFixed(2)} USDT`} />
                 <SummaryRow label="策略占用资金" value={sharedAccountQuery.data?.allocator.allocations.find((allocation) => allocation.strategy_id === strategyId)?.occupied_quote == null ? "不可用" : `${sharedAccountQuery.data.allocator.allocations.find((allocation) => allocation.strategy_id === strategyId)?.occupied_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="策略资金上限" value={sharedAllocation?.max_occupied_quote == null ? "不可用" : `${sharedAllocation.max_occupied_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="策略预留资金" value={sharedAllocation == null ? "不可用" : `${sharedAllocation.reserved_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="策略占用资金" value={sharedAllocation == null ? "不可用" : `${sharedAllocation.occupied_quote.toFixed(2)} USDT`} />
+                <SummaryRow label="资金利用率" value={sharedAllocation == null ? "不可用" : `${(sharedAllocation.utilization_ratio * 100).toFixed(1)}%`} />
                 <SummaryRow label="策略净 PnL" value={demoExecutionQuery.data?.pnl.total == null ? "不可用" : `${Number(demoExecutionQuery.data.pnl.total).toFixed(2)} USDT`} />
+                <SummaryRow label="策略收益率" value={sharedAllocation?.return_rate_pct == null ? "不可用" : `${(sharedAllocation.return_rate_pct * 100).toFixed(2)}%`} />
+                <SummaryRow label="执行批次" value={sharedAllocation?.current_batch_id ?? "尚无当前批次"} />
                 <SummaryRow label="归因/同步状态" value={demoExecutionQuery.data?.lifecycle?.attribution_status === "complete" ? "归因完成" : "归因待完成"} />
               </CardContent>
             </Card>
