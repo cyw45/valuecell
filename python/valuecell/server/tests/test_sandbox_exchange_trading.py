@@ -1,6 +1,7 @@
 import base64
 from collections.abc import Generator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -26,8 +27,10 @@ from valuecell.server.db.models.rule_strategy import (
     RuleStrategyExecutionIntent,
 )
 from valuecell.server.db.models.multi_strategy import StrategyCapitalReservation
+from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoExecutionReservation,
+    SharedDemoOrderProjection,
 )
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
@@ -567,6 +570,188 @@ def test_terminal_reconciliation_settles_submission_unknown_reservation(
 
     assert settle_calls == [("reservation-a", Decimal("60"), "partially_released")]
     assert len(added) == 1
+
+
+def test_partial_fill_cancel_keeps_prior_cumulative_quote_for_settlement():
+    """A cancel payload without cost must retain the earlier partial fill."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        now = datetime.now(timezone.utc)
+        session.add_all(
+            [
+                RuleStrategy(
+                    strategy_id="strategy-partial",
+                    tenant_id="tenant-a",
+                    name="partial",
+                    status="running",
+                    execution_generation=1,
+                    current_batch_id="batch-partial",
+                    config={},
+                ),
+                RuleStrategyExecutionBatch(
+                    batch_id="batch-partial",
+                    strategy_id="strategy-partial",
+                    tenant_id="tenant-a",
+                    strategy_name_snapshot="partial",
+                    execution_generation=1,
+                    status="running",
+                    config_snapshot={},
+                ),
+                TenantCredential(
+                    id="credential-partial",
+                    tenant_id="tenant-a",
+                    created_by_user_id="user-a",
+                    kind="exchange",
+                    provider="okx",
+                    label="partial",
+                    encrypted_payload="ciphertext",
+                    nonce="nonce",
+                    metadata_json={"sandbox": True, "market_type": "spot"},
+                    revoked=False,
+                ),
+                StrategySharedAccount(
+                    id="account-partial",
+                    tenant_id="tenant-a",
+                    credential_id="credential-partial",
+                    environment="okx_demo",
+                    wallet_equity_quote=1_000,
+                    available_quote=1_000,
+                    reserved_quote=100,
+                    occupied_notional_quote=0,
+                    pending_settlement_quote=0,
+                    reusable_quote=1_000,
+                    sync_status="healthy",
+                    attribution_status="complete",
+                    observed_at=now,
+                ),
+                StrategyCapitalReservation(
+                    reservation_id="reservation-partial",
+                    account_id="account-partial",
+                    tenant_id="tenant-a",
+                    strategy_id="strategy-partial",
+                    batch_id="batch-partial",
+                    idempotency_key="client-partial",
+                    symbol="BTC/USDT",
+                    side="buy",
+                    requested_quote=100,
+                    reserved_quote=100,
+                    status="reserved",
+                ),
+                SharedDemoExecutionReservation(
+                    reservation_id="reservation-partial",
+                    account_id="account-partial",
+                    tenant_id="tenant-a",
+                    credential_id="credential-partial",
+                    environment="okx_demo",
+                    strategy_id="strategy-partial",
+                    batch_id="batch-partial",
+                    idempotency_key="client-partial",
+                    symbol="BTC/USDT",
+                    side="buy",
+                    requested_quote=Decimal("100"),
+                    reserved_quote=Decimal("100"),
+                ),
+                RuleStrategyEvaluationJournal(
+                    evaluation_id="evaluation-partial",
+                    strategy_id="strategy-partial",
+                    tenant_id="tenant-a",
+                    batch_id="batch-partial",
+                    result={"action": "buy"},
+                ),
+                RuleStrategyExecutionIntent(
+                    id="intent-partial",
+                    strategy_id="strategy-partial",
+                    evaluation_id="evaluation-partial",
+                    execution_generation=1,
+                    execution_source="rule_strategy",
+                    tenant_id="tenant-a",
+                    batch_id="batch-partial",
+                    credential_id="credential-partial",
+                    reservation_id="reservation-partial",
+                    idempotency_key="client-partial",
+                    symbol="BTC/USDT",
+                    side="buy",
+                    order_type="market",
+                    requested_quote="100",
+                    execution_target="okx_demo",
+                    status="submitted",
+                ),
+            ]
+        )
+        session.flush()
+        order = SandboxExchangeOrder(
+            id="sandbox-order-partial",
+            tenant_id="tenant-a",
+            credential_id="credential-partial",
+            provider="okx",
+            client_order_id="client-partial",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="market",
+            requested_quote="100",
+            requested_quantity="1",
+            status="open",
+            sandbox=True,
+            strategy_id="strategy-partial",
+            evaluation_id="evaluation-partial",
+            execution_generation=1,
+            execution_source="rule_strategy",
+            execution_intent_id="intent-partial",
+            batch_id="batch-partial",
+        )
+        session.add(order)
+        session.commit()
+
+        service = object.__new__(trading_module.SandboxExchangeTradingService)
+        service.db = session
+        service._sync_shared_demo_evidence(
+            order,
+            {
+                "id": "venue-partial",
+                "status": "partially_filled",
+                "amount": "1",
+                "filled": "0.5",
+                "cost": "50",
+                "average": "100",
+                "timestamp": 1710000000000,
+            },
+            source="refresh",
+        )
+        session.commit()
+
+        service._sync_shared_demo_evidence(
+            order,
+            {
+                "id": "venue-partial",
+                "status": "canceled",
+                "amount": "1",
+                "filled": "0.5",
+                "timestamp": 1710000001000,
+            },
+            source="refresh",
+        )
+        session.commit()
+
+        account = session.get(StrategySharedAccount, "account-partial")
+        reservation = session.get(StrategyCapitalReservation, "reservation-partial")
+        projection = session.get(SharedDemoOrderProjection, session.query(SharedDemoOrderProjection).one().order_id)
+        assert account is not None and reservation is not None and projection is not None
+        assert projection.filled_quote == Decimal("50")
+        assert reservation.consumed_quote == 50
+        assert reservation.released_quote == 50
+        assert reservation.status == "partially_released"
+        assert account.occupied_notional_quote == 50
+        assert account.reusable_quote == 950
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
 
 
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):

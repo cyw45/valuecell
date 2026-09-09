@@ -916,11 +916,16 @@ class SandboxExchangeTradingService:
             self.db.add(projection)
         prior_quantity = Decimal(str(projection.filled_quantity or 0))
         prior_quote = Decimal(str(projection.filled_quote or 0))
+        observed_filled = self._optional_decimal(raw.get("filled"))
+        filled = prior_quantity if observed_filled is None else max(prior_quantity, observed_filled)
         cumulative_quote = self._optional_decimal(raw.get("cost"))
         average = self._optional_decimal(raw.get("average"))
         if cumulative_quote is None and average is not None:
             cumulative_quote = filled * average
-        cumulative_quote = cumulative_quote or Decimal(0)
+        if cumulative_quote is None:
+            cumulative_quote = prior_quote
+        else:
+            cumulative_quote = max(prior_quote, cumulative_quote)
         delta_quantity = max(Decimal(0), filled - prior_quantity)
         delta_quote = max(Decimal(0), cumulative_quote - prior_quote)
         if delta_quantity > 0:
