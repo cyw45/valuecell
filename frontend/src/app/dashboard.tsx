@@ -963,6 +963,12 @@ export default function DashboardPage() {
                           tone: "text-sky-600 dark:text-sky-300",
                         },
                         {
+                          label: "策略可分配余额 · allocator",
+                          value: formatQuote(sharedAccountSummary.allocator.available_for_strategies_quote),
+                          detail: "扣除当前未结算预留后的可开仓资金",
+                          tone: "text-cyan-600 dark:text-cyan-300",
+                        },
+                        {
                           label: "策略归属 PnL · 归因",
                           value: formatQuote(sharedAccountSummary.strategy_pnl_total_quote),
                           detail: "所有策略归属盈亏合计；不含纸面账本",

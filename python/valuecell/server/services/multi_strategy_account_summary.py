@@ -39,6 +39,15 @@ def _observed_at(account: StrategySharedAccount) -> datetime:
     return account.observed_at or datetime.now(timezone.utc)
 
 
+def _available_for_strategies(account: StrategySharedAccount) -> float | None:
+    """Return allocator capacity after outstanding reservation holds."""
+    if account.reusable_quote is not None:
+        return max(0.0, float(account.reusable_quote) - float(account.reserved_quote))
+    if account.available_quote is None:
+        return None
+    return max(0.0, float(account.available_quote) - float(account.reserved_quote))
+
+
 def _active_reservations(
     session: Session,
     *,
@@ -245,7 +254,7 @@ def build_shared_account_overview(
     )
     allocator = CapitalAllocatorSummary(
         wallet_equity_quote=account.wallet_equity_quote,
-        available_for_strategies_quote=account.available_quote,
+        available_for_strategies_quote=_available_for_strategies(account),
         reserved_quote=account.reserved_quote,
         occupied_notional_quote=account.occupied_notional_quote,
         pending_settlement_quote=account.pending_settlement_quote,

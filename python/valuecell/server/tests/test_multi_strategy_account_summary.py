@@ -108,6 +108,7 @@ def test_summary_separates_wallet_and_strategy_allocation() -> None:
     assert overview.allocator.allocations[0].net_pnl_quote is None
     assert overview.allocator.allocations[0].lifecycle_reason is not None
     assert overview.strategy_pnl_total_quote is None
+    assert overview.allocator.available_for_strategies_quote == 0
 
 
 def test_summary_exposes_strategy_cap_and_actual_usage() -> None:
