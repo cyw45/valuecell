@@ -1009,11 +1009,12 @@ class RuleStrategyService:
                     account_snapshot["return_rate_pct"] = (
                         (equity - initial_capital) / initial_capital
                     )
-                    account_snapshot["batch_id"] = selected_batch_id
-                    account_snapshot["batch_status"] = (
+                    account_snapshot.setdefault("batch_id", selected_batch_id)
+                    account_snapshot.setdefault(
+                        "batch_status",
                         strategy.status
                         if selected_batch_id == strategy.current_batch_id
-                        else "stopped"
+                        else "stopped",
                     )
                     return account_snapshot
         if batch_id is not None:

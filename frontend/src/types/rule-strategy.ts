@@ -46,7 +46,7 @@ export interface RuleStrategyPaperAccount {
   equity_quote: number;
   return_rate_pct?: number;
   batch_id?: string;
-  batch_status?: "running" | "stopped";
+  batch_status?: "running" | "stopped" | "paused" | "archived";
 }
 
 export interface MovingAverageRuleConfig {

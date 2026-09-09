@@ -3,7 +3,7 @@ from sqlalchemy.orm import sessionmaker
 
 from valuecell.server.db.models.base import Base
 from valuecell.server.db.models.fixed_strategy_paper import FixedPaperAccount, FixedPaperPosition
-from valuecell.server.db.models.rule_strategy import RuleStrategy
+from valuecell.server.db.models.rule_strategy import RuleStrategy, RuleStrategyExecutionBatch
 from valuecell.server.db.models.tenant import Tenant
 from valuecell.server.db.repositories.rule_strategy_repository import RuleStrategyRepository
 
@@ -14,6 +14,15 @@ def test_fixed_paper_account_reads_persisted_marked_equity() -> None:
     session = sessionmaker(bind=engine)()
     session.add(Tenant(id="tenant-a", name="Tenant A"))
     session.add(RuleStrategy(strategy_id="strategy-a", tenant_id="tenant-a", name="A", config={}))
+    session.add(RuleStrategyExecutionBatch(
+        batch_id="batch-a",
+        tenant_id="tenant-a",
+        strategy_id="strategy-a",
+        strategy_name_snapshot="A",
+        execution_generation=1,
+        status="paused",
+        config_snapshot={"initial_capital_quote": 1000},
+    ))
     session.flush()
     account = FixedPaperAccount(
         tenant_id="tenant-a",
@@ -52,3 +61,4 @@ def test_fixed_paper_account_reads_persisted_marked_equity() -> None:
     assert data["occupied_quote"] == 202
     assert data["unrealized_pnl_quote"] == 20
     assert data["equity_quote"] == 1020
+    assert data["batch_status"] == "paused"

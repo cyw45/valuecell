@@ -2739,7 +2739,7 @@ export function RuleStrategyConfiguration({
                 />
                 <SummaryRow
                   label="Batch"
-                  value={storedStrategy.account.batch_status === "running" ? "运行中" : storedStrategy.account.batch_id ? "已停止" : "未启动"}
+                  value={storedStrategy.account.batch_status === "running" ? "运行中" : storedStrategy.account.batch_status === "paused" ? "已暂停" : storedStrategy.account.batch_status === "archived" ? "已归档" : storedStrategy.account.batch_id ? "已停止" : "未启动"}
                 />
                 <SummaryRow
                   label="Realized PnL"

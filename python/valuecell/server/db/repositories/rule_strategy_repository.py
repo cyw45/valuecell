@@ -118,6 +118,15 @@ class RuleStrategyRepository:
             )
             if account is None:
                 return None
+            batch = (
+                session.query(RuleStrategyExecutionBatch)
+                .filter_by(
+                    batch_id=batch_id,
+                    strategy_id=strategy_id,
+                    tenant_id=tenant_id,
+                )
+                .first()
+            )
             positions = (
                 session.query(FixedPaperPosition)
                 .filter_by(
@@ -153,6 +162,8 @@ class RuleStrategyRepository:
                 "realized_pnl_quote": account.realized_pnl_quote,
                 "unrealized_pnl_quote": account.unrealized_pnl_quote,
                 "equity_quote": equity,
+                "batch_id": batch_id,
+                "batch_status": batch.status if batch is not None else None,
             }
         finally:
             if self.db_session is None:
