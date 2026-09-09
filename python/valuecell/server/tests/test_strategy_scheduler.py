@@ -365,6 +365,74 @@ async def test_okx_demo_submission_is_not_recorded_as_a_paper_fill(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_okx_demo_failed_submission_releases_its_reservation(monkeypatch):
+    config = RuleStrategyConfig.model_validate(
+        {
+            "symbols": ["BTC-USDT"],
+            "execution": {
+                "environment": "okx_demo",
+                "sandbox_connection_id": "okx-demo-connection",
+            },
+        }
+    )
+    session = DurableSession(config)
+    settlement_calls = []
+
+    class FakeAllocator:
+        def __init__(self, _session):
+            pass
+
+        def reserve(self, **_kwargs):
+            reservation = SimpleNamespace(reservation_id="reservation-failed")
+            session.reservations.append(reservation)
+            return reservation
+
+        def bind_intent(self, reservation_id, **_kwargs):
+            assert reservation_id == "reservation-failed"
+
+        def settle(self, reservation_id, *, consumed_quote, outcome, reason):
+            settlement_calls.append((reservation_id, consumed_quote, outcome, reason))
+
+    class FailedService:
+        def __init__(self, _session):
+            pass
+
+        async def submit_order(self, *_args, **_kwargs):
+            return {
+                "id": "failed-order",
+                "status": "failed",
+                "error_code": "sandbox_order_rejected",
+                "sandbox": True,
+            }
+
+    monkeypatch.setattr(strategy_scheduler, "SharedCapitalAllocator", FakeAllocator)
+    monkeypatch.setattr(strategy_scheduler, "SandboxExchangeTradingService", FailedService)
+    monkeypatch.setattr(
+        strategy_scheduler,
+        "get_database_manager",
+        lambda: SimpleNamespace(get_session=lambda: session),
+    )
+
+    result = await strategy_scheduler.StrategyScheduler._execute_okx_demo_signal(
+        "tenant-a",
+        "rule-a",
+        config,
+        "BTC-USDT",
+        "buy",
+        Decimal("100"),
+        Decimal("50000"),
+        1234,
+        "eval-failed",
+    )
+
+    assert result["execution"] == "blocked"
+    assert result["status"] == "failed"
+    assert settlement_calls == [
+        ("reservation-failed", Decimal(0), "released", "failed")
+    ]
+
+
+@pytest.mark.asyncio
 async def test_okx_demo_execution_blocks_symbol_removed_from_strategy_config(monkeypatch):
     config = RuleStrategyConfig.model_validate(
         {
