@@ -754,6 +754,61 @@ def test_partial_fill_cancel_keeps_prior_cumulative_quote_for_settlement():
         engine.dispose()
 
 
+def test_sell_fill_releases_matching_strategy_occupied_capital(monkeypatch):
+    calls = []
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def with_for_update(self):
+            return self
+
+        def all(self):
+            return [SimpleNamespace(
+                reservation_id="reservation-exit",
+                account_id="account-exit",
+                tenant_id="tenant-a",
+                strategy_id="strategy-exit",
+                batch_id="batch-exit",
+                symbol="BTC/USDT",
+                consumed_quote=100,
+            )]
+
+    class Session:
+        def query(self, model):
+            assert model is StrategyCapitalReservation
+            return Query()
+
+    class Allocator:
+        def __init__(self, _session):
+            pass
+
+        def release_occupied(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(trading_module, "SharedCapitalAllocator", Allocator)
+    service = object.__new__(trading_module.SandboxExchangeTradingService)
+    service.db = Session()
+
+    service._release_shared_demo_exit_occupied(
+        account_id="account-exit",
+        tenant_id="tenant-a",
+        strategy_id="strategy-exit",
+        batch_id="batch-exit",
+        symbol="BTC/USDT",
+        released_quote=Decimal("40"),
+    )
+
+    assert calls == [{
+        "account_id": "account-exit",
+        "tenant_id": "tenant-a",
+        "released_quote": Decimal("40"),
+        "reason": "venue_exit_fill",
+        "reservation_id": "reservation-exit",
+    }]
+
+
 def test_rejects_unsafe_requests_and_tenant_cross_access(sandbox_client):
     client, principal, _ = sandbox_client
     assert client.post("/saas/sandbox-exchanges/connections", json=connection_request(provider="kraken")).status_code == 422

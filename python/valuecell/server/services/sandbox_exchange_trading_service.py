@@ -953,7 +953,54 @@ class SandboxExchangeTradingService:
         projection.filled_quote = cumulative_quote
         projection.last_reconciliation_source = source
         projection.last_observed_at = datetime.now(timezone.utc)
+        if order.side == "sell" and delta_quote > 0:
+            self._release_shared_demo_exit_occupied(
+                account_id=binding.account_id,
+                tenant_id=binding.tenant_id,
+                strategy_id=binding.strategy_id,
+                batch_id=binding.batch_id,
+                symbol=order.symbol,
+                released_quote=delta_quote,
+            )
         self._settle_shared_demo_reservation(intent, binding, status, cumulative_quote, source)
+
+    def _release_shared_demo_exit_occupied(
+        self,
+        *,
+        account_id: str,
+        tenant_id: str,
+        strategy_id: str,
+        batch_id: str,
+        symbol: str,
+        released_quote: Decimal,
+    ) -> None:
+        """Return confirmed sell proceeds only to one matching strategy reservation."""
+        candidates = (
+            self.db.query(StrategyCapitalReservation)
+            .filter(
+                StrategyCapitalReservation.account_id == account_id,
+                StrategyCapitalReservation.tenant_id == tenant_id,
+                StrategyCapitalReservation.strategy_id == strategy_id,
+                StrategyCapitalReservation.batch_id == batch_id,
+                StrategyCapitalReservation.symbol == symbol,
+                StrategyCapitalReservation.status.in_({"occupied", "partially_released"}),
+                StrategyCapitalReservation.consumed_quote > 0,
+            )
+            .with_for_update()
+            .all()
+        )
+        if len(candidates) != 1:
+            return
+        try:
+            SharedCapitalAllocator(self.db).release_occupied(
+                account_id=account_id,
+                tenant_id=tenant_id,
+                released_quote=released_quote,
+                reason="venue_exit_fill",
+                reservation_id=candidates[0].reservation_id,
+            )
+        except CapitalAllocationError:
+            return
 
     def _settle_shared_demo_reservation(
         self, intent: RuleStrategyExecutionIntent, binding: SharedDemoExecutionIntent,
