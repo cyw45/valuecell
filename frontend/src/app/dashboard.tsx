@@ -1072,13 +1072,14 @@ export default function DashboardPage() {
                               <TableHead className="text-right">已实现</TableHead>
                               <TableHead className="text-right">未实现</TableHead>
                               <TableHead className="text-right">净 PnL / 收益率</TableHead>
+                              <TableHead>交易统计</TableHead>
                               <TableHead>资金上限</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
                             {sharedAccountSummary.allocator.allocations.length === 0 ? (
                               <TableRow>
-                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={10}>
+                                <TableCell className="py-7 text-center text-muted-foreground" colSpan={11}>
                                   暂无策略分配记录。
                                 </TableCell>
                               </TableRow>
@@ -1125,6 +1126,13 @@ export default function DashboardPage() {
                                   <TableCell className="text-right tabular-nums">{formatQuote(allocation.unrealized_pnl_quote)}</TableCell>
                                   <TableCell className={cn("text-right tabular-nums", allocation.net_pnl_quote == null ? "text-muted-foreground" : allocation.net_pnl_quote >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300")}>
                                     {(() => { const pnl = allocationPnlPresentation(allocation.net_pnl_quote, allocation.return_rate_pct); return <><div>{pnl.value} USDT</div><div className="text-xs">收益率 {pnl.returnRate}</div></>; })()}
+                                  </TableCell>
+                                  <TableCell className="min-w-56 text-xs tabular-nums">
+                                    <div>成交 {allocation.fill_count} 笔 · 完整交易 {allocation.completed_trade_count} 次</div>
+                                    <div className="text-muted-foreground">
+                                      胜率 {allocation.win_rate == null ? "—" : `${(allocation.win_rate * 100).toFixed(1)}%`} · 周转率 {allocation.turnover_ratio == null ? "—" : `${(allocation.turnover_ratio * 100).toFixed(1)}%`}
+                                    </div>
+                                    <div className="text-muted-foreground">成交额 {formatQuote(allocation.turnover_quote)} · 手续费 {formatQuote(allocation.fee_quote)} USDT</div>
                                   </TableCell>
                                   <TableCell>
                                     <StrategyAllocationCapEditor

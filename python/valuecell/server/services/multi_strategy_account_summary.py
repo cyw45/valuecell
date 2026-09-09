@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -30,11 +32,98 @@ from valuecell.server.db.models.shared_demo_execution import (
 from valuecell.server.services.rule_strategy_demo_execution_read_model import (
     _pnl_and_curve,
     _shared_evidence_orders,
+    _timestamp_sort_key,
 )
 
 
 class SharedAccountSummaryUnavailable(RuntimeError):
     """Raised when an authoritative shared-wallet summary cannot be built."""
+
+
+@dataclass(frozen=True)
+class _StrategyDemoStats:
+    """Operational counters replayed from one strategy's attributed Demo fills."""
+
+    fill_count: int
+    completed_trade_count: int
+    winning_trade_count: int
+    turnover_quote: float
+    fee_quote: float
+
+    @property
+    def win_rate(self) -> float | None:
+        if self.completed_trade_count == 0:
+            return None
+        return self.winning_trade_count / self.completed_trade_count
+
+
+def _strategy_demo_stats(
+    session: Session,
+    *,
+    tenant_id: str,
+    credential_id: str,
+    strategy_id: str,
+    account_id: str,
+) -> _StrategyDemoStats:
+    """Replay FIFO lots so each sell fill becomes one completed trade event."""
+    venue_orders = session.query(SharedDemoVenueOrder).filter_by(
+        tenant_id=tenant_id,
+        credential_id=credential_id,
+        strategy_id=strategy_id,
+        account_id=account_id,
+        environment="okx_demo",
+    ).all()
+    order_ids = [row.order_id for row in venue_orders]
+    if not order_ids:
+        return _StrategyDemoStats(0, 0, 0, 0.0, 0.0)
+    fills = session.query(SharedDemoFill).filter(
+        SharedDemoFill.order_id.in_(order_ids)
+    ).order_by(SharedDemoFill.occurred_at.asc()).all()
+    orders = _shared_evidence_orders([], fills=fills, venue_orders=venue_orders)
+    lots: dict[str, list[tuple[Decimal, Decimal]]] = {}
+    completed = 0
+    winning = 0
+    turnover = Decimal(0)
+    fees = Decimal(0)
+    for order in sorted(
+        orders,
+        key=lambda item: _timestamp_sort_key(item.get("filled_at") or item.get("created_at")),
+    ):
+        quantity = Decimal(str(order.get("filled_quantity") or 0))
+        quote = Decimal(str(order.get("filled_quote") or 0))
+        fee = Decimal(str(order.get("fee_quote") or 0))
+        if quantity <= 0:
+            continue
+        turnover += quote
+        fees += fee
+        symbol = str(order.get("symbol") or "")
+        if order.get("side") == "buy":
+            lots.setdefault(symbol, []).append((quantity, quote))
+            continue
+        if order.get("side") != "sell":
+            continue
+        completed += 1
+        remaining = quantity
+        cost = Decimal(0)
+        symbol_lots = lots.setdefault(symbol, [])
+        while remaining > 0 and symbol_lots:
+            lot_quantity, lot_cost = symbol_lots[0]
+            matched = min(remaining, lot_quantity)
+            cost += lot_cost * matched / lot_quantity
+            remaining -= matched
+            if matched == lot_quantity:
+                symbol_lots.pop(0)
+            else:
+                symbol_lots[0] = (lot_quantity - matched, lot_cost * (lot_quantity - matched) / lot_quantity)
+        if remaining == 0 and quote - cost - fee > 0:
+            winning += 1
+    return _StrategyDemoStats(
+        fill_count=len(fills),
+        completed_trade_count=completed,
+        winning_trade_count=winning,
+        turnover_quote=float(turnover),
+        fee_quote=float(fees),
+    )
 
 
 def _observed_at(account: StrategySharedAccount) -> datetime:
@@ -226,9 +315,17 @@ def build_shared_account_overview(
             strategy_id=strategy_id,
             account_id=account.id,
         )
+        stats = _strategy_demo_stats(
+            session,
+            tenant_id=tenant_id,
+            credential_id=credential_id,
+            strategy_id=strategy_id,
+            account_id=account.id,
+        )
         initial_capital = strategy.config.get("initial_capital_quote") if isinstance(strategy.config, dict) else None
         return_base = float(initial_capital) if initial_capital and float(initial_capital) > 0 else reserved or denominator
         return_rate = net / return_base if net is not None and return_base > 0 else None
+        turnover_ratio = stats.turnover_quote / return_base if return_base > 0 else None
         cap = (
             session.query(SharedDemoStrategyAllocationCap)
             .filter_by(
@@ -253,6 +350,13 @@ def build_shared_account_overview(
                 unrealized_pnl_quote=unrealized,
                 net_pnl_quote=net,
                 return_rate_pct=return_rate,
+                fill_count=stats.fill_count,
+                completed_trade_count=stats.completed_trade_count,
+                winning_trade_count=stats.winning_trade_count,
+                win_rate=stats.win_rate,
+                turnover_quote=stats.turnover_quote,
+                fee_quote=stats.fee_quote,
+                turnover_ratio=turnover_ratio,
                 allocation_state=state,
                 lifecycle_reason=lifecycle_reason,
                 utilization_denominator_quote=denominator,

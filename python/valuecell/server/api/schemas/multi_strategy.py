@@ -143,6 +143,13 @@ class StrategyAllocation(MultiStrategyModel):
     unrealized_pnl_quote: float | None = None
     net_pnl_quote: float | None = None
     return_rate_pct: float | None = None
+    fill_count: int = Field(ge=0)
+    completed_trade_count: int = Field(ge=0)
+    winning_trade_count: int = Field(ge=0)
+    win_rate: float | None = Field(default=None, ge=0, le=1)
+    turnover_quote: float = Field(ge=0)
+    fee_quote: float = Field(ge=0)
+    turnover_ratio: float | None = Field(default=None, ge=0)
     allocation_state: AllocationState
     lifecycle_reason: str | None = Field(default=None, max_length=1_000)
     utilization_denominator_quote: float = Field(gt=0)

@@ -368,6 +368,70 @@ def test_summary_derives_strategy_pnl_from_attributed_demo_fills() -> None:
     assert allocation.unrealized_pnl_quote == pytest.approx(0)
     assert allocation.net_pnl_quote == pytest.approx(18)
     assert allocation.return_rate_pct == pytest.approx(18 / 600)
+    assert allocation.fill_count == 2
+    assert allocation.completed_trade_count == 1
+    assert allocation.winning_trade_count == 1
+    assert allocation.win_rate == pytest.approx(1.0)
+    assert allocation.turnover_quote == pytest.approx(220)
+    assert allocation.fee_quote == pytest.approx(2)
+    assert allocation.turnover_ratio == pytest.approx(220 / 600)
+
+
+def test_summary_leaves_win_rate_unavailable_until_a_sell_fill_exists() -> None:
+    session = _session()
+    session.add(
+        SharedDemoVenueOrder(
+            order_id="order-buy-only",
+            intent_id="intent-buy-only",
+            reservation_id="reservation-a",
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            strategy_id="strategy-a",
+            batch_id="batch-a",
+            client_order_id="client-buy-only",
+            symbol="BTC-USDT",
+            side="buy",
+            order_type="market",
+            leg_kind="entry",
+            requested_quantity=1,
+            requested_quote=100,
+        )
+    )
+    session.add(
+        SharedDemoFill(
+            fill_id="fill-buy-only",
+            order_id="order-buy-only",
+            venue="okx",
+            venue_fill_id="venue-fill-buy-only",
+            account_id="account-a",
+            tenant_id="tenant-a",
+            credential_id="credential-a",
+            environment="okx_demo",
+            strategy_id="strategy-a",
+            batch_id="batch-a",
+            price=100,
+            quantity=1,
+            quote_amount=100,
+            occurred_at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc),
+            reconciliation_source="test",
+        )
+    )
+    session.commit()
+
+    allocation = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    ).allocator.allocations[0]
+
+    assert allocation.fill_count == 1
+    assert allocation.completed_trade_count == 0
+    assert allocation.winning_trade_count == 0
+    assert allocation.win_rate is None
+    assert allocation.turnover_quote == pytest.approx(100)
+    assert allocation.fee_quote == pytest.approx(0)
 
 
 def test_summary_requires_authoritative_allocator_equity() -> None:
