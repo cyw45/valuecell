@@ -55,6 +55,7 @@ import {
   demoPurchaseStatePresentation,
   formatDemoTime,
   formatOptionalAmount,
+  formatOptionalPercent,
 } from "@/app/dashboard-demo-execution";
 import { dashboardRefreshTargets } from "@/app/dashboard-refresh";
 import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
@@ -1173,7 +1174,7 @@ export default function DashboardPage() {
                 </Badge>
               </div>
               <p className="mt-3 text-muted-foreground text-xs">
-                回撤 {((riskStateQuery.data?.current_drawdown_pct ?? 0) * 100).toFixed(2)}%
+                回撤 {formatOptionalPercent(riskStateQuery.data?.current_drawdown_pct)}
               </p>
               <p className="mt-1 text-muted-foreground text-xs">
                 {displayReason(

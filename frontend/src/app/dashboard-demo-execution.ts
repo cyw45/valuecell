@@ -16,6 +16,11 @@ export function formatOptionalAmount(value?: string | number | null): string {
   return Number.isFinite(numeric) ? numberFormatter.format(numeric) : "—";
 }
 
+export function formatOptionalPercent(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${(value * 100).toFixed(2)}%`;
+}
+
 export function allocationPnlPresentation(
   value: number | null | undefined,
   returnRate: number | null | undefined,

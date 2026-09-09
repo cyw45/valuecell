@@ -8,7 +8,14 @@ import {
   demoPnlPresentation,
   demoPurchaseStatePresentation,
   formatOptionalAmount,
+  formatOptionalPercent,
 } from "./dashboard-demo-execution";
+
+test("missing percentages remain unavailable instead of becoming zero", () => {
+  assert.equal(formatOptionalPercent(null), "—");
+  assert.equal(formatOptionalPercent(undefined), "—");
+  assert.equal(formatOptionalPercent(0.125), "12.50%");
+});
 
 test("purchase state is explicit and readable", () => {
   assert.equal(demoPurchaseStatePresentation("bought").label, "已买入");
