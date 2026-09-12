@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from loguru import logger
-from sqlalchemy import Boolean, String, bindparam, text
+from sqlalchemy import Boolean, Integer, String, bindparam, text
 from sqlalchemy.orm import Session
 
 from valuecell.server.db.models.base import Base
@@ -1611,17 +1611,26 @@ def migrate_fixed_strategies_to_shared_account(session: Session) -> bool:
         )
         capital = float(config.get("initial_capital_quote") or 0.0)
         if capital > 0:
+            allocation_cap_insert = text(
+                "INSERT INTO shared_demo_strategy_allocation_caps "
+                "(cap_id, account_id, tenant_id, credential_id, environment, strategy_id, "
+                "max_reserved_quote, max_occupied_quote, active, version, effective_at) "
+                "SELECT :cap_id, :account_id, :tenant_id, :credential_id, :environment, "
+                ":strategy_id, :capital, :capital, :active, 1, :effective_at "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM shared_demo_strategy_allocation_caps "
+                "WHERE account_id = :account_id AND strategy_id = :strategy_id AND active = :active)"
+            ).bindparams(
+                bindparam("cap_id", type_=String(36)),
+                bindparam("account_id", type_=String(36)),
+                bindparam("tenant_id", type_=String(36)),
+                bindparam("credential_id", type_=String(36)),
+                bindparam("environment", type_=String(16)),
+                bindparam("strategy_id", type_=String(100)),
+                bindparam("active", type_=Integer),
+            )
             session.execute(
-                text(
-                    "INSERT INTO shared_demo_strategy_allocation_caps "
-                    "(cap_id, account_id, tenant_id, credential_id, environment, strategy_id, "
-                    "max_reserved_quote, max_occupied_quote, active, version, effective_at) "
-                    "SELECT :cap_id, :account_id, :tenant_id, :credential_id, :environment, "
-                    ":strategy_id, :capital, :capital, :active, 1, :effective_at "
-                    "WHERE NOT EXISTS ("
-                    "SELECT 1 FROM shared_demo_strategy_allocation_caps "
-                    "WHERE account_id = :account_id AND strategy_id = :strategy_id AND active = :active)"
-                ),
+                allocation_cap_insert,
                 {
                     "cap_id": str(uuid4()),
                     "account_id": account_id,
