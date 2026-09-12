@@ -47,6 +47,11 @@ INTENT_SUBMISSION_UNKNOWN = "submission_unknown"
 INTENT_SUBMITTED = "submitted"
 INTENT_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected", "stale"})
 ORDER_TERMINAL = frozenset({"closed", "filled", "canceled", "cancelled", "failed", "rejected"})
+# A sell whose executable size is below the venue minimum never reaches the
+# order book. It is retained as an auditable no-op so the idempotency lookup can
+# short-circuit, but it is deliberately excluded from every operator-facing list
+# and from the un-reconciled counter so it cannot be mistaken for real activity.
+IGNORED_DUST_STATUS = "ignored_dust"
 EXIT_ATTRIBUTION_QUOTE = Decimal("0.00000001")
 
 SandboxProvider = Literal["binance", "okx"]
@@ -263,7 +268,7 @@ class SandboxExchangeTradingService:
                     self.db.commit()
             return {
                 "id": None,
-                "status": "ignored_dust",
+                "status": IGNORED_DUST_STATUS,
                 "symbol": symbol,
                 "side": side,
                 "sandbox": True,
@@ -357,10 +362,19 @@ class SandboxExchangeTradingService:
                 nominal_quantity if side == "buy" else min(available, nominal_quantity)
             )
             if quantity <= 0:
+                if side == "sell":
+                    return self._record_ignored_dust(order, intent, fenced=fenced)
                 raise SandboxTradingError("Order does not satisfy OKX Demo minimum size")
             precision = getattr(exchange, "amount_to_precision", None)
             if callable(precision):
-                quantity = self._decimal(precision(symbol, float(quantity)), "Order amount unavailable")
+                # ``amount_to_precision`` truncates, so a real but tiny balance
+                # can round down to zero. Treat that as a size fact rather than
+                # an unreadable amount: the dust branch below decides the
+                # outcome, and a buy still fails closed as a minimum-size error.
+                truncated = self._optional_decimal(precision(symbol, float(quantity)))
+                if truncated is None:
+                    raise SandboxTradingError("Order amount unavailable")
+                quantity = truncated
             limits = market.get("limits") or {}
             min_amount = self._decimal_or_zero((limits.get("amount") or {}).get("min"))
             min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
@@ -370,6 +384,11 @@ class SandboxExchangeTradingService:
             if quantity > nominal_quantity or (side == "sell" and quantity > available):
                 raise SandboxTradingError("Order amount exceeds safe Demo sizing limit")
             if quantity <= 0 or (min_amount > 0 and quantity < min_amount) or (min_cost > 0 and order_cost < min_cost):
+                if side == "sell":
+                    # Truncation can push an executable sell below the venue
+                    # minimum even when the read-only preflight passed. The venue
+                    # never saw an order, so this is dust rather than a failure.
+                    return self._record_ignored_dust(order, intent, fenced=fenced)
                 raise SandboxTradingError("Order does not satisfy OKX Demo minimum size")
             required_amount = quote_amount if side == "buy" else quantity
             if available < required_amount:
@@ -483,11 +502,7 @@ class SandboxExchangeTradingService:
             available = self._decimal_or_zero(free.get(base))
             limits = market.get("limits") or {}
             min_amount = self._decimal_or_zero((limits.get("amount") or {}).get("min"))
-            if available <= 0 or (min_amount > 0 and available < min_amount):
-                return True
             min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
-            if min_cost <= 0:
-                return False
             if price is None:
                 ticker = await self._await_preflight(exchange.fetch_ticker(symbol), timeout_s)
                 effective_price = self._decimal(
@@ -497,13 +512,56 @@ class SandboxExchangeTradingService:
             else:
                 effective_price = price
             nominal_quantity = quote_amount / effective_price
-            return min(available, nominal_quantity) * effective_price < min_cost
+            # The executable sell size is bounded by the shared wallet balance
+            # and by the sizing ceiling, so both minima must be evaluated against
+            # that size. Comparing the wallet balance alone let a below-minimum
+            # sell through the preflight and fail later as a rejected order.
+            executable = min(available, nominal_quantity)
+            if executable <= 0:
+                return True
+            if min_amount > 0 and executable < min_amount:
+                return True
+            if min_cost <= 0:
+                return False
+            return executable * effective_price < min_cost
         except Exception:
             # Never hide data or configuration errors as dust. Let the existing
             # audited order path expose those deterministic failures.
             return False
         finally:
             await self._close(exchange)
+
+    def _record_ignored_dust(
+        self,
+        order: SandboxExchangeOrder,
+        intent: RuleStrategyExecutionIntent | None,
+        *,
+        fenced: bool,
+    ) -> dict[str, Any]:
+        """Close a proven no-op dust sell without a user-visible failure.
+
+        The row is retained so the idempotency lookup short-circuits later ticks
+        instead of re-probing the venue, but its status keeps it out of operator
+        order lists and out of the un-reconciled counter.
+        """
+        order.status = IGNORED_DUST_STATUS
+        order.error_code = IGNORED_DUST_STATUS
+        if intent is not None:
+            intent.status = IGNORED_DUST_STATUS
+            intent.error_code = IGNORED_DUST_STATUS
+            intent.error_message = "sell size is below the OKX Demo minimum"
+            intent.terminal_at = datetime.now(timezone.utc)
+        if fenced:
+            self.db.flush()
+        else:
+            self.db.commit()
+        return {
+            "id": order.id,
+            "status": IGNORED_DUST_STATUS,
+            "symbol": order.symbol,
+            "side": order.side,
+            "sandbox": True,
+        }
 
     async def fetch_order_status(self, tenant_id: str, order_id: str) -> dict[str, Any]:
         """Refresh one submitted sandbox order, always through testnet before private fetch."""
@@ -539,7 +597,16 @@ class SandboxExchangeTradingService:
             order.id
             for order in query.all()
             if getattr(order, "exchange_order_id", None)
-            and order.status not in {"filled", "canceled", "cancelled", "failed", "rejected", "stale"}
+            and order.status
+            not in {
+                "filled",
+                "canceled",
+                "cancelled",
+                "failed",
+                "rejected",
+                "stale",
+                IGNORED_DUST_STATUS,
+            }
         ]
         refreshed = []
         for order_id in order_ids:
@@ -633,6 +700,9 @@ class SandboxExchangeTradingService:
         if batch_id:
             query = query.filter_by(batch_id=batch_id)
         orders = query.order_by(SandboxExchangeOrder.created_at.desc()).all()
+        # Ignored dust sells are audited as retained rows rather than failures,
+        # but they are not trades: keep them out of every operator-facing list.
+        orders = [order for order in orders if order.status != IGNORED_DUST_STATUS]
         intent_ids = [order.execution_intent_id for order in orders if order.execution_intent_id]
         messages = {
             intent.id: str(intent.error_message)[:1000]

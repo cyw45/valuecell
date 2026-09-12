@@ -179,6 +179,22 @@ class SharedWalletSummary(MultiStrategyModel):
     unassigned_equity_quote: float | None = None
 
 
+class UnallocatedStrategy(MultiStrategyModel):
+    """A tenant strategy whose capital pool is deliberately not this wallet.
+
+    The allocator matrix used to omit these rows entirely, so a running strategy
+    could disappear from the concurrency view without any visible reason. They
+    are reported here as read-only facts instead of being silently dropped.
+    """
+
+    strategy_id: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    kind: StrategyKind
+    status: StrategyStatus
+    environment: StrategyExecutionEnvironment | None = None
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
 class CapitalAllocatorSummary(MultiStrategyModel):
     """Account-level funds available for concurrent strategy execution."""
 
@@ -191,6 +207,7 @@ class CapitalAllocatorSummary(MultiStrategyModel):
     utilization_denominator_quote: float = Field(gt=0)
     account_utilization_ratio: float = Field(ge=0)
     allocations: list[StrategyAllocation] = Field(default_factory=list)
+    unallocated_strategies: list[UnallocatedStrategy] = Field(default_factory=list)
     observed_at: datetime
 
     @model_validator(mode="after")

@@ -640,17 +640,14 @@ class RuleStrategyRepository:
             )
             session.add_all([strategy, account])
             session.flush()
-            isolated_scope = scope in {
-                "paper_virtual",
-                "dedicated_credential",
-                "dedicated_subaccount",
-            }
-            state = "normal" if isolated_scope else "only_reduce"
-            reason_code = (
-                None
-                if state == "normal"
-                else "shared_exchange_account_requires_dedicated_scope"
-            )
+            # Shared-account isolation is proven at runtime by the capital
+            # allocator, per-strategy allocation caps, and the attributed
+            # execution facts the reconciliation pass verifies. Freezing every
+            # shared strategy to ``only_reduce`` here made the concurrency pool
+            # permanently unable to open a position, so admission starts normal
+            # and the risk circuit-breakers remain the only path to reduce-only.
+            state = "normal"
+            reason_code = None
             session.add(
                 RuleStrategyRiskState(
                     account_id=account.id,
@@ -660,11 +657,7 @@ class RuleStrategyRepository:
                     daily_equity_baseline=capital,
                     high_water_equity=capital,
                     reason_code=reason_code,
-                    reason_detail=(
-                        None
-                        if reason_code is None
-                        else "共享交易所账户未证明隔离，已仅允许减仓或平仓。"
-                    ),
+                    reason_detail=None,
                 )
             )
             session.add_all(

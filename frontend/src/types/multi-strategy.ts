@@ -63,6 +63,15 @@ export type StrategyAllocation = {
   utilization_ratio: number;
 };
 
+export type UnallocatedStrategy = {
+  strategy_id: string;
+  name: string;
+  kind: StrategyKind;
+  status: "running" | "stopped" | "archived" | "paused";
+  environment: StrategyExecutionEnvironment | null;
+  reason: string;
+};
+
 export type SharedWalletSummary = {
   tenant_id: string;
   credential_id: string;
@@ -86,6 +95,7 @@ export type CapitalAllocatorSummary = {
   utilization_denominator_quote: number;
   account_utilization_ratio: number;
   allocations: StrategyAllocation[];
+  unallocated_strategies: UnallocatedStrategy[];
   observed_at: string;
 };
 

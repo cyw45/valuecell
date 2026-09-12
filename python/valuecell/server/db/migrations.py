@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+from uuid import uuid4
+
 from loguru import logger
 from sqlalchemy import Boolean, String, bindparam, text
 from sqlalchemy.orm import Session
@@ -707,8 +711,11 @@ def _backfill_strategy_product_state(session: Session) -> None:
             ),
             {"tenant_id": strategy.tenant_id, "strategy_id": strategy.strategy_id},
         ).scalar_one()
-        state = "normal" if environment == "paper" else "only_reduce"
-        reason_code = None if environment == "paper" else "shared_exchange_account_requires_dedicated_scope"
+        # Shared-account isolation moved to the capital allocator, per-strategy
+        # allocation caps and the reconciliation pass, so a shared credential is
+        # no longer created in reduce-only mode.
+        state = "normal"
+        reason_code = None
         session.execute(
             text(
                 "INSERT INTO rule_strategy_risk_states "
@@ -1412,5 +1419,230 @@ def migrate_leader_spot_v19_market_state(session: Session) -> bool:
     logger.info(
         "Applied schema migration {version}",
         version=LEADER_SPOT_V19_MARKET_STATE_MIGRATION_VERSION,
+    )
+    return True
+
+
+SHARED_ACCOUNT_ADMISSION_MIGRATION_VERSION = "20260912_shared_account_admission_v1"
+# 7720250731 is already held by MULTI_STRATEGY_MIGRATION_LOCK_KEY. Advisory keys must
+# stay unique so no two migrations can ever contend on the same lock.
+SHARED_ACCOUNT_ADMISSION_MIGRATION_LOCK_KEY = 7720250740
+
+
+def migrate_shared_account_admission(session: Session) -> bool:
+    """Release strategies frozen by the retired shared-account admission rule.
+
+    The first concurrency release created every shared-exchange strategy in
+    ``only_reduce`` because isolation was unproven. Isolation is now enforced by
+    the capital allocator, per-strategy allocation caps and the reconciliation
+    pass, so those frozen rows would permanently block entry unless they are
+    reset exactly once.
+    """
+
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "shared account admission migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": SHARED_ACCOUNT_ADMISSION_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": SHARED_ACCOUNT_ADMISSION_MIGRATION_VERSION},
+    ).first():
+        return False
+    result = session.execute(
+        text(
+            "UPDATE rule_strategy_risk_states "
+            "SET state = 'normal', reason_code = NULL, reason_detail = NULL, "
+            "cooldown_until = NULL, version = version + 1 "
+            "WHERE reason_code = :reason_code"
+        ),
+        {"reason_code": "shared_exchange_account_requires_dedicated_scope"},
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": SHARED_ACCOUNT_ADMISSION_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}, released {count} frozen strategies",
+        version=SHARED_ACCOUNT_ADMISSION_MIGRATION_VERSION,
+        count=getattr(result, "rowcount", 0) or 0,
+    )
+    return True
+
+
+FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_VERSION = (
+    "20260912_fixed_strategy_shared_account_v1"
+)
+FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_LOCK_KEY = 7720250741
+FIXED_STRATEGY_SHARED_ACCOUNT_KINDS = ("dual_ma_trend", "pair_rotation", "leader_breakout")
+
+
+def _observed_stamp(value: Any) -> float:
+    """Coerce a driver timestamp (Postgres datetime, SQLite text) into epoch seconds."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+    else:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _shared_demo_account_by_tenant(session: Session) -> dict[str, tuple[str, str]]:
+    """Map each tenant to its most authoritative persisted OKX Demo shared account."""
+    rows = session.execute(
+        text(
+            "SELECT tenant_id, credential_id, id, sync_status, observed_at "
+            "FROM strategy_shared_accounts "
+            "WHERE environment = :environment AND active = :active"
+        ),
+        {"environment": "okx_demo", "active": True},
+    ).fetchall()
+    selected: dict[str, tuple[str, str]] = {}
+    best_rank: dict[str, tuple[int, float]] = {}
+    for tenant_id, credential_id, account_id, sync_status, observed_at in rows:
+        rank = (1 if sync_status == "healthy" else 0, _observed_stamp(observed_at))
+        if tenant_id not in best_rank or rank > best_rank[tenant_id]:
+            best_rank[tenant_id] = rank
+            selected[tenant_id] = (credential_id, account_id)
+    return selected
+
+
+def migrate_fixed_strategies_to_shared_account(session: Session) -> bool:
+    """Move code-owned fixed strategies onto the tenant's shared OKX Demo wallet.
+
+    The three fixed engines were first registered as paper-only instances before the
+    shared allocator existed, so they stayed invisible to the concurrency capital
+    pool and could never trade against the shared wallet. This is an in-place identity
+    change: ``strategy_id`` is preserved, the execution environment moves to
+    ``okx_demo``, the persisted allocation cap is seeded, and the strategy is left
+    stopped so the next start opens a fresh batch instead of mixing paper facts into
+    the shared account. Paper history is intentionally not deleted, it is simply no
+    longer the authority for these rows.
+    """
+
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(
+            "fixed strategy shared account migration supports PostgreSQL and SQLite, "
+            f"got {dialect!r}"
+        )
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_VERSION},
+    ).first():
+        return False
+
+    accounts = _shared_demo_account_by_tenant(session)
+    migrated = 0
+    strategies = (
+        session.query(RuleStrategy)
+        .filter(RuleStrategy.strategy_kind.in_(FIXED_STRATEGY_SHARED_ACCOUNT_KINDS))
+        .order_by(RuleStrategy.strategy_id.asc())
+        .all()
+    )
+    for strategy in strategies:
+        if strategy.archived_at is not None:
+            continue
+        config = dict(strategy.config or {})
+        execution = dict(config.get("execution") or {})
+        if execution.get("environment") == "okx_demo" and execution.get("sandbox_connection_id"):
+            continue
+        binding = accounts.get(strategy.tenant_id)
+        if binding is None:
+            logger.warning(
+                "Fixed strategy {strategy_id} stays on its current scope: tenant {tenant_id} "
+                "has no active OKX Demo shared account",
+                strategy_id=strategy.strategy_id,
+                tenant_id=strategy.tenant_id,
+            )
+            continue
+        credential_id, account_id = binding
+        execution["environment"] = "okx_demo"
+        execution["sandbox_connection_id"] = credential_id
+        config["execution"] = execution
+        strategy.config = config
+        strategy.paper_mode = False
+        strategy.status = "stopped"
+        strategy.current_batch_id = None
+        session.add(strategy)
+        session.execute(
+            text(
+                "UPDATE rule_strategy_accounts SET scope = :scope, credential_id = :credential_id "
+                "WHERE tenant_id = :tenant_id AND strategy_id = :strategy_id"
+            ),
+            {
+                "scope": "shared_exchange_account",
+                "credential_id": credential_id,
+                "tenant_id": strategy.tenant_id,
+                "strategy_id": strategy.strategy_id,
+            },
+        )
+        capital = float(config.get("initial_capital_quote") or 0.0)
+        if capital > 0:
+            session.execute(
+                text(
+                    "INSERT INTO shared_demo_strategy_allocation_caps "
+                    "(cap_id, account_id, tenant_id, credential_id, environment, strategy_id, "
+                    "max_reserved_quote, max_occupied_quote, active, version, effective_at) "
+                    "SELECT :cap_id, :account_id, :tenant_id, :credential_id, :environment, "
+                    ":strategy_id, :capital, :capital, :active, 1, :effective_at "
+                    "WHERE NOT EXISTS ("
+                    "SELECT 1 FROM shared_demo_strategy_allocation_caps "
+                    "WHERE account_id = :account_id AND strategy_id = :strategy_id AND active = :active)"
+                ),
+                {
+                    "cap_id": str(uuid4()),
+                    "account_id": account_id,
+                    "tenant_id": strategy.tenant_id,
+                    "credential_id": credential_id,
+                    "environment": "okx_demo",
+                    "strategy_id": strategy.strategy_id,
+                    "capital": capital,
+                    "active": 1,
+                    "effective_at": datetime.now(timezone.utc),
+                },
+            )
+        migrated += 1
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}, rebound {count} fixed strategies to shared accounts",
+        version=FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_VERSION,
+        count=migrated,
     )
     return True

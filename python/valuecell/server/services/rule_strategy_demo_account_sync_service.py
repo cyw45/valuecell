@@ -13,11 +13,14 @@ from valuecell.server.config.settings import get_settings
 from valuecell.server.db.models.rule_strategy import (
     RuleStrategy,
     RuleStrategyDemoAccountSyncState,
+    RuleStrategyExecutionIntent,
 )
 from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoAccountSyncState,
+    SharedDemoOrderProjection,
+    SharedDemoVenueOrder,
 )
 from valuecell.server.services.shared_demo_allocation_cap_service import (
     ensure_initial_strategy_cap,
@@ -27,7 +30,25 @@ from valuecell.server.services.rule_strategy_demo_snapshot_service import (
     record_demo_account_snapshot,
 )
 from valuecell.server.services.sandbox_exchange_trading_service import (
+    IGNORED_DUST_STATUS,
     SandboxExchangeTradingService,
+)
+
+
+# Execution intents and venue order projections only leave the gate closed while
+# they are still unsettled. Everything else is already a durable end state, so a
+# snapshot cycle can declare the shared account fully attributed.
+_TERMINAL_EXECUTION_STATUSES = frozenset(
+    {
+        "filled",
+        "closed",
+        "canceled",
+        "cancelled",
+        "failed",
+        "rejected",
+        "stale",
+        IGNORED_DUST_STATUS,
+    }
 )
 
 
@@ -167,7 +188,6 @@ def _record_shared_snapshot(
     state = _shared_sync_state(session, account)
     state.latest_snapshot_id = snapshot.snapshot_id
     state.sync_status = "healthy"
-    state.reconciliation_status = "pending"
     state.last_attempt_at = _utc_now()
     state.last_success_at = _utc_now()
     state.stale_after = state.last_success_at + timedelta(
@@ -175,7 +195,65 @@ def _record_shared_snapshot(
     )
     state.consecutive_failures = 0
     state.last_error_code = None
+    _reconcile_shared_account(session, account=account, state=state)
     return snapshot
+
+
+def _reconcile_shared_account(
+    session: Session,
+    *,
+    account: StrategySharedAccount,
+    state: SharedDemoAccountSyncState,
+) -> None:
+    """Advance attribution from persisted execution facts only.
+
+    A shared wallet is attributable when every attributed intent and every
+    venue order for this scope reached a durable end state. Nothing is inferred
+    from balances, and open work never reports completeness. Before this the
+    status was hard-coded to ``partial`` with no writer for ``complete``, so the
+    fail-closed entry gate could never open.
+    """
+    intents = (
+        session.query(RuleStrategyExecutionIntent)
+        .filter_by(
+            tenant_id=account.tenant_id,
+            credential_id=account.credential_id,
+            execution_target="okx_demo",
+        )
+        .all()
+    )
+    unresolved_intents = [
+        intent
+        for intent in intents
+        if str(intent.status or "pending") not in _TERMINAL_EXECUTION_STATUSES
+    ]
+    order_ids = [
+        row.order_id
+        for row in session.query(SharedDemoVenueOrder)
+        .filter_by(account_id=account.id)
+        .all()
+    ]
+    projections = (
+        session.query(SharedDemoOrderProjection)
+        .filter(SharedDemoOrderProjection.order_id.in_(order_ids))
+        .all()
+        if order_ids
+        else []
+    )
+    unresolved_orders = [
+        row
+        for row in projections
+        if str(row.status or "pending") not in _TERMINAL_EXECUTION_STATUSES
+    ]
+    state.unresolved_submission_count = len(unresolved_intents) + len(unresolved_orders)
+    if state.unresolved_submission_count > 0:
+        account.attribution_status = "partial"
+        state.reconciliation_status = "reconciling"
+        return
+    account.attribution_status = "complete"
+    state.reconciliation_status = "complete"
+    state.last_reconciled_at = _utc_now()
+
 
 def _mark_shared_account_failure(
     session: Session, tenant_id: str, credential_id: str

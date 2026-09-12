@@ -17,6 +17,7 @@ from valuecell.server.api.schemas.multi_strategy import (
     ExecutionGate,
     SharedWalletSummary,
     StrategyAllocation,
+    UnallocatedStrategy,
 )
 from valuecell.server.db.models.multi_strategy import (
     StrategyCapitalReservation,
@@ -40,6 +41,68 @@ from valuecell.server.services.rule_strategy_demo_execution_read_model import (
 
 class SharedAccountSummaryUnavailable(RuntimeError):
     """Raised when an authoritative shared-wallet summary cannot be built."""
+
+
+_UNALLOCATED_REASON_UNBOUND = "策略未绑定该共享账户的连接，不参与该资金池分配。"
+_UNALLOCATED_REASON_OTHER_CONNECTION = "策略绑定的是其他交易所连接，不属于该共享账户。"
+
+
+def _unallocated_strategies(
+    session: Session,
+    *,
+    tenant_id: str,
+    credential_id: str,
+    environment: str,
+    allocated_ids: set[str],
+) -> list[UnallocatedStrategy]:
+    """Report tenant strategies this wallet's capital pool deliberately excludes.
+
+    The allocator matrix previously dropped every strategy that did not match the
+    wallet's execution environment and connection, so a running strategy could
+    vanish from the concurrency view with no visible reason. Archived rows stay
+    out of the report because they are no longer live strategies.
+    """
+
+    rows = (
+        session.query(RuleStrategy)
+        .filter(RuleStrategy.tenant_id == tenant_id)
+        .order_by(RuleStrategy.created_at.asc(), RuleStrategy.strategy_id.asc())
+        .all()
+    )
+    unallocated: list[UnallocatedStrategy] = []
+    for row in rows:
+        if row.strategy_id in allocated_ids:
+            continue
+        status = str(row.status or "stopped")
+        if status == "archived" or row.archived_at is not None:
+            continue
+        config = row.config if isinstance(row.config, dict) else {}
+        execution = config.get("execution")
+        execution = execution if isinstance(execution, dict) else {}
+        strategy_environment = execution.get("environment")
+        bound_connection = execution.get("sandbox_connection_id")
+        if not strategy_environment:
+            reason = _UNALLOCATED_REASON_UNBOUND
+        elif strategy_environment != environment:
+            reason = (
+                f"策略执行环境为 {strategy_environment}，使用独立账本，"
+                f"不共享该 {environment} 账户资金。"
+            )
+        elif bound_connection != credential_id:
+            reason = _UNALLOCATED_REASON_OTHER_CONNECTION
+        else:
+            reason = _UNALLOCATED_REASON_UNBOUND
+        unallocated.append(
+            UnallocatedStrategy(
+                strategy_id=row.strategy_id,
+                name=row.name,
+                kind=row.strategy_kind,
+                status=status if status in {"running", "stopped", "paused"} else "stopped",
+                environment=strategy_environment or None,
+                reason=reason,
+            )
+        )
+    return unallocated
 
 
 @dataclass(frozen=True)
@@ -418,6 +481,13 @@ def build_shared_account_overview(
                 utilization_ratio=(reserved + occupied) / denominator,
             )
         )
+    unallocated = _unallocated_strategies(
+        session,
+        tenant_id=tenant_id,
+        credential_id=credential_id,
+        environment=environment,
+        allocated_ids=set(strategies),
+    )
     known_net_pnl = [allocation.net_pnl_quote for allocation in allocations]
     total_strategy_pnl = (
         sum(value for value in known_net_pnl if value is not None)
@@ -448,6 +518,7 @@ def build_shared_account_overview(
             account.reserved_quote + account.occupied_notional_quote
         ) / denominator,
         allocations=allocations,
+        unallocated_strategies=unallocated,
         observed_at=_observed_at(account),
     )
     return AccountStrategyOverview(

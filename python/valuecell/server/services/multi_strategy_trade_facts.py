@@ -88,6 +88,10 @@ def _shared_demo_facts(
         fee = sum((_number(_field(item, "fee_quote")) or 0 for item in fills), 0.0)
         price = quote / quantity if quantity > 0 and quote > 0 else None
         status = str(_field(order, "status") or "pending")
+        if status == "ignored_dust":
+            # A dust sell never reached the venue; it is an audited no-op rather
+            # than a trade, so it must not surface as a pending fact.
+            continue
         status_map = {
             "open": "submitted",
             "rejected": "failed",

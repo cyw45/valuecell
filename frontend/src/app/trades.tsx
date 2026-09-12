@@ -71,7 +71,10 @@ export default function TradesPage() {
   const [searchParams] = useSearchParams();
   const [demoOrdersPage, setDemoOrdersPage] = useState(1);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
-  const [factStrategyFilter, setFactStrategyFilter] = useState("all");
+  // The dashboard links here with an explicit strategy so the unified fact table
+  // opens on the strategy the operator clicked instead of an unfiltered pool.
+  const requestedFactStrategy = searchParams.get("strategy") ?? "all";
+  const [factStrategyFilter, setFactStrategyFilter] = useState(requestedFactStrategy);
   const [factStatusFilter, setFactStatusFilter] = useState("all");
   const exportStrategy = useExportRuleStrategy();
   const strategyQuery = useRuleStrategy(strategyId);
@@ -95,8 +98,8 @@ export default function TradesPage() {
   useEffect(() => {
     setDemoOrdersPage(1);
     setSelectedBatchId(null);
-    setFactStrategyFilter("all");
-  }, [strategyId]);
+    setFactStrategyFilter(requestedFactStrategy);
+  }, [strategyId, requestedFactStrategy]);
   useEffect(() => {
     if (!selectedBatchId && batchesQuery.data?.current_batch_id) {
       setSelectedBatchId(batchesQuery.data.current_batch_id);

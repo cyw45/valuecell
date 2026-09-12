@@ -187,6 +187,8 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_leader_spot_v19_storage,
         migrate_leader_spot_v19_quality,
         migrate_leader_spot_v19_market_state,
+        migrate_shared_account_admission,
+        migrate_fixed_strategies_to_shared_account,
         migrate_strategy_demo_account_snapshots,
         migrate_strategy_official_test_baselines,
         migrate_strategy_monitor_metadata,
@@ -204,6 +206,8 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_shared_demo_execution_storage(session)
         migrate_fixed_strategy_paper_ledger(session)
         migrate_strategy_product_state(session)
+        migrate_shared_account_admission(session)
+        migrate_fixed_strategies_to_shared_account(session)
         migrate_rule_strategy_validation(session)
         migrate_strategy_monitor_metadata(session)
         migrate_demo_daily_execution_limit(session)

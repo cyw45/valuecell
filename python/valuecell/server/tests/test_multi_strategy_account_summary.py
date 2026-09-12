@@ -515,3 +515,73 @@ def test_allocation_contract_rejects_occupied_amount_above_reservation() -> None
             allocation_state="occupied",
             utilization_denominator_quote=100,
         )
+
+
+def test_summary_reports_strategies_outside_the_shared_capital_pool() -> None:
+    session = _session()
+    session.add_all(
+        [
+            RuleStrategy(
+                strategy_id="strategy-paper",
+                tenant_id="tenant-a",
+                name="Paper strategy",
+                strategy_kind="leader_breakout",
+                strategy_version="v1",
+                code_fingerprint="fingerprint-paper",
+                status="running",
+                config={"execution": {"environment": "paper"}},
+            ),
+            RuleStrategy(
+                strategy_id="strategy-other-connection",
+                tenant_id="tenant-a",
+                name="Other connection strategy",
+                strategy_kind="pair_rotation",
+                strategy_version="v1",
+                code_fingerprint="fingerprint-other",
+                status="running",
+                config={
+                    "execution": {
+                        "environment": "okx_demo",
+                        "sandbox_connection_id": "credential-b",
+                    }
+                },
+            ),
+            RuleStrategy(
+                strategy_id="strategy-unbound",
+                tenant_id="tenant-a",
+                name="Unbound strategy",
+                strategy_kind="configurable_rule",
+                strategy_version="existing",
+                code_fingerprint="fingerprint-unbound",
+                status="stopped",
+                config={"execution": {}},
+            ),
+            RuleStrategy(
+                strategy_id="strategy-archived",
+                tenant_id="tenant-a",
+                name="Archived strategy",
+                strategy_kind="dual_ma_trend",
+                strategy_version="v1",
+                code_fingerprint="fingerprint-archived",
+                status="archived",
+                config={"execution": {"environment": "paper"}},
+            ),
+        ]
+    )
+    session.commit()
+
+    allocator = build_shared_account_overview(
+        session,
+        tenant_id="tenant-a",
+        credential_id="credential-a",
+    ).allocator
+
+    reported = {item.strategy_id: item for item in allocator.unallocated_strategies}
+    assert "strategy-a" not in reported
+    assert "strategy-archived" not in reported
+    assert reported["strategy-paper"].environment == "paper"
+    assert "独立账本" in reported["strategy-paper"].reason
+    assert reported["strategy-paper"].status == "running"
+    assert "其他交易所连接" in reported["strategy-other-connection"].reason
+    assert "未绑定" in reported["strategy-unbound"].reason
+    assert allocator.allocations[0].strategy_id == "strategy-a"

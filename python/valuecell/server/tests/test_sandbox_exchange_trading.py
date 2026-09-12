@@ -1,4 +1,5 @@
 import base64
+import math
 from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -458,6 +459,58 @@ def test_subminimum_available_sell_is_ignored_without_order_record_or_precision_
     ).json()["data"] == []
     assert precision_called is False
     assert "create_order" not in fake_exchange.instances[-1].calls
+
+
+def test_truncated_subminimum_sell_is_retained_as_ignored_dust_and_hidden(
+    sandbox_client, monkeypatch
+):
+    """Truncation after the preflight must close as dust, never as a rejection."""
+    client, _, fake_exchange = sandbox_client
+    response = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase"),
+    )
+    credential_id = response.json()["data"]["id"]
+
+    async def small_btc_balance(self):
+        self._private("fetch_balance")
+        return {
+            "total": {"USDT": 1000, "BTC": 0.0009},
+            "free": {"USDT": 1000, "BTC": 0.0009},
+            "used": {"BTC": 0},
+        }
+
+    monkeypatch.setattr(fake_exchange, "fetch_balance", small_btc_balance)
+    # Venue adapters truncate: 0.0009 BTC with 3-decimal size precision floors to
+    # zero, which the read-only preflight cannot predict from the raw balance.
+    monkeypatch.setattr(
+        fake_exchange,
+        "amount_to_precision",
+        lambda _self, _symbol, amount: f"{math.floor(amount * 1000) / 1000:.3f}",
+    )
+    request = {
+        "credential_id": credential_id,
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "type": "market",
+        "quote_amount": "100",
+        "idempotency_key": "truncated-dust-sell-key",
+        "sandbox": True,
+    }
+    result = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    assert result.status_code == 201, result.text
+    payload = result.json()["data"]
+    assert payload["status"] == "ignored_dust", {
+        key: payload.get(key) for key in ("status", "error_code", "error_message")
+    }
+    assert payload["id"] is not None
+    assert "create_order" not in fake_exchange.instances[-1].calls
+    # The audited no-op row must not appear in the operator order list.
+    listed = client.get(
+        f"/saas/sandbox-exchanges/orders?credential_id={credential_id}"
+    ).json()["data"]
+    assert listed == []
 
 
 

@@ -129,12 +129,19 @@ if (( !SKIP_TESTS )); then
     log "running backend gates"
     run uv run --project python ruff check python/valuecell/server
     run python -m compileall -q python/valuecell/server
-    run uv run --project python pytest -q python/valuecell/server/tests/test_rule_strategy*.py
+    # The whole server suite is the gate. The previous prefix filter
+    # (test_rule_strategy*.py) let multi-strategy, allocator and shared-account
+    # regressions ship unverified; only the optional-dependency agent tests stay
+    # excluded.
+    run env VALUECELL_QUANT_ONLY_MODE=true uv run --project python pytest -q \
+      python/valuecell/server/tests \
+      --ignore=python/valuecell/server/tests/test_strategy_agent.py
   fi
   if (( FRONTEND_CHANGED )); then
     log "running frontend gates"
     run bun run --cwd frontend typecheck
     run bun run --cwd frontend lint
+    run bun run --cwd frontend test
     run bun run --cwd frontend build
   fi
 else
