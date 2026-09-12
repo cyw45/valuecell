@@ -19,6 +19,7 @@ from valuecell.server.db.models.multi_strategy import StrategySharedAccount
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoAccountSyncState,
+    SharedDemoExecutionIntent,
     SharedDemoOrderProjection,
     SharedDemoVenueOrder,
 )
@@ -51,6 +52,17 @@ _TERMINAL_EXECUTION_STATUSES = frozenset(
     }
 )
 
+# A durable intent only holds the entry gate shut while the shared execution
+# chain can still advance it. The chain proves that by mirroring the allocator
+# reservation into a ``SharedDemoExecutionIntent`` binding and by persisting its
+# venue order before any remote call. Rows written by the pre-shared-account
+# code paths received neither, so no code path can ever settle them; counting
+# them kept this account's gate blocked forever. They are retained as audit
+# history and closed as ``stale`` instead of being deleted.
+_EXECUTION_ACTIVITY_WINDOW_MULTIPLIER = 2
+_UNBOUND_INTENT_TERMINAL_STATUS = "stale"
+_UNBOUND_INTENT_ERROR_CODE = "stale_unbound_submission"
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -60,6 +72,32 @@ def _aware(value: datetime | None) -> datetime | None:
     if value is None:
         return None
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def _execution_activity_cutoff() -> datetime:
+    """Cutoff for a durable intent the shared chain has not bound yet."""
+    window_s = (
+        get_settings().DEMO_ACCOUNT_SYNC_INTERVAL_S * _EXECUTION_ACTIVITY_WINDOW_MULTIPLIER
+    )
+    return _utc_now() - timedelta(seconds=window_s)
+
+
+def _is_recent_activity(value: datetime | None, *, cutoff: datetime) -> bool:
+    """Treat an unproven timestamp as recent so it can never pass as settled."""
+    observed = _aware(value)
+    return observed is None or observed >= cutoff
+
+
+def _close_unbound_intent(intent: RuleStrategyExecutionIntent) -> None:
+    """Close a durable intent the shared Demo execution chain never accepted.
+
+    It is kept for audit; only its state becomes terminal, so a submission that
+    never reached the venue stops holding the shared account gate shut.
+    """
+    intent.status = _UNBOUND_INTENT_TERMINAL_STATUS
+    intent.error_code = _UNBOUND_INTENT_ERROR_CODE
+    intent.error_message = "execution intent never entered the shared Demo execution chain"
+    intent.terminal_at = _utc_now()
 
 
 def _demo_connection(strategy: RuleStrategy) -> str | None:
@@ -207,13 +245,23 @@ def _reconcile_shared_account(
 ) -> None:
     """Advance attribution from persisted execution facts only.
 
-    A shared wallet is attributable when every attributed intent and every
-    venue order for this scope reached a durable end state. Nothing is inferred
-    from balances, and open work never reports completeness. Before this the
-    status was hard-coded to ``partial`` with no writer for ``complete``, so the
-    fail-closed entry gate could never open.
+    A shared wallet is attributable when no execution fact can still change. The
+    gate therefore counts only work the shared chain can advance: an intent
+    whose allocator reservation is mirrored as a ``SharedDemoExecutionIntent``
+    binding, or one still inside the activity window of a live tick. Intents the
+    chain never accepted are closed as ``stale`` audit history, because no code
+    path can resolve them and each one used to keep this gate shut forever.
+    Nothing is inferred from balances, and open work never reports completeness.
     """
-    intents = (
+    cutoff = _execution_activity_cutoff()
+    bound_intent_ids = {
+        str(binding.intent_id)
+        for binding in session.query(SharedDemoExecutionIntent)
+        .filter_by(account_id=account.id)
+        .all()
+    }
+    unresolved_intents: list[RuleStrategyExecutionIntent] = []
+    for intent in (
         session.query(RuleStrategyExecutionIntent)
         .filter_by(
             tenant_id=account.tenant_id,
@@ -221,12 +269,15 @@ def _reconcile_shared_account(
             execution_target="okx_demo",
         )
         .all()
-    )
-    unresolved_intents = [
-        intent
-        for intent in intents
-        if str(intent.status or "pending") not in _TERMINAL_EXECUTION_STATUSES
-    ]
+    ):
+        if str(intent.status or "pending") in _TERMINAL_EXECUTION_STATUSES:
+            continue
+        if str(intent.id) in bound_intent_ids or _is_recent_activity(
+            intent.updated_at, cutoff=cutoff
+        ):
+            unresolved_intents.append(intent)
+            continue
+        _close_unbound_intent(intent)
     order_ids = [
         row.order_id
         for row in session.query(SharedDemoVenueOrder)

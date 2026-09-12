@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -16,6 +17,8 @@ from valuecell.server.db.models.rule_strategy import (
 from valuecell.server.db.models.shared_demo_execution import (
     SharedDemoAccountSnapshot,
     SharedDemoAccountSyncState,
+    SharedDemoExecutionIntent,
+    SharedDemoExecutionReservation,
     SharedDemoStrategyAllocationCap,
 )
 
@@ -222,6 +225,143 @@ def test_reconciliation_keeps_gate_closed_only_while_execution_is_unsettled(
         assert state.unresolved_submission_count == 0
         assert state.last_reconciled_at is not None
         assert session.query(StrategySharedAccount).one().attribution_status == "complete"
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
+def test_reconciliation_counts_only_work_the_shared_chain_can_advance(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    try:
+        session.add(
+            RuleStrategy(
+                strategy_id="strategy-a",
+                tenant_id="tenant-a",
+                name="A",
+                status="running",
+                config={
+                    "execution": {
+                        "environment": "okx_demo",
+                        "sandbox_connection_id": "credential-a",
+                    },
+                    "initial_capital_quote": 300,
+                },
+            )
+        )
+        session.commit()
+        monkeypatch.setattr(sync_module, "SandboxExchangeTradingService", FakeExchange)
+        monkeypatch.setattr(
+            sync_module,
+            "get_settings",
+            lambda: type(
+                "Settings",
+                (),
+                {
+                    "DEMO_ACCOUNT_SYNC_ATTEMPTS": 1,
+                    "DEMO_ACCOUNT_SYNC_RETRY_DELAY_S": 0.0,
+                    "DEMO_ACCOUNT_READ_TIMEOUT_S": 1.0,
+                    "DEMO_ACCOUNT_SYNC_INTERVAL_S": 300,
+                },
+            )(),
+        )
+        asyncio.run(sync_module.sync_demo_account_snapshots(session))
+        shared = session.query(StrategySharedAccount).one()
+        assert shared.attribution_status == "complete"
+
+        stale_at = datetime.now(timezone.utc) - timedelta(hours=6)
+        abandoned = RuleStrategyExecutionIntent(
+            strategy_id="strategy-a",
+            evaluation_id="evaluation-abandoned",
+            execution_generation=1,
+            execution_source="rule_strategy",
+            tenant_id="tenant-a",
+            batch_id="batch-a",
+            credential_id="credential-a",
+            idempotency_key="intent-key-abandoned",
+            symbol="BTC/USDT",
+            side="sell",
+            order_type="market",
+            requested_quote="100",
+            execution_target="okx_demo",
+            status="submission_unknown",
+            created_at=stale_at,
+            updated_at=stale_at,
+        )
+        session.add(abandoned)
+        session.commit()
+
+        asyncio.run(sync_module.sync_demo_account_snapshots(session))
+        state = session.query(SharedDemoAccountSyncState).one()
+        assert state.reconciliation_status == "complete"
+        assert state.unresolved_submission_count == 0
+        assert session.query(StrategySharedAccount).one().attribution_status == "complete"
+        session.refresh(abandoned)
+        assert abandoned.status == "stale"
+        assert abandoned.error_code == "stale_unbound_submission"
+        assert abandoned.terminal_at is not None
+
+        # A chain-bound submission is real open work and must still gate.
+        bound = RuleStrategyExecutionIntent(
+            strategy_id="strategy-a",
+            evaluation_id="evaluation-bound",
+            execution_generation=1,
+            execution_source="rule_strategy",
+            tenant_id="tenant-a",
+            batch_id="batch-a",
+            credential_id="credential-a",
+            idempotency_key="intent-key-bound",
+            symbol="BTC/USDT",
+            side="buy",
+            order_type="market",
+            requested_quote="100",
+            execution_target="okx_demo",
+            status="submitting",
+            created_at=stale_at,
+            updated_at=stale_at,
+        )
+        session.add(
+            SharedDemoExecutionReservation(
+                reservation_id="reservation-bound",
+                account_id=shared.id,
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                strategy_id="strategy-a",
+                batch_id="batch-a",
+                idempotency_key="intent-key-bound",
+                symbol="BTC/USDT",
+                side="buy",
+                requested_quote=100,
+                reserved_quote=100,
+            )
+        )
+        session.add(bound)
+        session.flush()
+        session.add(
+            SharedDemoExecutionIntent(
+                intent_id=bound.id,
+                reservation_id="reservation-bound",
+                account_id=shared.id,
+                tenant_id="tenant-a",
+                credential_id="credential-a",
+                strategy_id="strategy-a",
+                batch_id="batch-a",
+                client_order_id="intent-key-bound",
+            )
+        )
+        session.commit()
+
+        asyncio.run(sync_module.sync_demo_account_snapshots(session))
+        state = session.query(SharedDemoAccountSyncState).one()
+        assert state.reconciliation_status == "reconciling"
+        assert state.unresolved_submission_count == 1
+        assert session.query(StrategySharedAccount).one().attribution_status == "partial"
     finally:
         session.close()
         Base.metadata.drop_all(engine)

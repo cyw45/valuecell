@@ -451,6 +451,16 @@ export default function DashboardPage() {
       setDemoOrdersPage(demoOrdersPagination.total_pages);
     }
   }, [demoOrdersPage, demoOrdersPagination]);
+  const focusStrategyCharts = (nextStrategyId: string) => {
+    // Switching the active strategy re-scopes the monitored symbol list, so the
+    // chart falls back to that strategy's own symbols before scrolling.
+    setActiveStrategyId(nextStrategyId);
+    window.setTimeout(() => {
+      document
+        .getElementById("market-charts")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  };
   const downloadAllDemoOrders = async () => {
     if (!strategyId || exportStrategy.isPending) return;
     try {
@@ -1136,6 +1146,13 @@ export default function DashboardPage() {
                                       >
                                         查看交易明细与条件原因
                                       </Link>
+                                      <button
+                                        className="w-fit text-left text-[10px] text-sky-600 hover:underline dark:text-sky-300"
+                                        onClick={() => focusStrategyCharts(allocation.strategy_id)}
+                                        type="button"
+                                      >
+                                        查看该策略行情与指标
+                                      </button>
                                       {allocation.strategy_id === strategyId ? (
                                         <Badge className="w-fit border-sky-500/30 bg-sky-500/10 text-[10px] text-sky-600 dark:text-sky-300" variant="outline">
                                           当前选择
@@ -1215,6 +1232,294 @@ export default function DashboardPage() {
             </Card>
           </section>
         ) : null}
+        <section
+          aria-label="行情走势与技术指标"
+          className="grid gap-4"
+          id="market-charts"
+        >
+          <Card className="dashboard-panel overflow-hidden rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="grid size-9 shrink-0 place-items-center rounded-md bg-sky-500/10 text-sky-500">
+                    <CandlestickChart className="size-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2 className="font-semibold">
+                      {toDashboardSymbol(effectiveSymbol)} 市场走势
+                    </h2>
+                    <p className="text-muted-foreground text-xs">
+                      {ruleStrategy
+                        ? `${ruleStrategy.name} 监测 ${marketSymbols.length} 个币种`
+                        : "尚未选择策略"}
+                      ，{market?.interval ?? marketInterval} K 线
+                      {market?.latest_price != null
+                        ? ` · 最新价 ${market.latest_price.toLocaleString()} USDT`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 md:justify-end">
+                  <div className="min-w-[132px] text-right">
+                    <p className="terminal-label">当前价格</p>
+                    {market?.latest_price != null ? (
+                      <p className="mt-1 whitespace-nowrap text-amber-500 text-lg dark:text-amber-300">
+                        <TerminalValue value={market.latest_price} />{" "}
+                        <span className="text-xs">USDT</span>
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-muted-foreground text-sm">
+                        等待行情
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      className="gap-1 text-[11px]"
+                      variant={
+                        marketFailure || marketError ? "destructive" : "outline"
+                      }
+                    >
+                      <RadioTower className="size-3" />{" "}
+                      {market?.provider ?? "行情数据源"}
+                    </Badge>
+                    {marketDataIsPrevious ? (
+                      <Badge variant="outline">参数行情更新中</Badge>
+                    ) : null}
+                    {market?.freshness_status === "stale" ? (
+                      <Badge variant="outline">数据延迟</Badge>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 border-border/60 border-t pt-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select
+                    value={effectiveSymbol}
+                    onValueChange={setSelectedSymbol}
+                  >
+                    <SelectTrigger
+                      aria-label="图表交易对"
+                      className="h-8 w-32 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Array.from(new Set(["BTC-USDT", ...marketSymbols])).map(
+                        (symbol) => (
+                          <SelectItem key={symbol} value={symbol}>
+                            {toDashboardSymbol(symbol)}
+                          </SelectItem>
+                        ),
+                      )}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={marketInterval}
+                    onValueChange={(value) =>
+                      setMarketInterval(
+                        value as (typeof MARKET_INTERVALS)[number],
+                      )
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label="K 线周期"
+                      className="h-8 w-20 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MARKET_INTERVALS.map((interval) => (
+                        <SelectItem key={interval} value={interval}>
+                          {interval}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <fieldset
+                    className="flex items-center gap-1"
+                    aria-label="历史范围"
+                  >
+                    {MARKET_HISTORY_RANGES.map((range) => (
+                      <Button
+                        key={range.value}
+                        onClick={() => {
+                          setHistoryRange(range.value);
+                          setFromDate("");
+                          setToDate("");
+                          setRequestNowMs(Date.now());
+                        }}
+                        size="sm"
+                        type="button"
+                        variant={
+                          historyRange === range.value && !fromDate && !toDate
+                            ? "secondary"
+                            : "ghost"
+                        }
+                      >
+                        {range.label}
+                      </Button>
+                    ))}
+                  </fieldset>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <Input
+                    aria-label="图表开始日期"
+                    className="h-8 w-36"
+                    onChange={(event) => {
+                      setFromDate(event.target.value);
+                      setRequestNowMs(Date.now());
+                    }}
+                    type="date"
+                    value={fromDate}
+                  />
+                  <span className="text-muted-foreground">至</span>
+                  <Input
+                    aria-label="图表结束日期"
+                    className="h-8 w-36"
+                    onChange={(event) => {
+                      setToDate(event.target.value);
+                      setRequestNowMs(Date.now());
+                    }}
+                    type="date"
+                    value={toDate}
+                  />
+                </div>
+              </div>
+              <fieldset
+                aria-label="策略监测币种"
+                className="flex flex-wrap items-center gap-1 border-border/60 border-t pt-3"
+              >
+                <span className="mr-1 text-muted-foreground text-xs">
+                  点击策略币种动态切换走势与指标
+                </span>
+                {Array.from(new Set(["BTC-USDT", ...marketSymbols]))
+                  .slice(0, 14)
+                  .map((symbol) => (
+                    <button
+                      className={cn(
+                        "shrink-0 rounded-md border px-2.5 py-1 font-medium text-xs transition-colors",
+                        effectiveSymbol === symbol
+                          ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300"
+                          : "border-border text-muted-foreground hover:bg-muted",
+                      )}
+                      key={symbol}
+                      onClick={() => setSelectedSymbol(symbol)}
+                      type="button"
+                    >
+                      {toDashboardSymbol(symbol)}
+                    </button>
+                  ))}
+              </fieldset>
+            </div>
+            <CardContent className="p-0">
+              {invalidDateRange ? (
+                <p className="py-28 text-center text-destructive text-sm">
+                  开始日期不能晚于结束日期。
+                </p>
+              ) : marketError || marketFailure ? (
+                <p className="py-28 text-center text-destructive text-sm">
+                  市场数据暂时不可用。
+                </p>
+              ) : (
+                <CandlestickChartComponent
+                  currentPrice={market?.latest_price}
+                  data={candles}
+                  height={410}
+                  loading={candlestickLoading}
+                  movingAverages={movingAverages}
+                  theme={isDark ? "dark" : "light"}
+                  tradeMarkers={tradeMarkers}
+                />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
+            <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-semibold">所选币种技术指标</h2>
+                <p className="mt-0.5 text-muted-foreground text-xs">
+                  {toDashboardSymbol(effectiveSymbol)} 的 RSI、布林带与 MACD
+                  {ruleStrategy ? `（${ruleStrategy.name} 监测币种）` : ""}
+                </p>
+              </div>
+              <fieldset
+                aria-label="RSI 与布林带显示方式"
+                className="flex w-fit rounded-md border border-cyan-500/25 bg-cyan-500/5 p-0.5"
+              >
+                <button
+                  aria-pressed={rsiMode === "rsi"}
+                  className={cn(
+                    "rounded px-2.5 py-1 font-medium text-xs transition-colors",
+                    rsiMode === "rsi"
+                      ? "bg-violet-500/20 text-violet-700 dark:text-violet-200"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setRsiMode("rsi")}
+                  type="button"
+                >
+                  RSI
+                </button>
+                <button
+                  aria-pressed={rsiMode === "bollinger"}
+                  className={cn(
+                    "rounded px-2.5 py-1 font-medium text-xs transition-colors",
+                    rsiMode === "bollinger"
+                      ? "bg-cyan-500/20 text-cyan-700 dark:text-cyan-200"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setRsiMode("bollinger")}
+                  type="button"
+                >
+                  布林带
+                </button>
+                <button
+                  aria-pressed={rsiMode === "both"}
+                  className={cn(
+                    "rounded px-2.5 py-1 font-medium text-xs transition-colors",
+                    rsiMode === "both"
+                      ? "bg-sky-500/20 text-sky-700 dark:text-sky-200"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  onClick={() => setRsiMode("both")}
+                  type="button"
+                >
+                  同时显示
+                </button>
+              </fieldset>
+            </div>
+            <CardContent className="grid gap-px overflow-hidden bg-border/60 p-px md:grid-cols-2">
+              <div className="flex flex-col gap-2 bg-card p-2">
+                {rsiMode !== "bollinger" ? (
+                  <MarketIndicatorPanelChart
+                    data={market?.indicators ?? []}
+                    height={rsiMode === "both" ? 160 : 190}
+                    panel="rsi"
+                    theme={isDark ? "dark" : "light"}
+                  />
+                ) : null}
+                {rsiMode !== "rsi" ? (
+                  <MarketIndicatorPanelChart
+                    candles={market?.candles ?? []}
+                    data={market?.indicators ?? []}
+                    height={rsiMode === "both" ? 180 : 190}
+                    panel="bollinger"
+                    theme={isDark ? "dark" : "light"}
+                  />
+                ) : null}
+              </div>
+              <div className="bg-card p-2">
+                <MarketIndicatorPanelChart
+                  data={market?.indicators ?? []}
+                  height={rsiMode === "both" ? 350 : 190}
+                  panel="macd"
+                  theme={isDark ? "dark" : "light"}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        </section>
         <section
           className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]"
           aria-label="策略监控与风险"
