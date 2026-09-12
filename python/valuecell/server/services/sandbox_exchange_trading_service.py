@@ -30,6 +30,7 @@ from valuecell.server.services.multi_strategy_capital_allocator import (
     CapitalAllocationError,
     SharedCapitalAllocator,
 )
+from valuecell.server.services.strategy_condition_facts import with_comparison_values
 from valuecell.server.db.models.sandbox_exchange_order import SandboxExchangeOrder
 from valuecell.server.db.models.tenant_credential import TenantCredential
 from valuecell.server.services.tenant_credential_service import (
@@ -657,7 +658,8 @@ class SandboxExchangeTradingService:
             item["decision_reason_code"] = result_data.get("reason_code")
             item["decision_reason"] = result_data.get("reason")
             item["decision_conditions"] = [
-                condition for condition in (result_data.get("conditions") or [])
+                with_comparison_values(condition)
+                for condition in (result_data.get("conditions") or [])
                 if isinstance(condition, dict)
             ]
             result.append(item)

@@ -194,3 +194,75 @@ def test_journal_trade_facts_restore_fixed_paper_fill_from_execution_result() ->
     assert facts[0].filled_quantity == 2
     assert facts[0].average_fill_price == 101
     assert facts[0].filled_quote == 202
+
+def test_journal_trade_facts_keep_fixed_engine_comparison_numbers() -> None:
+    """Fixed engines persist actual/threshold/operator instead of values."""
+    observed_at = datetime(2026, 8, 28, tzinfo=timezone.utc)
+    strategy = SimpleNamespace(
+        strategy_id="strategy-a",
+        tenant_id="tenant-a",
+        strategy_kind="dual_ma_trend",
+        strategy_version="v1",
+        code_fingerprint="fingerprint-a",
+    )
+    journal = SimpleNamespace(
+        evaluation_id="evaluation-a",
+        batch_id="batch-a",
+        created_at=observed_at,
+        result={
+            "action": "long_entry",
+            "symbol": "BTC-USDT",
+            "reason": "SMA10 上穿 SMA20",
+            "conditions": [
+                {
+                    "code": "ma_trend",
+                    "label": "长期趋势",
+                    "state": "triggered",
+                    "actual": 101.5,
+                    "threshold": 100.25,
+                    "operator": ">",
+                    "detail": "收盘价在短期均线之上",
+                    "data_timestamp_ms": 1_700_000_000_000,
+                }
+            ],
+        },
+        trades=[],
+    )
+
+    facts = journal_trade_facts(
+        strategy,
+        journal,
+        shared_orders=[
+            {
+                "order_id": "order-a",
+                "intent_id": "intent-a",
+                "reservation_id": "reservation-a",
+                "strategy_id": "strategy-a",
+                "batch_id": "batch-a",
+                "symbol": "BTC-USDT",
+                "side": "buy",
+                "requested_quote": "100",
+                "status": "filled",
+                "created_at": observed_at,
+            }
+        ],
+        shared_fills=[
+            {
+                "fill_id": "fill-a",
+                "order_id": "order-a",
+                "symbol": "BTC-USDT",
+                "side": "buy",
+                "quantity": "0.001",
+                "quote_amount": "101.5",
+                "occurred_at": observed_at,
+            }
+        ],
+    )
+
+    condition = facts[0].explanation.conditions[0]
+    assert condition.actual == 101.5
+    assert condition.threshold == 100.25
+    assert condition.operator == ">"
+    assert condition.data_at == datetime.fromtimestamp(
+        1_700_000_000_000 / 1000, tz=timezone.utc
+    )

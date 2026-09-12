@@ -28,6 +28,7 @@ from valuecell.server.db.repositories.rule_strategy_repository import (
     RuleStrategyRepository,
 )
 from valuecell.server.services.rule_engine import RuleEngine
+from valuecell.server.services.strategy_condition_facts import with_comparison_values
 from valuecell.server.services.rule_strategy_templates import (
     get_rule_strategy_template,
 )
@@ -77,6 +78,19 @@ class RuleStrategyFixedConfigurationError(Exception):
     """Raised when callers try to edit a code-owned fixed strategy."""
 
 
+def _explainable_conditions(conditions: Any) -> list[dict[str, Any]]:
+    """Return persisted conditions carrying comparable numbers for both clients.
+
+    Fixed strategies persist ``actual``/``threshold``/``operator`` while the
+    configurable engine persists ``values``; clients read one canonical shape.
+    """
+    if not isinstance(conditions, list):
+        return []
+    return [
+        with_comparison_values(condition)
+        for condition in conditions
+        if isinstance(condition, dict)
+    ]
 
 
 class RuleStrategyService:
@@ -774,7 +788,7 @@ class RuleStrategyService:
                     "action": result.get("action", "no_op"),
                     "reason_code": result.get("reason_code", "unknown"),
                     "reason": result.get("reason", "No explanation was recorded."),
-                    "conditions": result.get("conditions", []),
+                    "conditions": _explainable_conditions(result.get("conditions")),
                     "indicators": result.get("indicators", {}),
                     "sizing": result.get("sizing", {}),
                     "funding": result.get("funding", {}),
@@ -1514,12 +1528,12 @@ class RuleStrategyService:
                             if journals.get(fill.evaluation_id) is not None
                             else None
                         ),
-                        "conditions": (
+                        "conditions": _explainable_conditions(
                             (journals.get(fill.evaluation_id).result or {}).get(
-                                "conditions", []
+                                "conditions"
                             )
                             if journals.get(fill.evaluation_id) is not None
-                            else []
+                            else None
                         ),
                         "indicators": (
                             (journals.get(fill.evaluation_id).result or {}).get(

@@ -166,18 +166,18 @@
 |---|---|---|---|
 | A | 可开始 | 架构契约冻结 | 冻结四种 `strategy_kind`、版本/Fingerprint、策略/账户/订单归属字段、共享账户与策略统计口径、状态矩阵、解释字段和双端 wire types；不改当前策略行为。 |
 | B | 进行中 | 多策略持久化与并行调度 | 已完成策略 kind/version/fingerprint 字段、共享账户与资金预留模型、策略注册表、固定策略定义 API、订单意图 reservation_id、批次身份快照和迁移基础；scheduler 已 fail-closed 跳过未注册执行器的固定策略，现有配置策略仍可并行调度；Demo 同一 tenant+credential 已建立单一共享账户同步行。固定策略实例化、allocator 接入真实下单仍待继续实现。 |
-| C | 未开始 | 现有可配置策略兼容接入 | 保持当前执行策略代码和参数行为不变；将其接入统一 strategy registry、资金预留、共享订单归属、PnL 和解释 read model，完成回归证明。 |
-| D | 已完成 | 三个固定策略引擎 | 已完成统一 `FixedStrategySignal`/`FixedCondition`/`FixedEngineInput` 契约、双均线、配对套利、龙头策略纯函数引擎、统一分发器及 scheduler 信号入口；固定策略尚未接入 Paper 成交记账。 |
-| E | 进行中 | 共享账户资金与执行 | 已完成共享账户级 Demo 同步、资金预留模型、预留结算、确认卖出释放占用资金和预留绑定订单意图；新增固定策略 long/short Paper 独立账本、仓位与 fill 迁移基础。Paper 资金账本故意不接入 OKX 共享 allocator，避免将虚拟成交伪造成共享钱包资金变化；固定策略 Paper 服务与账本自动记账接线、现有策略下单路径完整接入 allocator、OKX 订单联动和重启对账仍待实现。 |
-| F | 进行中 | 统一统计与解释 API | 已完成共享账户/策略分配汇总读模型、共享账户摘要 API、跨策略交易事实解释归一化服务与 Web/Mobile 客户端类型入口；正式账户首页接入、完整订单/成交统一查询和资金流曲线仍待实现。 |
+| C | 进行中 | 现有可配置策略兼容接入 | 保持当前执行策略代码和参数行为不变；`okx_demo` 下可配置策略已读取共享账户快照、经共享 allocator 完成预留/意图绑定/结算下单，订单与成交事实携带 `strategy_id` 与批次归属，并复用统一交易事实与条件解释 read model。剩余：在服务器认证会话与真实 Demo 凭据下完成并发回归证明。 |
+| D | 已完成 | 三个固定策略引擎 | 已完成统一 `FixedStrategySignal`/`FixedCondition`/`FixedEngineInput` 契约、双均线、配对套利、龙头策略纯函数引擎、统一分发器及 scheduler 信号入口；固定策略 Paper 成交记账已由 scheduler 接线（见 H）。 |
+| E | 进行中 | 共享账户资金与执行 | 已完成共享账户级 Demo 同步、资金预留模型、预留结算、确认卖出释放占用资金和预留绑定订单意图；新增固定策略 long/short Paper 独立账本、仓位与 fill 迁移基础。Paper 资金账本故意不接入 OKX 共享 allocator，避免将虚拟成交伪造成共享钱包资金变化；固定策略 Paper 账本自动记账已由 scheduler 接线，`okx_demo` 下可配置与固定策略下单路径均已接入共享 allocator 预留/意图绑定/结算并写入共享订单/成交事实。剩余：服务器端真实 OKX 订单联动与重启对账验证。 |
+| F | 进行中 | 统一统计与解释 API | 已完成共享账户/策略分配汇总读模型、共享账户摘要 API、跨策略交易事实解释归一化服务与 Web/Mobile 客户端类型入口；Web 首页已接入共享账户摘要、执行门禁、策略矩阵与账户级钱包权益曲线，交易页已接入统一订单/成交事实与可展开条件解释，固定策略与可配置策略的条件实际值/阈值/比较符已归一为同一契约。剩余：服务器端真实数据端到端验收。 |
 | G | 进行中 | Web 与 Mobile 交互重构 | 已完成 Web/Mobile 共享账户总览、钱包与策略归因分层、allocator 利用率/策略矩阵展示，以及 Web/Mobile 交易事实筛选与可展开条件解释；Web生产构建和Mobile Android导出已通过；真实登录后浏览器/设备视觉验证仍待环境可用时补做。 |
-| H | 进行中 | Paper 并行验证 | 固定策略已由独立 scheduler 分支读取平台 4h 行情并持久化批次归属、条件、指标和 paper_signal_only 决策；固定 long/short Paper 账本、仓位、fill、PnL 和策略/批次隔离模型已建立并通过测试，但 scheduler 尚未调用成交记账。四策略资金复用、完整 Paper 成交、订单归属、利用率、重启恢复和部分成交验证仍待实现。 |
+| H | 进行中 | Paper 并行验证 | 固定策略已由独立 scheduler 分支读取平台 4h 行情、持久化批次归属、条件与指标，并在 `paper` 环境自动记账 long/short 独立账本、仓位、fill 和已实现 PnL，策略与批次隔离有回归覆盖；`okx_demo` 环境同一 tick 经固定策略 Demo adapter 走共享 allocator 与订单/成交链路。剩余：四策略并行运行的重启恢复与部分成交在服务器端验证。 |
 | I | 未开始 | OKX Demo 分阶段验证 | 先只读同步，再单策略受控执行，再多策略并行；验证共享账户资金竞争、归属持仓、总钱包变化、风险边界和人工恢复。 |
 | J | 未开始 | 上线资格与持续运营 | 完成回测/ Paper / Demo 差异报告、监控告警、审计导出、回滚方案和人工审批；未通过不得打开更高风险执行权限。 |
 
 ### 9.6.1 已冻结的最终共享 OKX Demo 交付计划
 
-- 当前阶段状态：现有实现是基础设施，**不是**可部署的四策略共享 OKX Demo 执行；Paper 账户、`FixedPaper*`、`RuleStrategyAccount` 和其 PnL 不得出现在共享 Demo 钱包、资金分配或策略归属统计中。
+- 当前阶段状态：共享 Demo 执行链（账户快照 → allocator 预留/绑定/结算 → venue 订单/成交事实 → 策略归属 read model）已在代码中接线，可配置与固定策略在 `okx_demo` 下走同一条链路，并已具备策略级资金分配与并发矩阵展示；但真实服务器运行态、认证 Web/设备与受控 OKX Demo 成交仍未验收，部署后必须按"上线门槛"分阶段验证。Paper 账户、`FixedPaper*`、`RuleStrategyAccount` 和其 PnL 不得出现在共享 Demo 钱包、资金分配或策略归属统计中。
 - 唯一资金权威：一个 `tenant + credential + okx_demo` 对应一个账户级钱包快照、同步状态、allocator 和账户风控；策略 tick 与页面只读取持久化快照，绝不按策略同步访问 OKX。
 - 策略隔离：四种策略必须都通过同一条 `signal → reservation → intent/outbox → venue order → append-only fill → strategy lots/PnL → settlement/release` 链路；每个事实携带不可变 `strategy_id`、`batch_id`、账户、credential、订单腿与幂等键。
 - 资金规则：买入先原子锁共享账户并预留本金、手续费/滑点缓冲；卖出只允许本策略已归属的可卖数量；确认成交才把预留转占用，确认退出才释放；未知提交、部分成交、撤单、失败、停止、重启都按明确状态结算，未知订单绝不重发。
@@ -242,4 +242,5 @@
 | 2026-09-09 | 增加共享 Demo 执行门禁契约：摘要返回 `execution_gate`，综合钱包同步、策略归因、未决提交数量和 allocator 可分配资金，明确 `ready/protected/blocked`、是否允许新开仓及原因；Web 首页显示“可开仓/只读保护/开仓已阻断”和具体原因，不再靠钱包状态或策略运行状态猜测可执行性。 | `python/valuecell/server/api/schemas/multi_strategy.py`, `python/valuecell/server/services/multi_strategy_account_summary.py`, `python/valuecell/server/tests/test_multi_strategy_account_summary.py`, `frontend/src/types/multi-strategy.ts`, `frontend/src/app/dashboard.tsx`, `docs/WEB_OKX_DEMO_DEPLOYMENT_VERIFICATION_HANDOFF.md` | Demo/allocator/scheduler/reconciliation/execution fencing 回归 `82 passed`；Ruff、compileall、Web typecheck/lint/build 通过。 |
 | 2026-09-09 | 补齐 Web 并发矩阵的策略级 Demo 运营统计：按当前 strategy + credential + account 的 append-only `SharedDemoFill` 重放成交笔数、完整卖出事件、FIFO 胜负、累计成交额、手续费和资金周转率；完整交易不足时胜率保持不可用，统计不读取 Paper 或共享钱包余额。 | `python/valuecell/server/api/schemas/multi_strategy.py`, `python/valuecell/server/services/multi_strategy_account_summary.py`, `python/valuecell/server/tests/test_multi_strategy_account_summary.py`, `frontend/src/types/multi-strategy.ts`, `frontend/src/app/dashboard.tsx`, `docs/WEB_OKX_DEMO_DEPLOYMENT_VERIFICATION_HANDOFF.md` | 账户汇总回归 `10 passed`；完整部署验证仍需服务器执行认证 Web 与真实 OKX Demo 受控测试。 |
 | 2026-09-09 | 共享 Demo 首页补齐账户级钱包权益曲线：共享摘要从持久化 `SharedDemoAccountSnapshot` 构建时间序列、累计变化和相邻快照变化；Web 在四策略矩阵上方独立展示 OKX 钱包曲线，保持与单策略归属 PnL 曲线严格分离。 | `python/valuecell/server/api/schemas/multi_strategy.py`, `python/valuecell/server/services/multi_strategy_account_summary.py`, `python/valuecell/server/tests/test_multi_strategy_account_summary.py`, `frontend/src/types/multi-strategy.ts`, `frontend/src/app/dashboard.tsx`, `docs/WEB_OKX_DEMO_DEPLOYMENT_VERIFICATION_HANDOFF.md` | 不新增 migration，不实时回源 OKX；服务器仍需验证连续同步后的真实曲线。 |
+| 2026-09-12 | 统一条件解释数值契约：新增 `strategy_condition_facts`，把代码固定策略持久化的 `actual`/`threshold`/`operator` 与可配置引擎持久化的 `values`（`left`/`right`/`comparator`）归一为同一读模型，修复固定策略交易明细中"实际值/阈值/比较符"全部显示不可用的缺陷。解释只读已持久化事实，不反推、不估算；条件自带 `data_timestamp_ms` 时优先作为数据时间，否则退回评估观测时间。 | `python/valuecell/server/services/strategy_condition_facts.py`, `python/valuecell/server/services/multi_strategy_trade_facts.py`, `python/valuecell/server/services/rule_strategy_service.py`, `python/valuecell/server/services/sandbox_exchange_trading_service.py`, `mobile/src/screens/strategy-presentation.ts`, `python/valuecell/server/tests/test_strategy_condition_facts.py`, `python/valuecell/server/tests/test_multi_strategy_trade_facts.py`, `python/valuecell/server/tests/test_rule_strategy_api.py` | 后端量化相关全量回归 501 passed；Web typecheck/lint 与 93 项前端测试通过；Mobile typecheck 通过；Ruff 通过。真实 OKX Demo 成交仍待服务器验证。 |
 

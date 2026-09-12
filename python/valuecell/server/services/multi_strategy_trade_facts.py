@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from valuecell.server.api.schemas.multi_strategy import (
@@ -12,6 +12,10 @@ from valuecell.server.api.schemas.multi_strategy import (
     UnifiedTradeFact,
 )
 from valuecell.server.services.multi_strategy_registry import strategy_code_fingerprint
+from valuecell.server.services.strategy_condition_facts import (
+    comparison_facts,
+    condition_data_timestamp_ms,
+)
 
 
 def _number(value: Any) -> float | None:
@@ -35,16 +39,22 @@ def _condition(value: Any, observed_at: datetime) -> ExplanationCondition | None
         state = "unavailable"
     label = value.get("label") or code
     detail = value.get("detail") or "服务端已记录该策略条件。"
-    values = value.get("values") if isinstance(value.get("values"), dict) else {}
+    facts = comparison_facts(value)
+    data_timestamp_ms = condition_data_timestamp_ms(value)
+    data_at = (
+        datetime.fromtimestamp(data_timestamp_ms / 1000, tz=timezone.utc)
+        if data_timestamp_ms is not None
+        else observed_at
+    )
     return ExplanationCondition(
         code=code,
         label=str(label),
         state=state,
-        actual=values.get("left"),
-        threshold=values.get("right"),
-        operator=values.get("comparator"),
+        actual=facts.actual,
+        threshold=facts.threshold,
+        operator=facts.operator,
         detail=str(detail),
-        data_at=observed_at,
+        data_at=data_at,
     )
 
 

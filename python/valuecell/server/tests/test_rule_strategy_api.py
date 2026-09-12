@@ -1104,3 +1104,66 @@ def test_evaluations_api_reads_back_durable_demo_execution_mapping(
     assert item["execution"]["status"] == order_status
     assert item["funnel"][4]["status"] == submission
     assert item["funnel"][5]["status"] == fill
+
+
+def test_fixed_strategy_trades_expose_comparison_numbers(monkeypatch) -> None:
+    """Fixed engines persist actual/threshold/operator; the trade log must carry them."""
+    repository = InMemoryRuleStrategyRepository()
+    repository.strategy = SimpleNamespace(
+        strategy_id=STRATEGY_ID,
+        tenant_id=FIXED_PRINCIPAL.tenant_id,
+        strategy_kind="dual_ma_trend",
+        status="running",
+        current_batch_id="batch-a",
+        config={"initial_capital_quote": 1000},
+    )
+    repository.get_fixed_paper_fills = lambda *_args, **_kwargs: [
+        SimpleNamespace(
+            evaluation_id=EVALUATION_ID,
+            created_at=CREATED_AT,
+            action="long_entry",
+            symbol="BTC-USDT",
+            price=101.0,
+            quantity=2.0,
+            quote_amount=202.0,
+            realized_pnl_quote=0.0,
+        )
+    ]
+    repository.evaluations = [
+        SimpleNamespace(
+            evaluation_id=EVALUATION_ID,
+            created_at=CREATED_AT,
+            result={
+                "reason_code": "ma_bullish_cross",
+                "reason": "短均线上穿长均线并且收盘价确认趋势。",
+                "conditions": [
+                    {
+                        "code": "ma_trend",
+                        "label": "长期趋势",
+                        "state": "triggered",
+                        "actual": 101.5,
+                        "threshold": 100.25,
+                        "operator": ">",
+                        "detail": "收盘价在短期均线之上",
+                        "data_timestamp_ms": 1_700_000_000_000,
+                    }
+                ],
+                "indicators": {"sma_fast": 101.5, "sma_slow": 100.25},
+                "sizing": {"requested_quote": 202.0},
+            },
+        )
+    ]
+    client = _client(repository)
+
+    response = client.get(f"/rule-strategies/{STRATEGY_ID}/trades")
+
+    assert response.status_code == 200
+    condition = response.json()["data"]["entries"][0]["conditions"][0]
+    assert condition["actual"] == 101.5
+    assert condition["threshold"] == 100.25
+    assert condition["operator"] == ">"
+    assert condition["values"] == {
+        "left": 101.5,
+        "right": 100.25,
+        "comparator": ">",
+    }
