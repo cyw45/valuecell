@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   type QueryClient,
   useMutation,
   useQuery,
@@ -174,6 +175,9 @@ export function useRuleStrategy(strategyId?: string) {
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+    // Keep the previous strategy on screen while the next one loads so switching
+    // never blanks the dashboard into a full-page loading state.
+    placeholderData: keepPreviousData,
   });
 }
 export type RuleStrategyExportRequest = {
@@ -226,6 +230,7 @@ export function useRuleStrategyDemoExecution(
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId && enabled),
+    placeholderData: keepPreviousData,
     refetchInterval: enabled ? 30_000 : false,
   });
 }
@@ -417,6 +422,7 @@ export function useRuleStrategyEvaluations(
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+    placeholderData: keepPreviousData,
     refetchInterval: 60_000,
   });
 }
@@ -491,6 +497,7 @@ function useRuleStrategyLog<T>(
       ),
     select: (response) => response.data.entries,
     enabled: Boolean(strategyId && tenantId && enabled),
+    placeholderData: keepPreviousData,
   });
 }
 export function useRuleStrategySignals(strategyId?: string) {
@@ -533,6 +540,7 @@ export function useRuleStrategyPnlCurve(
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+    placeholderData: keepPreviousData,
   });
 }
 export function useRuleStrategyAccount(
@@ -553,6 +561,7 @@ export function useRuleStrategyAccount(
       ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -585,6 +594,7 @@ export function useRuleStrategyMonitorState(strategyId?: string) {
     ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -597,5 +607,6 @@ export function useRuleStrategyRiskState(strategyId?: string) {
     ),
     select: (response) => response.data,
     enabled: Boolean(strategyId && tenantId),
+    placeholderData: keepPreviousData,
   });
 }

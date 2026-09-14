@@ -87,6 +87,7 @@
 - Web：`bun --cwd frontend run typecheck && bun --cwd frontend run lint && bun --cwd frontend run test && bun --cwd frontend run build`。
 - Mobile：`bun --cwd mobile run typecheck`；有 UI 改动则 `bunx expo export --platform android` 或真实设备验证。
 - UI 改动要运行对应真实表面：Web 用浏览器驱动；Mobile 以 APK/Expo 实际验证。不可只凭 typecheck 宣称交互/图表正确。
+- 改动写回时不要把行尾改成 CRLF：仓库登记的是 LF 行尾，`git add` 对工作区里已是 CRLF 的文件不会自动归一化，会把整文件记成重写（`migrations.py` 实测变成 3400 行噪声，变更无法评审、blame 失效）。提交前对比 `git diff --stat` 与 `git diff --stat -w`，两者行数应基本一致。
 
 ## 7. 已知风险/禁止复制的模式
 
@@ -139,6 +140,7 @@
 - 每个策略统计：已实现 PnL、未实现 PnL、手续费、滑点/执行成本、资金费/借贷成本（如适用）、净 PnL、收益率、胜率、交易次数、当前占用资金、最大占用和回撤。
 - 账户统计：OKX 钱包总权益曲线、总已实现/未实现 PnL、账户实际余额变化、所有策略归属 PnL 汇总、未归属差额、可用资金、预留资金、占用资金和资金利用率。策略汇总不得覆盖或伪造钱包事实。
 - 账户和策略曲线必须标明统计时间、数据来源、批次/策略范围和数据完整性；缺少归属或成本事实时显示“不可用/未归属”，不能默认为零。
+- 策略持仓上限（`max_positions`）只统计“共享钱包确实持有、且按交易所最小可成交量可卖”的归属仓位；历史库存、已不在钱包中的归属记录和低于最小可成交量的粉尘残留都不得永久占用仓位名额，否则策略会被自身账面永久锁死而无法买入。
 
 ### 9.4 交易明细与可解释性
 
@@ -151,6 +153,9 @@
 - 解释只读取策略产生并持久化的条件/指标/决策事实，不用当前配置反推历史原因；没有记录必须明确显示“未记录”，不能补造。
 - 双均线示例需能读懂 SMA10、SMA20、前后收盘价、上穿/下穿、趋势方向、5%止损和168h超时；配对示例需展示 pair、ratio、均值、标准差、Z-score、入场/退出阈值和单腿轮换方向；龙头示例需展示候选排名、流动性、相对强度、突破、量能、趋势和退出条件。
 - Web 与 Mobile 使用同一后端解释字段、状态枚举、错误码、权限和数据权威；两端只改变布局密度和交互方式。
+- 卖出数量低于交易所最小可成交量（粉尘）时，该笔是已审计的空操作：不得进入交易明细、不得计为失败订单或待对账提交，但评估漏斗必须就地说明“因低于最小可成交量被忽略”，不能留成“提交结果待确认”。
+- 调度层在发出任何请求之前拒绝的执行必须与交易所拒单区分：前者保留调度写入的原始原因作为阻断说明，交易明细只把真正被交易所拒绝/失败的订单计为失败。
+- 固定引擎因缺失或矛盾的行情事实（如 4h quote-volume 窗口不可用、K 线未收盘、持仓品种不匹配）返回 `blocked` 时，漏斗归因到“行情就绪”阶段并显示原始原因，不得记为“条件满足”阶段未通过。
 
 ### 9.5 前端交互设计方向
 
@@ -160,6 +165,7 @@
 - 交易模块提供策略筛选、批次筛选、环境筛选和状态筛选；移动端使用卡片/折叠条件，Web 使用表格加展开详情。条件详情默认折叠但一键可展开，实际值与阈值并列显示。
 - 账户总览明确区分“OKX 共享钱包事实”和“策略归属统计”；资金被多个策略快速复用时显示资金流转和当前预留，不把同一资产重复计入策略总资产。
 - 首页必须保留行情走势与技术指标区块：K 线、成交量与 RSI/布林带/MACD 跟随当前选中策略的币种集合，点击策略币种或并发矩阵行的“查看该策略行情与指标”即切换走势与指标并滚动到该区块；并发 UI 重构不得删除该区块。
+- 并发首页的交互模型是“原地切换”而不是整页重载：点击策略卡片或并发矩阵行只改变当前策略标识，共享账户概览、并发矩阵、资金分配图表、执行归因、评估节奏、行情与指标必须就地更新，不得重挂载图表子树或触发整页 loading；切换期间保留上一份已加载数据，并用短过渡动画与数字 count-up + 缩放/辉光动画表达数据已刷新。
 - 所有页面必须覆盖加载、空数据、过期、部分数据、权限不足、执行阻断和错误状态；高风险操作保留确认、幂等和审计。
 
 ### 9.6 开发阶段与交付物
@@ -252,4 +258,6 @@
 | 2026-09-12 | Web 并发 UI 重构：`dashboard.tsx` 移除旧单策略卡片（投资组合概览、关键阈值仪表、策略终端状态、最新策略评估、参数总览与扫描回放、持仓、真实订单与成交、最近交易信号、单策略权益曲线），首页主体收敛为共享账户概览（钱包权益曲线、四策略并发矩阵、未纳入资金池策略提示）与策略监控/风险；并发矩阵每行新增查看交易明细与条件原因的深链，`trades.tsx` 支持 `?strategy=` 直达并按该策略初始化筛选，不再每次强制重置为全部。本次重构曾连带删掉行情走势与技术指标区块，用户明确指出该区块不在删除范围内，已于同日恢复，见下一行。 | `frontend/src/app/dashboard.tsx`, `frontend/src/app/trades.tsx` | Web typecheck/lint/93 项前端测试/build 通过。 |
 | 2026-09-12 | 行情走势与技术指标恢复并接入策略切换：`dashboard.tsx` 恢复 K 线卡片（`CandlestickChart`、当前价格、provider/新鲜度徽标、币种 Select、周期 Select、日/5日/周/月/年范围、起止日期）与所选币种技术指标卡片（RSI/布林带/同时显示切换 + `MarketIndicatorPanelChart` 的 rsi/bollinger/macd 面板）；新增“点击策略币种动态切换走势与指标”快捷币种条，币种来自当前策略 `config.symbols` 与归属持仓并集并归一为 `XXX-USDT`；并发矩阵每行新增“查看该策略行情与指标”，点击后切换 `activeStrategyId` 并平滑滚动到 `#market-charts`，K 线与指标随策略换币种集合、随币种重新请求。 | `frontend/src/app/dashboard.tsx` | 以线上 API 为数据源的本地前端登录浏览器实测：K 线、成交量、布林带、MACD 均渲染；BTC/USDT 77,282.10 与 ETH/USDT 2,523.93 切换后价格、坐标轴与 K 线同步变化；现货龙头策略（9 币种）与配对套利策略（16 币种）互切生效并滚动到图表区。 |
 | 2026-09-12 | 共享账户执行门禁收敛：`_reconcile_shared_account()` 不再把所有非终态 `RuleStrategyExecutionIntent` 计入未结算，只统计共享链路仍可推进者——已建立 `SharedDemoExecutionIntent` 绑定，或 `updated_at` 仍在活跃窗口内（`DEMO_ACCOUNT_SYNC_INTERVAL_S` × 2，NULL 视为活跃并 fail-closed）；其余迁移前的未绑定意图由 `_close_unbound_intent()` 置 `status=stale`、`error_code=stale_unbound_submission`、`terminal_at`，保留行用于审计且绝不重发。 | `python/valuecell/server/services/rule_strategy_demo_account_sync_service.py`, `python/valuecell/server/tests/test_rule_strategy_demo_account_sync_service.py` | 新增回归测试并定向 15 passed；后端全量 507 passed；Ruff 通过。线上部署前仍为 `unresolved_submission_count=820`，部署后应归零并转 `ready`。 |
-
+| 2026-09-12 | 首页并发 UI 联动与流畅化：`dashboard.tsx` 新增 `useStrategySwapClass`（两个同名 keyframe 交替重放动画，但不重挂载子树，避免重建 ECharts 实例），并发矩阵行、行情图表区与监控区块跟随当前策略原地切换；`rule-strategy.ts` 的 8 个查询接入 `placeholderData: keepPreviousData`，修掉切换策略瞬间 `ruleStrategy === undefined` 触发 `shouldShowDashboardPageLoading` 整页 loading 的问题；`global.css` 新增 `.strategy-swap-a/.strategy-swap-b`、`.trend-point-pulse`、策略卡片选中阴影与序号呼吸灯，并同步 `prefers-reduced-motion`；策略卡片改为整卡可选择，币种列表折叠为“前 6 个 等 N 个币种”并保留全量 `title`。 | `frontend/src/app/dashboard.tsx`, `frontend/src/api/rule-strategy.ts`, `frontend/src/global.css`, `frontend/src/app/dashboard-strategy-management.tsx` | bun typecheck/lint/build 与 105 项前端测试通过；以线上 API 为数据源的本地登录实测：连续切换策略 10 次轮询均未出现整页 loading，点击卡片一次性联动头部子标题、图表区与币种列表。线上尚未部署，需部署后复测整页 loading 是否消失。 |
+| 2026-09-12 | 新增“策略评估节奏”面板：`dashboard-evaluation-rhythm.tsx` 用服务器已持久化的评估日志绘制条件通过比例趋势折线、决策时间带与决策分布条，导出 `evaluationSatisfactionTrend` / `evaluationActionDistribution` / `evaluationTimelineSegments` 三个纯函数；`dashboard-funnel.ts` 新增 `conditionStateSatisfactionPercent`，用持久化条件状态兜底固定引擎（无 `condition_summary`）的评估行；分布只统计服务器已写入的评估轮次，不推算未记录轮次。 | `frontend/src/components/valuecell/dashboard-evaluation-rhythm.tsx`, `frontend/src/components/valuecell/dashboard-evaluation-rhythm.test.ts`, `frontend/src/components/valuecell/dashboard-strategy-attribution.tsx`, `frontend/src/app/dashboard-funnel.ts` | 新增 6 项纯函数测试；前端 105 项测试全部通过；本地浏览器实测面板渲染正常（趋势端点时间标签、决策时间带、决策分布比例）。 |
+| 2026-09-14 | 线上“部署后 0 成交”根因定位与修复（后端）：四个运行策略全部 `environment=okx_demo` 且已绑定共享连接，路由不是纸面模式，问题在代码而非环境变量。修复四项：(1) `CryptoCandleData` 新增 `quote_volume` 并在 REST/聚合/调度投影全链路透传，解除龙头策略 12/12 `quote_volume_unavailable` 结构性死锁；聚合仅在所有源 candle 都有该值时才求和，不推算未记录值。(2) 持仓上限改为按共享钱包口径统计：`_strategy_open_position_count` 取归属库存与钱包可用余额的交集，并按交易所能卖的最小名义过滤，避免历史库存永久占满 `max_positions` 而挡住买入。(3) 卖出尺寸判定按交易所精度模式解析 `precision.amount`（OKX 为 tick size、多数交易所为小数位），低于最小可成交量或交易所最小尺寸拒单统一落为 `ignored_dust` 空操作，不再产生失败卖单污染交易明细。(4) 评估漏斗归因修正：固定引擎 `action=blocked` 归到行情就绪阶段、调度层未发出请求的阻断保留原始原因、粉尘单就地说明。另新增幂等迁移 `migrate_rule_strategy_paper_mode_flag`，把遗留的 `paper_mode` 派生列与权威的 `execution.environment` 对齐（该列无任何运行时读取）。 | `python/valuecell/server/api/schemas/crypto_market.py`, `python/valuecell/server/services/crypto_market_service.py`, `python/valuecell/server/services/strategy_scheduler.py`, `python/valuecell/server/services/sandbox_exchange_trading_service.py`, `python/valuecell/server/services/rule_strategy_service.py`, `python/valuecell/server/db/migrations.py`, `python/valuecell/server/api/app.py` | `uv run pytest server/tests -q --ignore=server/tests/test_strategy_agent.py`：526 passed；Ruff 通过。线上证据（只读 API，`vc.zhiweionline.com`，tenant 6115232f）：龙头 12/12 `quote_volume_unavailable`、双均线真实 `long_entry` 全部 `execution=blocked` 且被错记 `blocked_stage=conditions`、V2 满仓 `open_position_count=6/6`。未做受控 OKX 远端下单与服务器部署后复测，禁止以本地测试替代上线验证。 |

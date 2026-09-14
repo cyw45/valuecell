@@ -6,7 +6,8 @@ import asyncio
 import hashlib
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from loguru import logger
@@ -68,9 +69,15 @@ from valuecell.server.services.fixed_strategy_paper_service import (
     FixedPaperEvaluationService,
 )
 
+if TYPE_CHECKING:
+    from valuecell.server.api.schemas.crypto_market import CryptoSymbolIndicatorsData
+
 _MIN_INTERVAL_S = 60
 _DEMO_SUBMISSION_TIMEOUT_S = 15
 _DEMO_POSITION_DUST_EPSILON = Decimal("0.000001")
+# OKX spot rejects any order worth less than this, so a leftover below it can
+# never be sold: it is unexecutable remainder rather than an open position.
+_DEMO_POSITION_MIN_NOTIONAL_QUOTE = Decimal("1")
 _SYNC_JOB_ID = "_scheduler_sync_running"
 _SUPPORTED_STRATEGY_KINDS = frozenset({
     "configurable_rule",
@@ -103,12 +110,71 @@ def _strategy_client_order_id(
     return "vcdemo" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
+def _optional_decimal(value: Any) -> Decimal | None:
+    """Read a finite non-negative Decimal from snapshot facts, else None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    return number if number.is_finite() and number >= 0 else None
+
+
+def _is_closable_position(quantity: Decimal, mark_price: Decimal | None) -> bool:
+    """Return whether a leftover is large enough for the venue to sell it.
+
+    A quantity below the dust epsilon, or one whose mark value is below the
+    venue's minimum order value, can never become a fill. Treating such a
+    leftover as an open position would pin ``max_positions`` forever while every
+    attempt to close it is rejected as dust.
+    """
+    if quantity <= _DEMO_POSITION_DUST_EPSILON:
+        return False
+    if mark_price is not None and mark_price > 0:
+        return quantity * mark_price >= _DEMO_POSITION_MIN_NOTIONAL_QUOTE
+    return True
+
+
+def _strategy_open_position_count(
+    inventory: dict[str, tuple[Decimal, Decimal]],
+    wallet_positions: Mapping[str, Mapping[str, Any]],
+) -> int:
+    """Count this strategy's positions that the venue could still execute.
+
+    The strategy's own confirmed fills are intersected with the shared wallet's
+    available balance, so an attributed position that the wallet no longer holds
+    stops counting toward ``max_positions``.
+    """
+    open_positions = 0
+    for item_symbol, (held, _) in inventory.items():
+        if held <= _DEMO_POSITION_DUST_EPSILON:
+            continue
+        wallet = wallet_positions.get(item_symbol.upper().replace("/", "-")) or {}
+        available = _optional_decimal(wallet.get("available_quantity"))
+        closable_quantity = (
+            min(held, available) if available is not None else held
+        )
+        mark_price = _optional_decimal(wallet.get("mark_price"))
+        if _is_closable_position(closable_quantity, mark_price):
+            open_positions += 1
+    return open_positions
+
+
 def _strategy_position_from_inventory(
     inventory: dict[str, tuple[Decimal, Decimal]],
     symbol: str,
     available_quantity: Decimal | None = None,
+    *,
+    mark_price: Decimal | None = None,
+    wallet_positions: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> tuple[Decimal, Decimal, int]:
-    """Return exchange-available strategy inventory from confirmed fills."""
+    """Return exchange-available strategy inventory from confirmed fills.
+
+    ``mark_price`` applies the venue's minimum order value to the requested
+    symbol, and ``wallet_positions`` (when supplied) counts only the positions
+    the shared wallet can still execute.
+    """
     canonical_symbol = symbol.strip().upper().replace("-", "/")
     quantity, cost = inventory.get(canonical_symbol, (Decimal(0), Decimal(0)))
     if available_quantity is not None:
@@ -118,11 +184,50 @@ def _strategy_position_from_inventory(
         effective_cost = cost * effective_quantity / quantity if quantity > 0 else Decimal(0)
     else:
         effective_quantity, effective_cost = quantity, cost
+    if not _is_closable_position(effective_quantity, mark_price):
+        effective_quantity, effective_cost = Decimal(0), Decimal(0)
+    if wallet_positions is not None:
+        return (
+            effective_quantity,
+            effective_cost,
+            _strategy_open_position_count(inventory, wallet_positions),
+        )
     open_positions = sum(
         (effective_quantity if item_symbol == canonical_symbol else held) > 0
         for item_symbol, (held, _) in inventory.items()
     )
     return effective_quantity, effective_cost, open_positions
+
+
+def _fixed_candles_from_market(
+    symbols: Sequence[CryptoSymbolIndicatorsData],
+) -> list[FixedCandle]:
+    """Project fetched market candles onto the fixed engines' candle contract.
+
+    The leader engine derives its 24h liquidity from ``quote_volume``. Dropping
+    that fact at this boundary made every tick fail closed with
+    ``quote_volume_unavailable``, so it travels with the candle when the provider
+    proved it and stays ``None`` when it did not.
+    """
+    candles: list[FixedCandle] = []
+    for symbol_data in symbols:
+        if symbol_data.freshness_status != "fresh":
+            continue
+        candles.extend(
+            FixedCandle(
+                symbol=symbol_data.symbol,
+                timestamp_ms=candle.ts,
+                open=candle.open,
+                high=candle.high,
+                low=candle.low,
+                close=candle.close,
+                volume=candle.volume,
+                quote_volume=candle.quote_volume,
+                is_closed=True,
+            )
+            for candle in symbol_data.candles
+        )
+    return candles
 
 
 def _program_requirements(config: RuleStrategyConfig) -> dict[str, int]:
@@ -629,7 +734,13 @@ class StrategyScheduler:
                     )
                     inventory_quantity, inventory_cost, strategy_open_positions = (
                         _strategy_position_from_inventory(
-                            demo_inventory, symbol, available_quantity
+                            demo_inventory,
+                            symbol,
+                            available_quantity,
+                            mark_price=_optional_decimal(
+                                demo_position.get("mark_price")
+                            ),
+                            wallet_positions=demo_positions,
                         )
                     )
                     # Exchange balances are shared. Strategy signals use only
@@ -779,23 +890,7 @@ class StrategyScheduler:
                 retry_after_s=_INTERVAL_SECONDS["4h"],
             )
             return
-        fixed_candles: list[FixedCandle] = []
-        for symbol_data in market_data.symbols:
-            if symbol_data.freshness_status != "fresh":
-                continue
-            fixed_candles.extend(
-                FixedCandle(
-                    symbol=symbol_data.symbol,
-                    timestamp_ms=candle.ts,
-                    open=candle.open,
-                    high=candle.high,
-                    low=candle.low,
-                    close=candle.close,
-                    volume=candle.volume,
-                    is_closed=True,
-                )
-                for candle in symbol_data.candles
-            )
+        fixed_candles = _fixed_candles_from_market(market_data.symbols)
         if not fixed_candles:
             return
         observed_at = datetime.fromtimestamp(
@@ -1182,8 +1277,15 @@ class StrategyScheduler:
                     strategy_orders,
                     started_at=baseline.started_at if baseline is not None else None,
                 )
+                # A leftover whose mark value is below the venue's minimum order
+                # value can never become a fill, so it must not be sellable here.
+                # The request is additionally bounded by the shared wallet's real
+                # free balance inside submit_order, which keeps a stale attributed
+                # quantity from becoming an over-sized exchange request.
                 held_quantity, _, _ = _strategy_position_from_inventory(
-                    inventory, symbol
+                    inventory,
+                    symbol,
+                    mark_price=price if price > 0 else None,
                 )
                 if price <= 0 or held_quantity <= 0:
                     return {

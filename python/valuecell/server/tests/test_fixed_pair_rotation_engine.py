@@ -110,6 +110,14 @@ def test_position_timeout_exit() -> None:
     assert signal.indicators["position_age_bars"] > 180
 
 
+def test_engine_labels_exit_rules_so_readers_never_guess_the_bucket() -> None:
+    signal = engine(varied_history(1.5))
+    exit_codes = {"z_exit_band", "z_stop_band", "timeout_bars"}
+    categories = {c.code: c.category for c in signal.conditions}
+    assert {categories[code] for code in exit_codes} == {"exit"}
+    assert categories["z_entry_upper"] == "indicator"
+
+
 def test_insufficient_history_and_zero_std_are_blocked() -> None:
     insufficient = engine([0.9, 1.1] * 100)
     zero_std = engine([1.0] * 240)

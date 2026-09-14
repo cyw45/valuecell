@@ -42,6 +42,18 @@ import { useSaaSSession } from "@/store/system-store";
 import type { RuleStrategy } from "@/types/rule-strategy";
 import { strategyManagementActions } from "@/app/strategies/strategy-management";
 
+const SYMBOL_PREVIEW_LIMIT = 6;
+
+/**
+ * Cards preview only a handful of symbols. A 57-symbol joined string is
+ * unreadable and makes every dashboard interaction pay for DOM nobody reads;
+ * the full list stays available on hover and in the strategy detail page.
+ */
+function symbolSummary(symbols: string[]) {
+  if (symbols.length <= SYMBOL_PREVIEW_LIMIT) return symbols.join("、");
+  return `${symbols.slice(0, SYMBOL_PREVIEW_LIMIT).join("、")} 等 ${symbols.length} 个币种`;
+}
+
 const STATUS_LABELS: Record<RuleStrategy["status"], string> = {
   running: "运行中",
   stopped: "已停止",
@@ -217,7 +229,7 @@ export function DashboardStrategyManagement() {
         <div>
           <CardTitle className="text-base">策略管理</CardTitle>
           <CardDescription>
-            选择任一策略后，资金、执行、交易、分析、权益与监控信息同步切换。
+            点击任一策略卡片，资金、执行、交易、归因、行情图表与监控信息立即同步切换。
           </CardDescription>
         </div>
         <Button asChild size="sm" type="button">
@@ -270,12 +282,25 @@ export function DashboardStrategyManagement() {
               return (
                 <article
                   className={cn(
-                    "rounded-lg border bg-background/50 p-4 transition-colors",
+                    "strategy-card rounded-lg border bg-background/50 p-4",
                     selected
-                      ? "border-sky-500/60 bg-sky-500/5 shadow-sm"
+                      ? "border-sky-500/60 bg-sky-500/5"
                       : "border-border hover:border-sky-500/35",
                   )}
+                  data-selected={selected}
                   key={strategy.strategy_id}
+                  onClick={(event) => {
+                    // Anywhere on the card switches every dashboard panel to
+                    // this strategy; the card's own controls keep working.
+                    if (
+                      (event.target as HTMLElement).closest(
+                        "button, a, select, input",
+                      )
+                    ) {
+                      return;
+                    }
+                    setActiveStrategyId(strategy.strategy_id);
+                  }}
                 >
                   <button
                     aria-pressed={selected}
@@ -284,11 +309,30 @@ export function DashboardStrategyManagement() {
                     type="button"
                   >
                     <span className="min-w-0">
-                      <span className="block truncate font-medium text-sm">
-                        {strategy.name}
+                      <span className="flex items-center gap-2">
+                        {selected ? (
+                          <span
+                            aria-hidden
+                            className="strategy-card-index size-2 shrink-0 rounded-full bg-sky-500"
+                          />
+                        ) : null}
+                        <span className="truncate font-medium text-sm">
+                          {strategy.name}
+                        </span>
+                        {selected ? (
+                          <Badge
+                            className="shrink-0 border-sky-500/30 bg-sky-500/10 text-[10px] text-sky-600 dark:text-sky-300"
+                            variant="outline"
+                          >
+                            当前选择
+                          </Badge>
+                        ) : null}
                       </span>
-                      <span className="mt-1 block text-muted-foreground text-xs">
-                        {strategy.config.symbols.join("、")} · {strategy.config.interval} 周期
+                      <span
+                        className="mt-1 block text-muted-foreground text-xs"
+                        title={strategy.config.symbols.join("、")}
+                      >
+                        {symbolSummary(strategy.config.symbols)} · {strategy.config.interval} 周期
                       </span>
                     </span>
                     <Badge variant={strategy.status === "running" ? "default" : "outline"}>

@@ -196,3 +196,181 @@ def test_sell_summary_uses_exit_conditions_and_any_mode_not_entry_confirmation()
         "exit_confirmation_mode": "any",
     })
     assert item["condition_summary"] == {"matched": 1, "total": 2, "required": 1, "available": 2}
+
+
+def test_fixed_entry_journal_reports_real_condition_numbers_instead_of_zero():
+    item = evaluation({
+        "action": "no_signal", "reason_code": "no_entry_signal",
+        "reason": "No valid trend-aligned price cross occurred.",
+        "conditions": [
+            {"code": "trend.sma10_vs_sma20", "category": "indicator", "state": "triggered",
+             "actual": 0.256090, "threshold": 0.257800, "operator": "<", "detail": "bearish"},
+            {"code": "entry.price_cross_up", "category": "indicator", "state": "not_triggered",
+             "actual": 100.0, "threshold": 101.0, "operator": ">", "detail": "no cross"},
+            {"code": "entry.price_cross_down", "category": "indicator", "state": "not_triggered",
+             "actual": 100.0, "threshold": 99.0, "operator": "<", "detail": "no cross"},
+        ],
+    })
+
+    assert item["condition_summary"] == {
+        "matched": 1, "total": 3, "required": 3, "available": 3
+    }
+    conditions_stage = next(stage for stage in item["funnel"] if stage["code"] == "conditions")
+    assert conditions_stage["detail"] == "条件满足 1/3，需要 3 项。"
+    assert item["blocked_stage"] == "conditions"
+
+
+def test_fixed_hold_journal_explains_the_exit_rules_that_keep_the_position_open():
+    item = evaluation({
+        "action": "hold", "reason_code": "position_held",
+        "reason": "Position remains open; no exit condition triggered.",
+        "conditions": [
+            {"code": "trend.sma10_vs_sma20", "category": "indicator", "state": "triggered", "detail": "bull"},
+            {"code": "exit.stop_loss", "category": "exit", "state": "not_triggered",
+             "actual": 100.0, "threshold": 95.0, "operator": "<=", "detail": "above stop"},
+            {"code": "exit.timeout", "category": "exit", "state": "not_triggered",
+             "actual": 12.0, "threshold": 168.0, "operator": ">=", "detail": "young"},
+        ],
+    })
+
+    assert item["condition_summary"] == {
+        "matched": 0, "total": 2, "required": 1, "available": 2
+    }
+    assert item["blocked_stage"] == "conditions"
+
+
+def test_fixed_exit_journal_without_entry_confirmation_is_reported_as_submitted():
+    item = evaluation({
+        "action": "exit", "reason_code": "stop_loss",
+        "reason": "Adverse 5% stop loss triggered.",
+        "conditions": [
+            {"code": "exit.stop_loss", "category": "exit", "state": "triggered",
+             "actual": 94.0, "threshold": 95.0, "operator": "<=", "detail": "hit"},
+            {"code": "exit.timeout", "category": "exit", "state": "not_triggered",
+             "actual": 12.0, "threshold": 168.0, "operator": ">=", "detail": "young"},
+        ],
+        "execution": {"execution": "okx_demo_submitted", "status": "filled"},
+    })
+
+    assert item["condition_summary"] == {
+        "matched": 1, "total": 2, "required": 1, "available": 2
+    }
+    assert item["funnel"][4]["status"] == "passed"
+    assert item["funnel"][5]["status"] == "filled"
+    assert item["blocked_stage"] is None
+
+
+def test_legacy_fixed_journal_without_categories_still_counts_its_conditions():
+    item = evaluation({
+        "action": "no_signal", "reason_code": "no_entry_signal", "reason": "none",
+        "conditions": [
+            {"code": "trend.sma10_vs_sma20", "state": "not_triggered", "detail": "no"},
+        ],
+    })
+
+    assert item["condition_summary"] == {
+        "matched": 0, "total": 1, "required": 1, "available": 1
+    }
+    conditions_stage = next(stage for stage in item["funnel"] if stage["code"] == "conditions")
+    assert conditions_stage["detail"] == "条件满足 0/1，需要 1 项。"
+
+def test_fixed_blocked_action_is_reported_as_a_market_readiness_blocker():
+    """A fixed engine that cannot read its market facts never ran its rules."""
+
+    item = evaluation(
+        {
+            "action": "blocked",
+            "reason_code": "quote_volume_unavailable",
+            "reason": "One or more of the latest six 4h quote-volume facts is unavailable.",
+            "conditions": [
+                {
+                    "code": "liquidity_quote_volume_available",
+                    "category": "indicator",
+                    "state": "unavailable",
+                    "detail": "All six final 4h quote-volume values are required to calculate 24h liquidity.",
+                }
+            ],
+        }
+    )
+
+    assert item["blocked_stage"] == "market_ready"
+    market_stage = next(stage for stage in item["funnel"] if stage["code"] == "market_ready")
+    assert market_stage["status"] == "blocked"
+    assert market_stage["detail"].startswith("One or more of the latest six")
+    conditions_stage = next(stage for stage in item["funnel"] if stage["code"] == "conditions")
+    assert conditions_stage["status"] == "pending"
+    assert item["condition_summary"] == {
+        "matched": 0,
+        "total": 1,
+        "required": 1,
+        "available": 0,
+    }
+
+
+def test_dispatch_blocked_entry_reports_the_recorded_execution_reason():
+    """A refused dispatch keeps its own reason instead of a generic rejection."""
+
+    item = evaluation(
+        {
+            "action": "long_entry",
+            "reason_code": "bullish_price_cross",
+            "reason": "Trend-aligned bullish price cross.",
+            "conditions": [
+                {
+                    "code": "entry.price_cross_up",
+                    "category": "indicator",
+                    "state": "triggered",
+                    "detail": "crossed",
+                }
+            ],
+            "execution": {
+                "execution": "blocked",
+                "sandbox": True,
+                "reason": "OKX Demo shared account is unavailable or stale",
+            },
+        }
+    )
+
+    assert item["blocked_stage"] == "order_submission"
+    submission = next(stage for stage in item["funnel"] if stage["code"] == "order_submission")
+    assert submission["status"] == "blocked"
+    assert submission["detail"] == "OKX Demo shared account is unavailable or stale"
+    fill = next(stage for stage in item["funnel"] if stage["code"] == "fill")
+    assert fill["status"] == "pending"
+
+
+def test_dust_ignored_exit_is_reported_as_a_skipped_no_op():
+    """Dust stays out of the trade list, so the funnel must explain it here."""
+
+    item = evaluation(
+        {
+            "action": "exit",
+            "reason_code": "stop_loss",
+            "reason": "Adverse 5% stop loss triggered.",
+            "conditions": [
+                {
+                    "code": "exit.stop_loss",
+                    "category": "exit",
+                    "state": "triggered",
+                    "detail": "hit",
+                }
+            ],
+            "execution": {
+                "execution": "ignored_dust",
+                "sandbox": True,
+                "status": "ignored_dust",
+                "reason": "available balance is below the exchange minimum",
+            },
+        }
+    )
+
+    assert item["blocked_stage"] == "order_submission"
+    submission = next(stage for stage in item["funnel"] if stage["code"] == "order_submission")
+    assert submission["status"] == "blocked"
+    assert "粉尘" in submission["detail"]
+    assert [stage["status"] for stage in item["funnel"][:4]] == [
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+    ]

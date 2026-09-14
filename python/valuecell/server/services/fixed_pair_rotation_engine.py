@@ -86,10 +86,12 @@ def _metric_conditions(
         label: str,
         actual: float | None,
         detail: str,
+        category: str = "indicator",
     ) -> FixedCondition:
         return FixedCondition(
             code=code,
             label=label,
+            category=category,  # type: ignore[arg-type]
             state="unavailable" if actual is None else "not_triggered",
             actual=actual,
             detail=detail,
@@ -139,6 +141,7 @@ def _metric_conditions(
             operator="abs≤",
             detail="持仓方向对应的 Z 回归至 ±0.5 时止盈。",
             data_timestamp_ms=timestamp_ms,
+            category="exit",
         ),
         FixedCondition(
             code="z_stop_band",
@@ -149,6 +152,7 @@ def _metric_conditions(
             operator="abs≥",
             detail="Z 达到 ±4.0 时关系发散止损。",
             data_timestamp_ms=timestamp_ms,
+            category="exit",
         ),
         FixedCondition(
             code="timeout_bars",
@@ -159,6 +163,7 @@ def _metric_conditions(
             operator=">",
             detail="持仓超过 180 根 4h K 线时退出。",
             data_timestamp_ms=timestamp_ms,
+            category="exit",
         ),
     ]
     return conditions

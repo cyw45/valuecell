@@ -1490,6 +1490,12 @@ FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_VERSION = (
 FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_LOCK_KEY = 7720250741
 FIXED_STRATEGY_SHARED_ACCOUNT_KINDS = ("dual_ma_trend", "pair_rotation", "leader_breakout")
 
+# ``paper_mode`` predates the execution environment and is only ever a mirror of it.
+PAPER_MODE_DERIVATION_MIGRATION_VERSION = (
+    "20260914_rule_strategy_paper_mode_derivation_v1"
+)
+PAPER_MODE_DERIVATION_MIGRATION_LOCK_KEY = 7720250742
+
 
 def _observed_stamp(value: Any) -> float:
     """Coerce a driver timestamp (Postgres datetime, SQLite text) into epoch seconds."""
@@ -1653,5 +1659,65 @@ def migrate_fixed_strategies_to_shared_account(session: Session) -> bool:
         "Applied schema migration {version}, rebound {count} fixed strategies to shared accounts",
         version=FIXED_STRATEGY_SHARED_ACCOUNT_MIGRATION_VERSION,
         count=migrated,
+    )
+    return True
+
+
+def migrate_rule_strategy_paper_mode_flag(session: Session) -> bool:
+    """Reconcile the vestigial ``paper_mode`` column with its authority.
+
+    ``paper_mode`` is a derived mirror of ``execution.environment``: every write
+    path computes it from the environment, and no runtime decision reads it back.
+    Rows that reached ``okx_demo`` without passing such a write - the fixed
+    strategy shared-account cutover is exactly that case - kept the stale ``True``
+    and made operators read a Demo strategy as a paper one. The authority is the
+    persisted execution environment, so the column is re-derived from it here
+    instead of being trusted as a source of truth.
+    """
+
+    dialect = session.bind.dialect.name
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": PAPER_MODE_DERIVATION_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT version FROM schema_migrations WHERE version = :version"),
+        {"version": PAPER_MODE_DERIVATION_MIGRATION_VERSION},
+    ).first():
+        return False
+
+    # Only rows whose recorded environment proves a different value are touched,
+    # so a re-run cannot rewrite an already consistent table and an unrecognised
+    # environment is left exactly as found.
+    corrected = 0
+    for strategy in session.query(RuleStrategy).all():
+        config = dict(strategy.config or {})
+        execution = dict(config.get("execution") or {})
+        environment = execution.get("environment")
+        if environment not in {"paper", "okx_demo"}:
+            continue
+        expected = environment == "paper"
+        if bool(strategy.paper_mode) == expected:
+            continue
+        strategy.paper_mode = expected
+        session.add(strategy)
+        corrected += 1
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": PAPER_MODE_DERIVATION_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}, reconciled {count} strategy paper_mode flags",
+        version=PAPER_MODE_DERIVATION_MIGRATION_VERSION,
+        count=corrected,
     )
     return True

@@ -1363,3 +1363,57 @@ async def test_demo_account_sync_failure_blocks_tick_without_evaluation_or_raw_e
         verify.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+def test_fixed_candle_projection_keeps_quote_volume_available_to_the_engine() -> None:
+    """The leader engine derives 24h liquidity here; dropping it blocked every tick."""
+    fresh = SimpleNamespace(
+        symbol="LOW-USDT",
+        freshness_status="fresh",
+        candles=[
+            SimpleNamespace(ts=1, open=1.0, high=2.0, low=0.5, close=1.5, volume=3.0, quote_volume=250_000.0),
+            SimpleNamespace(ts=2, open=1.0, high=2.0, low=0.5, close=1.5, volume=3.0, quote_volume=None),
+        ],
+    )
+    stale = SimpleNamespace(
+        symbol="STALE-USDT",
+        freshness_status="stale",
+        candles=[
+            SimpleNamespace(ts=3, open=1.0, high=2.0, low=0.5, close=1.5, volume=3.0, quote_volume=1.0),
+        ],
+    )
+
+    candles = strategy_scheduler._fixed_candles_from_market([fresh, stale])
+
+    assert [candle.quote_volume for candle in candles] == [250_000.0, None]
+    assert [candle.symbol for candle in candles] == ["LOW-USDT", "LOW-USDT"]
+    assert all(candle.is_closed for candle in candles)
+
+
+def test_open_position_count_ignores_leftovers_the_venue_cannot_sell() -> None:
+    """A dust remainder must not pin max_positions and block every new entry."""
+    inventory = {
+        "BNB/USDT": (Decimal("0.166"), Decimal("100")),
+        "CRV/USDT": (Decimal("480.31"), Decimal("300")),
+        "TRX/USDT": (Decimal("0.00867"), Decimal("0.01")),
+    }
+    wallet_positions = {
+        "BNB-USDT": {"available_quantity": "0.000433", "mark_price": "600"},
+        "CRV-USDT": {"available_quantity": "480.31", "mark_price": "0.5"},
+        "TRX-USDT": {"available_quantity": "0.00867", "mark_price": "0.3"},
+    }
+
+    assert strategy_scheduler._strategy_open_position_count(inventory, wallet_positions) == 1
+
+
+def test_open_position_count_ignores_attributed_positions_the_wallet_no_longer_holds() -> None:
+    inventory = {"BNB/USDT": (Decimal("0.166"), Decimal("100"))}
+    wallet_positions = {"BNB-USDT": {"available_quantity": "0", "mark_price": "600"}}
+
+    assert strategy_scheduler._strategy_open_position_count(inventory, wallet_positions) == 0
+
+
+def test_open_position_count_without_a_mark_price_still_counts_attributed_fills() -> None:
+    inventory = {"CRV/USDT": (Decimal("480.31"), Decimal("300"))}
+    wallet_positions = {"CRV-USDT": {"available_quantity": "480.31"}}
+
+    assert strategy_scheduler._strategy_open_position_count(inventory, wallet_positions) == 1

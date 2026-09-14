@@ -4,6 +4,8 @@ import type { RuleStrategyEvaluationHistoryEntry } from "@/types/rule-strategy";
 import {
   buildDashboardFunnel,
   conditionDisplayName,
+  conditionSatisfactionPercent,
+  dashboardConditionSummary,
   formatConditionValues,
 } from "./dashboard-funnel";
 
@@ -110,6 +112,150 @@ describe("dashboard evaluation funnel", () => {
     assert.equal(
       formatConditionValues(null),
       "无实际值",
+    );
+  });
+
+  test("explains a fixed engine round whose entry conditions are not met", () => {
+    const result = buildDashboardFunnel({
+      strategyRunning: true,
+      evaluation: evaluation({
+        action: "no_signal",
+        conditions: [
+          {
+            code: "trend.sma10_vs_sma20",
+            category: "indicator",
+            state: "triggered",
+            detail: "bearish",
+            values: {},
+          },
+          {
+            code: "entry.price_cross_up",
+            category: "indicator",
+            state: "not_triggered",
+            detail: "no cross",
+            values: {},
+          },
+          {
+            code: "entry.price_cross_down",
+            category: "indicator",
+            state: "not_triggered",
+            detail: "no cross",
+            values: {},
+          },
+        ],
+      }),
+    });
+
+    assert.equal(result.steps[2]?.status, "blocked");
+    assert.equal(result.steps[2]?.detail, "通过 1/3，要求 3 项（3 项数据可用）");
+  });
+
+  test("explains a held fixed position with its exit rules, not the entry rules", () => {
+    const result = buildDashboardFunnel({
+      strategyRunning: true,
+      evaluation: evaluation({
+        action: "hold",
+        conditions: [
+          {
+            code: "trend.sma10_vs_sma20",
+            category: "indicator",
+            state: "triggered",
+            detail: "bull",
+            values: {},
+          },
+          {
+            code: "exit.stop_loss",
+            category: "exit",
+            state: "not_triggered",
+            detail: "above stop",
+            values: {},
+          },
+          {
+            code: "exit.timeout",
+            category: "exit",
+            state: "not_triggered",
+            detail: "young",
+            values: {},
+          },
+        ],
+      }),
+    });
+
+    assert.equal(result.steps[2]?.detail, "通过 0/2，要求 1 项（2 项数据可用）");
+  });
+
+  test("never prints a meaningless zero-of-zero condition ratio", () => {
+    const result = buildDashboardFunnel({
+      strategyRunning: true,
+      evaluation: evaluation({ action: "no_signal", conditions: [] }),
+    });
+
+    assert.equal(result.steps[2]?.detail, "本轮未记录条件明细");
+  });
+});
+
+describe("dashboard condition satisfaction", () => {
+  test("reads the recorded condition summary when the journal has one", () => {
+    const summary = dashboardConditionSummary(
+      evaluation({
+        condition_summary: {
+          matched: 2,
+          total: 4,
+          required: 3,
+          available: 4,
+        },
+        entry_confirmation: {
+          enabled: 9,
+          available: 9,
+          passed: 9,
+          required: 9,
+          mode: "at_least",
+        },
+      }),
+    );
+
+    assert.deepEqual(summary, {
+      matched: 2,
+      total: 4,
+      required: 3,
+      available: 4,
+    });
+    assert.equal(conditionSatisfactionPercent(summary), 50);
+  });
+
+  test("falls back to the entry confirmation counters for older journals", () => {
+    const summary = dashboardConditionSummary(
+      evaluation({
+        entry_confirmation: {
+          enabled: 5,
+          available: 4,
+          passed: 1,
+          required: 5,
+          mode: "at_least",
+        },
+      }),
+    );
+
+    assert.deepEqual(summary, {
+      matched: 1,
+      total: 5,
+      required: 5,
+      available: 4,
+    });
+    assert.equal(conditionSatisfactionPercent(summary), 20);
+  });
+
+  test("reports no ratio instead of a fake 0% when nothing was evaluated", () => {
+    assert.equal(dashboardConditionSummary(undefined), null);
+    assert.equal(dashboardConditionSummary(evaluation()), null);
+    assert.equal(
+      conditionSatisfactionPercent({
+        matched: 0,
+        total: 0,
+        required: 0,
+        available: 0,
+      }),
+      null,
     );
   });
 });

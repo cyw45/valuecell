@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 from typing import Any, Literal
 
 import asyncio
 import ccxt.pro as ccxtpro
+from ccxt.base.exchange import TICK_SIZE as _CCXT_TICK_SIZE_MODE
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from valuecell.server.config.settings import get_settings
@@ -70,6 +72,52 @@ class SandboxExchangeTradingService:
     def _is_deterministic_order_rejection(message: str) -> bool:
         """Identify venue validation errors that cannot succeed on retry unchanged."""
         return 'sCode":"51000"' in message or "Parameter clOrdId error" in message
+
+    @staticmethod
+    def _is_venue_minimum_size_rejection(message: str) -> bool:
+        """Identify a rejection caused only by an unexecutably small amount.
+
+        The venue refuses the size itself, so no order was placed and there is
+        nothing to reconcile. A sell that hits this is the same dust no-op the
+        read-only preflight already ignores, and must never surface as a failed
+        trade in the operator's trade list.
+        """
+        lowered = message.lower()
+        return (
+            "minimum size" in lowered
+            or "minimum amount precision" in lowered
+            or "minimum amount of" in lowered
+            or "minimum order amount" in lowered
+        )
+
+    @staticmethod
+    def _amount_step(exchange: Any, market: Mapping[str, Any]) -> Decimal:
+        """Return the venue's smallest tradable amount, or 0 when unknown.
+
+        ccxt encodes ``precision.amount`` two ways: as a decimal-place count for
+        most venues (``6`` means 1e-6) and as an absolute tick size for venues
+        configured with ``precisionMode = TICK_SIZE`` (OKX reports ``0.01``
+        meaning 0.01). Reading the field as a step unconditionally made every
+        OKX size look like dust, so the venue's own mode decides the encoding.
+        """
+        declared = SandboxExchangeTradingService._optional_decimal(
+            (market.get("precision") or {}).get("amount")
+        )
+        if declared is None or declared <= 0:
+            return Decimal(0)
+        mode = getattr(exchange, "precisionMode", None)
+        # Without a declared mode, a whole number that is at least one cannot be
+        # a tick size for a USDT spot pair, so it is a decimal-place count.
+        if mode == _CCXT_TICK_SIZE_MODE or (mode is None and declared < 1):
+            return declared
+        return Decimal(1).scaleb(-int(declared))
+
+    @staticmethod
+    def _truncate_to_step(value: Decimal, step: Decimal) -> Decimal:
+        """Truncate toward zero to the venue's amount step; steps are never rounded up."""
+        if step <= 0:
+            return value
+        return (value / step).to_integral_value(rounding=ROUND_DOWN) * step
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -451,7 +499,19 @@ class SandboxExchangeTradingService:
             self.db.commit()
             raise
         except Exception as exc:
-            if not remote_submission_started or self._is_deterministic_order_rejection(str(exc)):
+            if (
+                side == "sell"
+                and remote_submission_started
+                and self._is_venue_minimum_size_rejection(str(exc))
+            ):
+                # A live venue refusal of the size itself leaves no order to
+                # reconcile. Reporting it as a failed trade would pin a no-op in
+                # the operator's list, and as submission_unknown it would demand
+                # manual reconciliation of an order that never existed. A
+                # pre-submission rejection stays a deterministic validation
+                # failure, so the boundary is the remote call, not the message.
+                self._record_ignored_dust(order, intent, fenced=fenced)
+            elif not remote_submission_started or self._is_deterministic_order_rejection(str(exc)):
                 order.status = "failed"
                 order.error_code = "sandbox_order_rejected"
                 if intent is not None:
@@ -500,6 +560,10 @@ class SandboxExchangeTradingService:
             raw_balance = await self._await_preflight(exchange.fetch_balance(), timeout_s)
             free = raw_balance.get("free", {}) if isinstance(raw_balance, dict) else {}
             available = self._decimal_or_zero(free.get(base))
+            # Nothing held is the clearest dust case: the venue cannot fill a
+            # size the shared wallet does not have.
+            if available <= 0:
+                return True
             limits = market.get("limits") or {}
             min_amount = self._decimal_or_zero((limits.get("amount") or {}).get("min"))
             min_cost = self._decimal_or_zero((limits.get("cost") or {}).get("min"))
@@ -516,7 +580,11 @@ class SandboxExchangeTradingService:
             # and by the sizing ceiling, so both minima must be evaluated against
             # that size. Comparing the wallet balance alone let a below-minimum
             # sell through the preflight and fail later as a rejected order.
-            executable = min(available, nominal_quantity)
+            executable = self._truncate_to_step(
+                min(available, nominal_quantity), self._amount_step(exchange, market)
+            )
+            # The venue refuses an amount below its step, so truncation to the
+            # step is part of the executable size rather than a separate floor.
             if executable <= 0:
                 return True
             if min_amount > 0 and executable < min_amount:

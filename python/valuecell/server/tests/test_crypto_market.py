@@ -864,3 +864,38 @@ def test_crypto_market_router_forwards_historical_range_and_aggregation_interval
         from_ts_ms=1_700_000_000_000,
         to_ts_ms=1_710_000_000_000,
     )
+
+def test_rest_candles_carry_quote_volume_and_leave_unproven_values_none():
+    """The leader strategy reads 24h liquidity from this fact, so it must survive."""
+    payload = {
+        "code": "0",
+        "data": [
+            ["1700000000000", "1", "2", "0.5", "1.5", "10", "15", "1234.5", "1"],
+            ["1700003600000", "1", "2", "0.5", "1.5", "10", "15", "n/a", "1"],
+            ["1700007200000", "1", "2", "0.5", "1.5", "10"],
+        ],
+    }
+
+    candles = CryptoMarketService._parse_rest_candles("okx", payload)
+
+    assert [item.quote_volume for item in candles] == [1234.5, None, None]
+    assert [item.close for item in candles] == [1.5, 1.5, 1.5]
+
+
+def test_aggregated_candles_only_report_quote_volume_when_every_source_proved_it():
+    base = 1_700_000_000_000
+    day_ms = 86_400_000
+    complete = [
+        CryptoCandleData(ts=base + index * day_ms, open=1.0, high=2.0, low=0.5, close=1.5, volume=10.0, quote_volume=100.0)
+        for index in range(2)
+    ]
+    partial = [
+        *complete,
+        CryptoCandleData(ts=base + 2 * day_ms, open=1.0, high=2.0, low=0.5, close=1.5, volume=10.0),
+    ]
+
+    proven = CryptoMarketService._aggregate_candles(complete, "1Y")
+    unproven = CryptoMarketService._aggregate_candles(partial, "1Y")
+
+    assert [item.quote_volume for item in proven] == [200.0]
+    assert [item.quote_volume for item in unproven] == [None]

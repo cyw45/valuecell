@@ -1117,3 +1117,173 @@ async def test_intent_reconcile_syncs_submission_unknown_without_cross_tenant_jo
         session.close()
         Base.metadata.drop_all(engine)
         engine.dispose()
+
+def test_okx_tick_size_precision_sell_above_the_step_is_submitted(sandbox_client, monkeypatch):
+    """OKX encodes ``precision.amount`` as a tick size, not a decimal-place count.
+
+    Reading the tick (0.01) as 1e-2 would still be the same number, but reading a
+    decimal-place count as a tick size turned every OKX size into dust. A size
+    that survives truncation to the declared tick must reach the venue.
+    """
+    client, _, fake_exchange = sandbox_client
+    credential_id = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase", label="okx-tick"),
+    ).json()["data"]["id"]
+
+    async def tick_size_markets(self) -> dict:
+        return {
+            "TRX/USDT": {
+                "spot": True,
+                "active": True,
+                "base": "TRX",
+                "quote": "USDT",
+                "precision": {"amount": 0.01},
+                "limits": {"amount": {"min": 0.01}, "cost": {"min": 0.001}},
+            }
+        }
+
+    async def held_trx(self) -> dict:
+        self._private("fetch_balance")
+        return {
+            "total": {"USDT": 0, "TRX": 0.5},
+            "free": {"USDT": 0, "TRX": 0.5},
+            "used": {"TRX": 0},
+        }
+
+    async def trx_ticker(self, symbol: str) -> dict:
+        assert symbol == "TRX/USDT"
+        return {"last": 50_000}
+
+    monkeypatch.setattr(fake_exchange, "load_markets", tick_size_markets)
+    monkeypatch.setattr(fake_exchange, "fetch_balance", held_trx)
+    monkeypatch.setattr(fake_exchange, "fetch_ticker", trx_ticker)
+    monkeypatch.setattr(fake_exchange, "precisionMode", 4, raising=False)
+    request = {
+        "credential_id": credential_id,
+        "symbol": "TRX/USDT",
+        "side": "sell",
+        "type": "market",
+        "quote_amount": "1000",
+        "idempotency_key": "okx-tick-size-sell",
+        "sandbox": True,
+    }
+
+    result = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    assert result.status_code == 201, result.text
+    payload = result.json()["data"]
+    assert payload["status"] == "open", {
+        key: payload.get(key) for key in ("status", "error_code", "requested_quantity")
+    }
+    assert payload["requested_quantity"] == "0.020000"
+    assert "create_order" in fake_exchange.instances[-1].calls
+
+
+def test_okx_tick_size_precision_sell_below_the_step_is_ignored_as_dust(sandbox_client, monkeypatch):
+    """A TRX leftover smaller than the venue step is the online dust case."""
+    client, _, fake_exchange = sandbox_client
+    credential_id = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase", label="okx-tick-dust"),
+    ).json()["data"]["id"]
+
+    async def tick_size_markets(self) -> dict:
+        return {
+            "TRX/USDT": {
+                "spot": True,
+                "active": True,
+                "base": "TRX",
+                "quote": "USDT",
+                "precision": {"amount": 0.01},
+                "limits": {"amount": {"min": 0.01}, "cost": {"min": 0.001}},
+            }
+        }
+
+    async def dust_trx(self) -> dict:
+        self._private("fetch_balance")
+        return {
+            "total": {"USDT": 0, "TRX": 0.00867},
+            "free": {"USDT": 0, "TRX": 0.00867},
+            "used": {"TRX": 0},
+        }
+
+    async def trx_ticker(self, symbol: str) -> dict:
+        assert symbol == "TRX/USDT"
+        return {"last": 50_000}
+
+    monkeypatch.setattr(fake_exchange, "load_markets", tick_size_markets)
+    monkeypatch.setattr(fake_exchange, "fetch_balance", dust_trx)
+    monkeypatch.setattr(fake_exchange, "fetch_ticker", trx_ticker)
+    monkeypatch.setattr(fake_exchange, "precisionMode", 4, raising=False)
+    request = {
+        "credential_id": credential_id,
+        "symbol": "TRX/USDT",
+        "side": "sell",
+        "type": "market",
+        "quote_amount": "100",
+        "idempotency_key": "okx-tick-size-dust-sell",
+        "sandbox": True,
+    }
+
+    result = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    assert result.status_code == 201, result.text
+    assert result.json()["data"] == {
+        "id": None,
+        "status": "ignored_dust",
+        "symbol": "TRX/USDT",
+        "side": "sell",
+        "sandbox": True,
+    }
+    assert "create_order" not in fake_exchange.instances[-1].calls
+    assert client.get(
+        f"/saas/sandbox-exchanges/orders?credential_id={credential_id}"
+    ).json()["data"] == []
+
+
+def test_venue_minimum_size_rejection_after_submission_is_retained_as_dust(sandbox_client, monkeypatch):
+    """A live venue size refusal leaves no order to reconcile or to show as failed."""
+    client, _, fake_exchange = sandbox_client
+    credential_id = client.post(
+        "/saas/sandbox-exchanges/connections",
+        json=connection_request(provider="okx", passphrase="test-passphrase", label="okx-live-dust"),
+    ).json()["data"]["id"]
+
+    async def held_btc(self) -> dict:
+        self._private("fetch_balance")
+        return {
+            "total": {"USDT": 0, "BTC": 1.0},
+            "free": {"USDT": 0, "BTC": 1.0},
+            "used": {"BTC": 0},
+        }
+
+    async def reject_minimum_size(self, *_args, **_kwargs):
+        self._private("create_order")
+        raise RuntimeError(
+            'okx {"code":"1","sMsg":"Order does not satisfy OKX Demo minimum size"}'
+        )
+
+    monkeypatch.setattr(fake_exchange, "fetch_balance", held_btc)
+    monkeypatch.setattr(fake_exchange, "create_order", reject_minimum_size)
+    request = {
+        "credential_id": credential_id,
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "type": "market",
+        "quote_amount": "100",
+        "idempotency_key": "venue-min-size-sell",
+        "sandbox": True,
+    }
+
+    result = client.post("/saas/sandbox-exchanges/orders", json=request)
+
+    assert result.status_code == 201, result.text
+    payload = result.json()["data"]
+    assert payload["status"] == "ignored_dust", {
+        key: payload.get(key) for key in ("status", "error_code", "error_message")
+    }
+    assert payload["id"] is not None
+    assert client.get(
+        f"/saas/sandbox-exchanges/orders?credential_id={credential_id}"
+    ).json()["data"] == []

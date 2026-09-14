@@ -35,10 +35,12 @@ def _condition(
     threshold: float | str | bool | None = None,
     operator: str | None = None,
     timestamp_ms: int | None = None,
+    category: str = "indicator",
 ) -> FixedCondition:
     return FixedCondition(
         code=code,
         label=label,
+        category=category,  # type: ignore[arg-type]
         state=state,  # type: ignore[arg-type]
         actual=actual,
         threshold=threshold,
@@ -229,6 +231,7 @@ class FixedDualMaEngine:
                     "Current close reached the adverse 5% stop threshold." if stop_triggered else "Current close has not reached the adverse 5% stop threshold.",
                     actual=current_close, threshold=stop_price,
                     operator="<=" if position.side == "long" else ">=", timestamp_ms=timestamp_ms,
+                    category="exit",
                 ),
                 _condition(
                     "exit.timeout", "Maximum holding time",
@@ -236,6 +239,7 @@ class FixedDualMaEngine:
                     "Position has been held for at least 168 hours." if timeout_triggered else "Position has not reached the 168-hour maximum holding time.",
                     actual=held_ms / 3_600_000, threshold=168.0, operator=">=",
                     timestamp_ms=timestamp_ms,
+                    category="exit",
                 ),
                 _condition(
                     "exit.opposite_cross", "Opposite price/SMA10 cross",
@@ -243,6 +247,7 @@ class FixedDualMaEngine:
                     "Price crossed SMA10 against the position." if opposite_cross else "No opposite price/SMA10 cross occurred.",
                     actual=current_close, threshold=current_sma10,
                     operator="<" if position.side == "long" else ">", timestamp_ms=timestamp_ms,
+                    category="exit",
                 ),
             ])
             if stop_triggered:

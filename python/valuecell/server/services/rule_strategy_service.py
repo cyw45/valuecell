@@ -93,6 +93,42 @@ def _explainable_conditions(conditions: Any) -> list[dict[str, Any]]:
     ]
 
 
+# The configurable engine persists ``buy``/``sell`` while the fixed engines
+# persist ``long_entry``/``short_entry``/``exit``. Both vocabularies describe the
+# same order decision, so the read model normalizes them once here instead of
+# letting every reader guess.
+_ENTRY_SIGNAL_ACTIONS = frozenset(
+    {"buy", "long_entry", "short_entry", "entry", "add"}
+)
+_EXIT_SIGNAL_ACTIONS = frozenset({"sell", "exit", "reduce", "close"})
+_ACTIONABLE_SIGNAL_ACTIONS = _ENTRY_SIGNAL_ACTIONS | _EXIT_SIGNAL_ACTIONS
+
+
+def _is_actionable_signal(action: Any) -> bool:
+    """Report whether a recorded action represents an order decision."""
+
+    return str(action or "") in _ACTIONABLE_SIGNAL_ACTIONS
+
+
+def _is_exit_signal(action: Any, conditions: list[dict[str, Any]]) -> bool:
+    """Report whether the current decision is governed by exit rules."""
+
+    if str(action or "") in _EXIT_SIGNAL_ACTIONS:
+        return True
+    # A held position is waiting on its exit rules, so its numbers are the ones
+    # that explain why no order was produced this round.
+    return str(action or "") == "hold" and any(
+        item.get("category") == "exit" for item in conditions
+    )
+
+
+def _condition_category(item: dict[str, Any]) -> str:
+    """Return the persisted condition bucket, defaulting to the entry bucket."""
+
+    category = item.get("category")
+    return category if isinstance(category, str) and category else "indicator"
+
+
 class RuleStrategyService:
     """Persist and evaluate standalone deterministic paper rule strategies."""
 
@@ -834,15 +870,20 @@ class RuleStrategyService:
         result: dict[str, Any], trades: list[dict[str, Any]]
     ) -> dict[str, Any]:
         """Normalize current and historical journals into one six-stage read model."""
-        conditions = result.get("conditions") or []
-        condition_category = "exit" if result.get("action") == "sell" else "indicator"
+        conditions = [
+            item
+            for item in (result.get("conditions") or [])
+            if isinstance(item, dict)
+        ]
+        is_exit = _is_exit_signal(result.get("action"), conditions)
+        condition_category = "exit" if is_exit else "indicator"
         indicator_conditions = [
-            item for item in conditions if item.get("category") == condition_category
+            item for item in conditions if _condition_category(item) == condition_category
         ]
         risk_conditions = [
             item for item in conditions if item.get("category") == "risk"
         ]
-        is_sell = result.get("action") == "sell"
+        is_sell = is_exit
         confirmation = {} if is_sell else (result.get("entry_confirmation") or {})
         total = int(confirmation.get("enabled", len(indicator_conditions)))
         available = int(
@@ -913,15 +954,34 @@ class RuleStrategyService:
                 "condition_summary": summary,
             }
 
+        # The fixed engines report ``blocked`` when a market fact an evaluation
+        # needs is missing or contradictory: unfinished candles, an unavailable
+        # quote-volume window, a mismatched position symbol. The condition rules
+        # never ran, so reporting "conditions not satisfied" replaced the real
+        # cause with a stage the operator cannot act on.
+        if str(result.get("action") or "") == "blocked":
+            set_stage(
+                "market_ready",
+                "blocked",
+                str(result.get("reason") or "行情前置数据不可用，未执行条件评估。"),
+            )
+            set_stage("conditions", "pending", "前置条件不可用，未执行条件评估。")
+            return {
+                "funnel": stages,
+                "blocked_stage": "market_ready",
+                "condition_summary": summary,
+            }
+
         set_stage("market_ready", "passed", "行情数据已就绪。")
-        has_signal = result.get("action") in {"buy", "sell"}
+        has_signal = _is_actionable_signal(result.get("action"))
+        condition_detail = (
+            f"条件满足 {matched}/{total}，需要 {required} 项。"
+            if total
+            else "本轮未记录条件明细。"
+        )
         risk_blocked = any(item.get("state") == "blocked" for item in risk_conditions)
         if risk_blocked:
-            set_stage(
-                "conditions",
-                "passed",
-                f"条件满足 {matched}/{total}，需要 {required} 项。",
-            )
+            set_stage("conditions", "passed", condition_detail)
             detail = next(
                 (
                     item.get("detail")
@@ -937,30 +997,33 @@ class RuleStrategyService:
                 "condition_summary": summary,
             }
         if not has_signal:
-            set_stage(
-                "conditions",
-                "blocked",
-                f"条件满足 {matched}/{total}，需要 {required} 项。",
-            )
+            set_stage("conditions", "blocked", condition_detail)
             return {
                 "funnel": stages,
                 "blocked_stage": "conditions",
                 "condition_summary": summary,
             }
 
-        set_stage(
-            "conditions", "passed", f"条件满足 {matched}/{total}，需要 {required} 项。"
-        )
+        set_stage("conditions", "passed", condition_detail)
         set_stage("risk", "passed", "风控检查通过。")
 
         execution = result.get("execution") or {}
         if not isinstance(execution, dict):
             execution = {}
+        execution_result = str(execution.get("execution") or "").lower()
         order_status = str(execution.get("status") or "").lower()
         trade_filled = any(item.get("execution") == "paper_filled" for item in trades)
-        submission_rejected = order_status in {"rejected", "failed", "stale"} or (
-            execution.get("execution") == "blocked" and not order_status
+        # A dispatch refused before any venue request records a reason but no
+        # order status, so it is not a venue rejection: nothing was ever sent.
+        # Reporting it as "rejected" replaced the real blocker with generic text.
+        dispatch_blocked = execution_result == "blocked" and not order_status
+        # A dust sell is a deliberate no-op, not an unresolved submission: the
+        # wallet cannot be sized above the venue minimum, so it stays explained
+        # here and stays out of the operator trade list.
+        dust_ignored = (
+            execution_result == "ignored_dust" or order_status == "ignored_dust"
         )
+        submission_rejected = order_status in {"rejected", "failed", "stale"}
         fill_rejected = order_status in {"canceled", "cancelled"}
         submitted_statuses = {
             "submitted",
@@ -973,7 +1036,23 @@ class RuleStrategyService:
             "cancelled",
         }
         submitted = trade_filled or order_status in submitted_statuses
-        if submission_rejected:
+        if dispatch_blocked:
+            set_stage(
+                "order_submission",
+                "blocked",
+                str(execution.get("reason") or "订单未提交，执行前置条件不可用。"),
+            )
+            set_stage("fill", "pending", "订单未提交，未产生成交。")
+            blocked_stage = "order_submission"
+        elif dust_ignored:
+            set_stage(
+                "order_submission",
+                "blocked",
+                "卖出数量低于交易所最小可成交量，已作为粉尘忽略且不计入交易明细。",
+            )
+            set_stage("fill", "pending", "未提交订单，未产生成交。")
+            blocked_stage = "order_submission"
+        elif submission_rejected:
             set_stage("order_submission", "rejected", "订单提交被拒绝或失败。")
             set_stage("fill", "rejected", "订单未成交。")
             blocked_stage = "order_submission"

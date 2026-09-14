@@ -1,9 +1,15 @@
 import type {
   RuleStrategyEvaluationHistoryEntry,
+  RuleStrategyConditionSummary,
   RuleStrategyFunnelCode,
   RuleStrategyFunnelStage,
   RuleStrategyFunnelStatus,
 } from "@/types/rule-strategy";
+import {
+  conditionBucket,
+  conditionCategory,
+  isActionableAction,
+} from "@/types/rule-strategy-condition";
 
 export const DASHBOARD_FUNNEL_STAGES: ReadonlyArray<{
   code: RuleStrategyFunnelCode;
@@ -27,9 +33,10 @@ function fallbackFunnel(
   evaluation?: RuleStrategyEvaluationHistoryEntry,
 ): RuleStrategyFunnelStage[] {
   const confirmation = evaluation?.entry_confirmation;
+  const bucket = conditionBucket(evaluation?.action, evaluation?.conditions ?? []);
   const relevantConditions =
     evaluation?.conditions.filter(
-      (condition) => condition.category === "indicator",
+      (condition) => conditionCategory(condition) === bucket,
     ) ?? [];
   const total = confirmation?.enabled ?? relevantConditions.length;
   const available =
@@ -40,9 +47,9 @@ function fallbackFunnel(
     confirmation?.passed ??
     relevantConditions.filter((condition) => condition.state === "triggered")
       .length;
-  const required = confirmation?.required ?? total;
-  const hasSignal =
-    evaluation?.action === "buy" || evaluation?.action === "sell";
+  const required =
+    confirmation?.required ?? (bucket === "exit" && total ? 1 : total);
+  const hasSignal = isActionableAction(evaluation?.action);
   const marketBlocked =
     evaluation?.status === "blocked" &&
     (evaluation.stage === "market_data" || evaluation.stage === "account_sync");
@@ -50,7 +57,8 @@ function fallbackFunnel(
     evaluation?.stage === "risk" ||
     evaluation?.conditions.some(
       (condition) =>
-        condition.category === "risk" && condition.state === "blocked",
+        conditionCategory(condition) === "risk" &&
+        condition.state === "blocked",
     );
   const execution = evaluation?.execution;
   const executionStatus =
@@ -81,9 +89,11 @@ function fallbackFunnel(
       evaluation?.trades.length ||
       ["filled", "closed"].includes(executionStatus),
   );
-  const conditionDetail = evaluation
-    ? `通过 ${passed}/${total}，要求 ${required} 项（${available} 项数据可用）`
-    : "等待策略评估";
+  const conditionDetail = !evaluation
+    ? "等待策略评估"
+    : total === 0
+      ? "本轮未记录条件明细"
+      : `通过 ${passed}/${total}，要求 ${required} 项（${available} 项数据可用）`;
   const stage = (
     code: RuleStrategyFunnelCode,
     status: RuleStrategyFunnelStatus,
@@ -229,4 +239,64 @@ export function formatConditionValues(
   return entries
     .map(([key, value]) => `${key}=${formatValue(value)}`)
     .join(" · ");
+}
+
+/**
+ * The evaluation journal is the authority for how many conditions were checked.
+ * Journal rows written before `condition_summary` existed only carry the entry
+ * confirmation counters, so those are read as the same fact instead of the
+ * dashboard inventing a count of its own.
+ */
+export function dashboardConditionSummary(
+  evaluation?: RuleStrategyEvaluationHistoryEntry,
+): RuleStrategyConditionSummary | null {
+  const recorded = evaluation?.condition_summary;
+  if (recorded) {
+    return {
+      matched: recorded.matched,
+      total: recorded.total,
+      required: recorded.required,
+      available: recorded.available,
+    };
+  }
+  const confirmation = evaluation?.entry_confirmation;
+  if (!confirmation) return null;
+  return {
+    matched: confirmation.passed,
+    total: confirmation.enabled,
+    required: confirmation.required,
+    available: confirmation.available,
+  };
+}
+
+/**
+ * Percentage derived straight from the persisted condition states. Used when a
+ * journal row carries no usable summary counters, which is the case for the
+ * code-owned fixed engines: their rows still record every condition state, so
+ * the triggered share is a recorded fact rather than an inference.
+ */
+export function conditionStateSatisfactionPercent(
+  conditions: RuleStrategyEvaluationHistoryEntry["conditions"],
+): number | null {
+  const relevant = conditions.filter(
+    (condition) => condition.state !== "unavailable",
+  );
+  if (relevant.length === 0) return null;
+  const triggered = relevant.filter(
+    (condition) => condition.state === "triggered",
+  ).length;
+  return Math.min(Math.max((triggered / relevant.length) * 100, 0), 100);
+}
+
+/**
+ * Percentage of the recorded conditions that passed. Returns null when the
+ * server recorded no condition at all so the gauge shows "no data" rather than
+ * a misleading 0%.
+ */
+export function conditionSatisfactionPercent(
+  summary: RuleStrategyConditionSummary | null,
+): number | null {
+  if (!summary || summary.total <= 0) return null;
+  const ratio = (summary.matched / summary.total) * 100;
+  return Math.min(Math.max(ratio, 0), 100);
 }

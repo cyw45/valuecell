@@ -14,6 +14,13 @@ class CryptoCandleData(BaseModel):
     low: float
     close: float
     volume: float
+    quote_volume: Optional[float] = Field(
+        None,
+        description=(
+            "Quote-currency turnover of the candle when the provider supplies it; "
+            "None means the boundary could not prove the fact."
+        ),
+    )
 
 
 class BollingerBandData(BaseModel):

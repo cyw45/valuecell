@@ -17,6 +17,7 @@ import {
   useRuleStrategy,
   useRuleStrategyBatches,
   useRuleStrategyDemoExecution,
+  useRuleStrategyEvaluations,
   useRuleStrategyTrades,
 } from "@/api/rule-strategy";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,7 @@ import {
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { useSaaSSession } from "@/store/system-store";
 import type { UnifiedTradeFact } from "@/types/multi-strategy";
+import { RuleStrategyEvaluationPath } from "@/components/valuecell/rule-strategy-evaluation-path";
 import {
   decisionConditions,
   decisionLabel,
@@ -67,8 +69,17 @@ function formatDate(value: string) {
 export default function TradesPage() {
   const { t } = useTranslation();
   const { tenantId } = useSaaSSession();
-  const [strategyId] = useActiveRuleStrategyId();
+  const [strategyId, setActiveStrategyId] = useActiveRuleStrategyId();
   const [searchParams] = useSearchParams();
+  // A deep link owns the page it opened: the dashboard sends `?strategy=` so an
+  // operator lands on the strategy they clicked, not on whatever this browser
+  // selected last. Without this the query string only looked like it worked.
+  const requestedStrategyId = searchParams.get("strategy");
+  useEffect(() => {
+    if (requestedStrategyId && requestedStrategyId !== strategyId) {
+      setActiveStrategyId(requestedStrategyId);
+    }
+  }, [requestedStrategyId, setActiveStrategyId, strategyId]);
   const [demoOrdersPage, setDemoOrdersPage] = useState(1);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   // The dashboard links here with an explicit strategy so the unified fact table
@@ -95,6 +106,11 @@ export default function TradesPage() {
     strategyId, source === "okx_demo", demoOrdersPage, 10,
     allHistory ? null : selectedBatchId, allHistory,
   );
+  const evaluationsQuery = useRuleStrategyEvaluations(
+    strategyId,
+    allHistory ? null : selectedBatchId,
+  );
+  const latestEvaluation = evaluationsQuery.data?.[0];
   useEffect(() => {
     setDemoOrdersPage(1);
     setSelectedBatchId(null);
@@ -378,11 +394,16 @@ export default function TradesPage() {
             </Card>
           )
         ) : (
-          <EmptyState
-            action={isDemo ? "配置策略" : t("saas.operations.trades.actions.evaluate")}
-            description={isDemo ? "该策略尚无 OKX Demo 订单。纸面交易记录不会显示在此视图中。" : t("saas.operations.trades.empty.description")}
-            title={isDemo ? "暂无 OKX Demo 订单" : t("saas.operations.trades.empty.title")}
-          />
+          <div className="grid gap-4">
+            <EmptyState
+              action={isDemo ? "配置策略" : t("saas.operations.trades.actions.evaluate")}
+              description={isDemo ? "该策略尚未产生 OKX Demo 订单。下方是该策略最近一次评估记录，用实际数值说明为什么还没有成交。" : t("saas.operations.trades.empty.description")}
+              title={isDemo ? "暂无 OKX Demo 订单" : t("saas.operations.trades.empty.title")}
+            />
+            {isDemo ? (
+              <RuleStrategyEvaluationPath evaluation={latestEvaluation} />
+            ) : null}
+          </div>
         )}
 
         {isPaper ? (
@@ -535,8 +556,8 @@ function EmptyState({
   title: string;
 }) {
   return (
-    <Card className="flex flex-1 items-center justify-center border-dashed">
-      <CardHeader className="max-w-md items-center text-center">
+    <Card className="flex flex-1 justify-center border-dashed">
+      <CardHeader className="mx-auto w-full max-w-md items-center text-center">
         <div className="mb-2 flex size-12 items-center justify-center rounded-full bg-secondary">
           <ClipboardList className="size-6 text-muted-foreground" />
         </div>

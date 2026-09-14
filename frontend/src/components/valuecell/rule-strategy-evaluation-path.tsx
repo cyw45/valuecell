@@ -16,6 +16,7 @@ import type {
   RuleStrategyCondition,
   RuleStrategyEvaluationHistoryEntry,
 } from "@/types/rule-strategy";
+import { conditionCategory } from "@/types/rule-strategy-condition";
 
 type ExecutionStageState =
   | "passed"
@@ -223,10 +224,10 @@ function deriveExecutionStages(
 ): ExecutionStage[] {
   const conditions = evaluation.conditions ?? [];
   const indicatorConditions = conditions.filter(
-    (condition) => condition.category === "indicator",
+    (condition) => conditionCategory(condition) === "indicator",
   );
   const riskConditions = conditions.filter(
-    (condition) => condition.category === "risk",
+    (condition) => conditionCategory(condition) === "risk",
   );
   const hasUnavailable = conditions.some(
     (condition) => condition.state === "unavailable",
@@ -291,7 +292,9 @@ function formatConditionValue(key: string, value: string | number | boolean) {
   if (typeof value === "string") {
     if (value === "above") return "高于或等于";
     if (value === "below") return "低于或等于";
-    return key === "interval" ? value : "已记录";
+    // The engines store real strings here (comparators, pair names, symbols).
+    // Collapsing them to "已记录" hid the very value the operator needs.
+    return value;
   }
   if (key.endsWith("_pct")) {
     return `${numberFormatter.format(value * 100)}%`;
@@ -299,6 +302,49 @@ function formatConditionValue(key: string, value: string | number | boolean) {
   if (key.endsWith("_quote")) return `${numberFormatter.format(value)} USDT`;
   return numberFormatter.format(value);
 }
+
+const COMPARATOR_SYMBOLS: Record<string, string> = {
+  gt: ">",
+  gte: "≥",
+  lt: "<",
+  lte: "≤",
+  eq: "=",
+  neq: "≠",
+  ">": ">",
+  ">=": "≥",
+  "<": "<",
+  "<=": "≤",
+  "=": "=",
+};
+
+/**
+ * Engines persist the decision input as `actual`/`threshold`/`operator`, or as
+ * the equivalent `values.left/right/comparator` pair. Rendering that comparison
+ * is what turns "服务器判定为未触发" into a statement an operator can verify.
+ */
+function conditionComparison(condition: RuleStrategyCondition) {
+  const values = condition.values ?? {};
+  const left = condition.actual ?? values.actual ?? values.left;
+  const right = condition.threshold ?? values.threshold ?? values.right;
+  const comparator = condition.operator ?? values.comparator;
+  if (left === null || left === undefined) return null;
+  if (right === null || right === undefined) return null;
+  if (typeof comparator !== "string" || comparator.length === 0) return null;
+  return {
+    actual: formatConditionValue("actual", left),
+    symbol: COMPARATOR_SYMBOLS[comparator.trim().toLowerCase()] ?? comparator,
+    threshold: formatConditionValue("threshold", right),
+  };
+}
+
+const COMPARISON_VALUE_KEYS = new Set([
+  "actual",
+  "threshold",
+  "left",
+  "right",
+  "comparator",
+  "operator",
+]);
 
 function fallbackConditionDetail(condition: RuleStrategyCondition) {
   if (condition.state === "unavailable") {
@@ -330,13 +376,19 @@ function fallbackConditionDetail(condition: RuleStrategyCondition) {
       ? "配置仓位超过基于权益的杠杆上限。"
       : "配置仓位在基于权益的杠杆上限内。";
   }
-  return `${ruleStrategyConditionLabel(condition.code)}已由服务器判定为${ruleStrategyConditionStateLabel(condition.state)}。`;
+  return `${ruleStrategyConditionTitle(condition)}：服务器判定为${ruleStrategyConditionStateLabel(condition.state)}。`;
 }
 
 function conditionDetail(condition: RuleStrategyCondition) {
-  return containsChinese(condition.detail)
-    ? condition.detail
-    : fallbackConditionDetail(condition);
+  // Keep the server's own wording whenever it exists; the caller renders the
+  // Chinese fallback next to it when the persisted detail is not localized.
+  const serverDetail = condition.detail?.trim();
+  if (serverDetail) return serverDetail;
+  return fallbackConditionDetail(condition);
+}
+
+function conditionDetailIsLocalized(condition: RuleStrategyCondition) {
+  return containsChinese(condition.detail);
 }
 
 export function ruleStrategyEvaluationReason(
@@ -389,11 +441,28 @@ export function ruleStrategyConditionCategoryLabel(
 ) {
   if (category === "indicator") return "指标条件";
   if (category === "exit") return "退出条件";
-  return "风控条件";
+  if (category === "risk") return "风控条件";
+  // Journals written before the category field existed carry no category at
+  // all. Labelling those "风控条件" claimed something the server never said, so
+  // they fall back to a neutral name instead.
+  return "策略条件";
 }
 
 export function ruleStrategyConditionLabel(code: string) {
-  return CONDITION_CODE_LABELS[code] ?? "策略条件";
+  // Prefer the raw code over a generic placeholder: "entry.price_cross_up"
+  // tells an operator more than "策略条件" ever could.
+  return CONDITION_CODE_LABELS[code] ?? code;
+}
+
+/**
+ * The fixed-strategy engines persist a human name for every condition
+ * ("SMA10 versus SMA20"). Preferring it over the local dictionary keeps the
+ * card describing the rule the server actually evaluated.
+ */
+export function ruleStrategyConditionTitle(condition: RuleStrategyCondition) {
+  const serverLabel = condition.label?.trim();
+  if (serverLabel) return serverLabel;
+  return ruleStrategyConditionLabel(condition.code);
 }
 
 export function RuleStrategyEvaluationPath({
@@ -551,15 +620,25 @@ export function RuleStrategyEvaluationPath({
               {conditions.map((condition, index) => {
                 const presentation = statePresentation[condition.state];
                 const ConditionIcon = presentation.icon;
+                const comparison = conditionComparison(condition);
+                const title = ruleStrategyConditionTitle(condition);
+                const emphasized = comparison
+                  ? `实际值 ${comparison.actual} ${comparison.symbol} 阈值 ${comparison.threshold}`
+                  : null;
+                const localizedDetail = conditionDetailIsLocalized(condition);
                 const values = Object.entries(condition.values).filter(
                   (
                     entry,
                   ): entry is [string, string | number | boolean] =>
-                    entry[1] !== null && entry[1] !== undefined,
+                    entry[1] !== null &&
+                    entry[1] !== undefined &&
+                    // The comparison line already carries these, so they must
+                    // not be repeated as opaque key/value chips.
+                    !(comparison !== null && COMPARISON_VALUE_KEYS.has(entry[0])),
                 );
                 return (
                   <article
-                    aria-label={`${ruleStrategyConditionCategoryLabel(condition.category)}：${ruleStrategyConditionLabel(condition.code)}，${ruleStrategyConditionStateLabel(condition.state)}`}
+                    aria-label={`${ruleStrategyConditionCategoryLabel(condition.category)}：${title}，${ruleStrategyConditionStateLabel(condition.state)}${emphasized ? `，${emphasized}` : ""}`}
                     className={cn(
                       "rounded-md border p-3",
                       presentation.className,
@@ -573,7 +652,7 @@ export function RuleStrategyEvaluationPath({
                       <div className="flex min-w-0 items-center gap-2">
                         <ConditionIcon className="size-4 shrink-0" />
                         <span className="truncate font-medium text-sm">
-                          {ruleStrategyConditionLabel(condition.code)}
+                          {title}
                         </span>
                       </div>
                       <span className="flex shrink-0 items-center gap-1 text-xs">
@@ -584,9 +663,21 @@ export function RuleStrategyEvaluationPath({
                         </span>
                       </span>
                     </div>
-                    <p className="mt-2 text-xs leading-relaxed opacity-90">
-                      {conditionDetail(condition)}
+                    {emphasized ? (
+                      <p className="mt-2 font-medium font-mono text-xs tabular-nums">
+                        {emphasized}
+                      </p>
+                    ) : null}
+                    <p className="mt-1 text-xs leading-relaxed opacity-90">
+                      {localizedDetail
+                        ? conditionDetail(condition)
+                        : fallbackConditionDetail(condition)}
                     </p>
+                    {!localizedDetail && condition.detail?.trim() ? (
+                      <p className="mt-1 text-[11px] leading-relaxed opacity-60">
+                        服务端记录：{condition.detail}
+                      </p>
+                    ) : null}
                     {values.length > 0 ? (
                       <dl className="mt-2 flex flex-wrap gap-x-3 gap-y-1 border-white/20 border-t pt-2 text-[11px]">
                         {values.map(([key, value]) => (

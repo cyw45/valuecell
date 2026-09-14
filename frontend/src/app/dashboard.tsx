@@ -42,11 +42,6 @@ import {
   useUpdateStrategyAllocationCap,
 } from "@/api/rule-strategy";
 import {
-  buildDashboardFunnel,
-  conditionDisplayName,
-  formatConditionValues,
-} from "@/app/dashboard-funnel";
-import {
   buildDemoEquityCurve,
   buildStrategyHoldingRows,
   allocationPnlPresentation,
@@ -108,7 +103,7 @@ import {
   type RsiBollingerMode,
 } from "@/components/valuecell/charts/market-indicator-panel";
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
-import { ThresholdGauge } from "@/components/valuecell/charts/threshold-gauge";
+import { DashboardStrategyAttribution } from "@/components/valuecell/dashboard-strategy-attribution";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { cn } from "@/lib/utils";
 import {
@@ -169,6 +164,25 @@ const MARKET_INTERVAL_SECONDS: Record<
   "1w": 604_800,
   "1M": 2_592_000,
 };
+
+/**
+ * Re-triggers the strategy-swap CSS animation whenever the active strategy
+ * changes. Two identical keyframe names are alternated so the animation
+ * restarts without remounting the subtree below, which would throw away every
+ * chart and re-request data on each click.
+ */
+function useStrategySwapClass(strategyId: string) {
+  const [swapStep, setSwapStep] = useState(false);
+  const previousStrategyRef = useRef(strategyId);
+
+  useEffect(() => {
+    if (previousStrategyRef.current === strategyId) return;
+    previousStrategyRef.current = strategyId;
+    setSwapStep((step) => !step);
+  }, [strategyId]);
+
+  return swapStep ? "strategy-swap-a" : "strategy-swap-b";
+}
 
 function toDashboardSymbol(symbol: string) {
   return symbol.replace("-", "/");
@@ -261,7 +275,10 @@ function StrategyAllocationCapEditor({
     }
   };
   return (
-    <div className="flex min-w-52 flex-col gap-1.5">
+    <div
+      className="flex min-w-52 flex-col gap-1.5"
+      onClick={(event) => event.stopPropagation()}
+    >
       <div className="flex items-center gap-1">
         <Input aria-label="最大预留资金" className="h-7 w-24 text-xs" min={0} onChange={(event) => setReserved(event.target.value)} placeholder="预留上限" step="0.01" type="number" value={reserved} />
         <Input aria-label="最大占用资金" className="h-7 w-24 text-xs" min={0} onChange={(event) => setOccupied(event.target.value)} placeholder="占用上限" step="0.01" type="number" value={occupied} />
@@ -392,6 +409,429 @@ function KpiCard({
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+type StrategyAllocationRow =
+  AccountStrategyOverview["allocator"]["allocations"][number];
+
+/** Quote formatter that keeps the count-up/flash animation for every live number. */
+function AnimatedQuote({
+  value,
+  className,
+}: {
+  value: number | null | undefined;
+  className?: string;
+}) {
+  if (value == null || !Number.isFinite(value)) {
+    return <span className={className}>—</span>;
+  }
+  return <TerminalValue className={className} value={value} />;
+}
+
+/** Stable segment palette so a strategy keeps its colour across every chart. */
+const ALLOCATION_SEGMENT_COLORS = [
+  "bg-sky-500",
+  "bg-violet-500",
+  "bg-emerald-500",
+  "bg-amber-500",
+  "bg-rose-500",
+  "bg-cyan-500",
+  "bg-fuchsia-500",
+  "bg-lime-500",
+];
+
+function winRateToneClass(percent: number) {
+  if (percent >= 60) return "bg-emerald-500";
+  if (percent >= 40) return "bg-amber-500";
+  return "bg-rose-500";
+}
+
+function utilizationToneClass(percent: number) {
+  if (percent >= 80) return "bg-rose-500";
+  if (percent >= 40) return "bg-amber-500";
+  return "bg-sky-500";
+}
+
+/** Inline capital gauge so every strategy row carries its own visual, not just numbers. */
+function AllocationUtilizationMeter({ ratio }: { ratio: number }) {
+  const percent = Math.min(Math.max(ratio, 0), 1) * 100;
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <span className="tabular-nums">{(percent).toFixed(1)}%</span>
+      <span
+        aria-hidden
+        className="block h-1.5 w-20 overflow-hidden rounded-full bg-muted"
+      >
+        <span
+          className={cn(
+            "allocation-bar-fill block h-full rounded-full",
+            utilizationToneClass(percent),
+          )}
+          style={{ width: `${percent}%` }}
+        />
+      </span>
+    </div>
+  );
+}
+
+/** Stacked reserved/occupied bars measured against each strategy's own cap. */
+function StrategyCapitalMeterChart({
+  allocations,
+  resolveName,
+}: {
+  allocations: StrategyAllocationRow[];
+  resolveName: (allocation: StrategyAllocationRow) => string;
+}) {
+  const rows = allocations.map((allocation) => {
+    const cap = allocation.max_reserved_quote;
+    const reserved = Math.max(allocation.reserved_quote, 0);
+    const occupied = Math.max(allocation.occupied_quote, 0);
+    const denominator = cap != null && cap > 0 ? cap : Math.max(reserved + occupied, 1);
+    return {
+      id: allocation.strategy_id,
+      label: resolveName(allocation),
+      cap,
+      reserved,
+      occupied,
+      reservedPercent: Math.min((reserved / denominator) * 100, 100),
+      occupiedPercent: Math.min((occupied / denominator) * 100, 100),
+    };
+  });
+
+  return (
+    <div className="dashboard-rise rounded-md border border-border/70 bg-muted/10 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="font-medium text-sm">策略资金水位</h3>
+        <span className="flex items-center gap-3 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <span className="inline-block size-2 rounded-full bg-sky-500" /> 预留
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block size-2 rounded-full bg-amber-500" /> 占用
+          </span>
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        每条策略相对自身资金上限的实时占用，资金在共享钱包内竞争但互不越界
+      </p>
+      <div className="mt-3 grid gap-2.5">
+        {rows.map((row) => (
+          <div className="grid gap-1" key={row.id}>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <span className="truncate text-[11px]" title={row.label}>
+                {row.label}
+              </span>
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                上限 {row.cap == null ? "未设置" : currency.format(row.cap)} USDT
+              </span>
+            </div>
+            <span
+              aria-hidden
+              className="relative block h-3 overflow-hidden rounded-full bg-muted/60"
+            >
+              <span
+                className="bar-grow absolute inset-y-0 left-0 rounded-full bg-sky-500/80"
+                style={{ width: `${row.reservedPercent}%` }}
+              />
+              <span
+                className="bar-grow absolute inset-y-0 rounded-full bg-amber-500/90"
+                style={{
+                  left: `${row.reservedPercent}%`,
+                  width: `${Math.min(row.occupiedPercent, 100 - row.reservedPercent)}%`,
+                }}
+              />
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Diverging bars around a zero baseline so winners and losers read at a glance. */
+function StrategyPnlComparisonChart({
+  allocations,
+  resolveName,
+}: {
+  allocations: StrategyAllocationRow[];
+  resolveName: (allocation: StrategyAllocationRow) => string;
+}) {
+  const rows = allocations
+    .filter((allocation) => allocation.net_pnl_quote != null)
+    .map((allocation) => ({
+      id: allocation.strategy_id,
+      label: resolveName(allocation),
+      value: allocation.net_pnl_quote ?? 0,
+      returnRate: allocation.return_rate_pct,
+      trades: allocation.completed_trade_count,
+    }));
+  const maxAbs = Math.max(...rows.map((row) => Math.abs(row.value)), 1);
+
+  return (
+    <div className="dashboard-rise rounded-md border border-border/70 bg-muted/10 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="font-medium text-sm">各策略净收益对比</h3>
+        <span className="text-[10px] text-muted-foreground">策略归属净 PnL（USDT）</span>
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        仅来自各策略自己的成交与成本重放，不摊分共享钱包的未归因金额
+      </p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-center text-[11px] text-muted-foreground">
+          暂无可归属的已结算 PnL，策略产生完整交易后自动出现。
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-2.5">
+          {rows.map((row) => {
+            const positive = row.value >= 0;
+            const widthPercent = (Math.abs(row.value) / maxAbs) * 50;
+            return (
+              <div className="grid gap-1" key={row.id}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="truncate text-[11px]" title={row.label}>
+                    {row.label}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-[11px] tabular-nums",
+                      positive
+                        ? "text-emerald-600 dark:text-emerald-300"
+                        : "text-rose-600 dark:text-rose-300",
+                    )}
+                  >
+                    {positive ? "+" : "−"}
+                    {currency.format(Math.abs(row.value))}
+                    {row.returnRate == null
+                      ? ""
+                      : ` · ${row.returnRate >= 0 ? "+" : "−"}${Math.abs(row.returnRate).toFixed(2)}%`}
+                  </span>
+                </div>
+                <span
+                  aria-hidden
+                  className="relative block h-2.5 rounded-full bg-muted/60"
+                >
+                  <span className="absolute inset-y-0 left-1/2 w-px bg-border" />
+                  <span
+                    className={cn(
+                      "bar-grow absolute inset-y-0 rounded-full",
+                      positive ? "bg-emerald-500/80" : "bg-rose-500/80",
+                    )}
+                    style={
+                      positive
+                        ? { left: "50%", width: `${widthPercent}%` }
+                        : { right: "50%", width: `${widthPercent}%` }
+                    }
+                  />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Single stacked budget bar: how much of the shared wallet is promised to each
+ * strategy cap versus left unallocated. Reads the same persisted caps the
+ * allocator enforces, so the picture cannot drift from execution limits.
+ */
+function SharedWalletBudgetChart({
+  allocations,
+  resolveName,
+  walletAvailableQuote,
+  walletEquityQuote,
+}: {
+  allocations: StrategyAllocationRow[];
+  resolveName: (allocation: StrategyAllocationRow) => string;
+  walletAvailableQuote: number | null;
+  walletEquityQuote: number | null;
+}) {
+  const base = walletAvailableQuote ?? walletEquityQuote;
+  const rows = allocations
+    .map((allocation, index) => ({
+      id: allocation.strategy_id,
+      label: resolveName(allocation),
+      cap: Math.max(allocation.max_reserved_quote ?? 0, 0),
+      color: ALLOCATION_SEGMENT_COLORS[index % ALLOCATION_SEGMENT_COLORS.length],
+    }))
+    .filter((row) => row.cap > 0)
+    .sort((left, right) => right.cap - left.cap);
+  const allocated = rows.reduce((total, row) => total + row.cap, 0);
+  const scale = Math.max(allocated, base ?? 0, 1);
+  const unallocated = Math.max((base ?? allocated) - allocated, 0);
+  const overCommit = base != null && allocated > base;
+
+  return (
+    <div className="dashboard-rise rounded-md border border-border/70 bg-muted/10 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="font-medium text-sm">共享钱包资金预算</h3>
+        <span className="text-[10px] text-muted-foreground">
+          上限合计 {currency.format(allocated)} USDT
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        每条策略的资金上限都取自共享钱包的同一份余额，剩余部分留作未分配缓冲
+      </p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-center text-[11px] text-muted-foreground">
+          尚未为任何策略设置资金上限，设置后这里会显示预算拆分。
+        </p>
+      ) : (
+        <>
+          <span
+            aria-hidden
+            className="mt-3 flex h-4 w-full overflow-hidden rounded-full bg-muted/60"
+          >
+            {rows.map((row) => (
+              <span
+                className={cn("bar-grow block h-full", row.color)}
+                key={row.id}
+                style={{ width: `${(row.cap / scale) * 100}%` }}
+                title={`${row.label} · 上限 ${currency.format(row.cap)} USDT`}
+              />
+            ))}
+            {unallocated > 0 ? (
+              <span
+                className="bar-grow block h-full bg-muted-foreground/25"
+                style={{ width: `${(unallocated / scale) * 100}%` }}
+                title={`未分配 ${currency.format(unallocated)} USDT`}
+              />
+            ) : null}
+          </span>
+          <div className="mt-3 grid gap-1.5">
+            {rows.map((row) => (
+              <div
+                className="flex flex-wrap items-baseline justify-between gap-2 text-[11px]"
+                key={row.id}
+              >
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span
+                    aria-hidden
+                    className={cn("inline-block size-2 shrink-0 rounded-full", row.color)}
+                  />
+                  <span className="truncate" title={row.label}>
+                    {row.label}
+                  </span>
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {currency.format(row.cap)} USDT ·{" "}
+                  {base != null && base > 0
+                    ? `${((row.cap / base) * 100).toFixed(1)}%`
+                    : "—"}
+                </span>
+              </div>
+            ))}
+            {base != null ? (
+              <div className="flex flex-wrap items-baseline justify-between gap-2 border-border/60 border-t pt-1.5 text-[11px]">
+                <span className="flex items-baseline gap-1.5">
+                  <span
+                    aria-hidden
+                    className="inline-block size-2 shrink-0 rounded-full bg-muted-foreground/40"
+                  />
+                  未分配缓冲
+                </span>
+                <span className="text-muted-foreground tabular-nums">
+                  {currency.format(unallocated)} USDT ·{" "}
+                  {base > 0 ? `${((unallocated / base) * 100).toFixed(1)}%` : "—"}
+                </span>
+              </div>
+            ) : null}
+          </div>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            钱包可用余额 {walletAvailableQuote == null ? "—" : `${currency.format(walletAvailableQuote)} USDT`}
+            {overCommit
+              ? "；当前上限合计已超过可用余额，allocator 会按实时余额拒绝超额开仓。"
+              : "。"}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Win rate and turnover per strategy so trade quality is comparable at a glance. */
+function StrategyTradeQualityChart({
+  allocations,
+  resolveName,
+}: {
+  allocations: StrategyAllocationRow[];
+  resolveName: (allocation: StrategyAllocationRow) => string;
+}) {
+  const rows = allocations
+    .filter((allocation) => allocation.completed_trade_count > 0)
+    .map((allocation) => ({
+      id: allocation.strategy_id,
+      label: resolveName(allocation),
+      winRate: allocation.win_rate,
+      turnoverRatio: allocation.turnover_ratio,
+      fills: allocation.fill_count,
+      completed: allocation.completed_trade_count,
+      fee: allocation.fee_quote,
+    }));
+  const pendingFills = allocations.reduce(
+    (total, allocation) => total + Math.max(allocation.fill_count, 0),
+    0,
+  );
+
+  return (
+    <div className="dashboard-rise rounded-md border border-border/70 bg-muted/10 p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="font-medium text-sm">策略交易质量</h3>
+        <span className="text-[10px] text-muted-foreground">胜率 · 资金周转率</span>
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        胜率只统计已闭合交易，周转率表示资金被真正动用的比例；开仓未平仓前不计入
+      </p>
+      {rows.length === 0 ? (
+        <p className="mt-3 text-center text-[11px] text-muted-foreground">
+          {pendingFills === 0
+            ? "全部策略尚无成交，第一笔完整交易结算后这里会显示胜率与周转率。"
+            : `当前 ${pendingFills} 笔成交尚未形成闭合交易，平仓结算后这里会显示胜率与周转率。`}
+        </p>
+      ) : (
+        <div className="mt-3 grid gap-2.5">
+          {rows.map((row) => {
+            const winPercent = row.winRate == null ? null : row.winRate * 100;
+            return (
+              <div className="grid gap-1" key={row.id}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="truncate text-[11px]" title={row.label}>
+                    {row.label}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground tabular-nums">
+                    胜率 {winPercent == null ? "—" : `${winPercent.toFixed(1)}%`} · 周转率{" "}
+                    {row.turnoverRatio == null
+                      ? "—"
+                      : `${(row.turnoverRatio * 100).toFixed(1)}%`}
+                  </span>
+                </div>
+                <span
+                  aria-hidden
+                  className="block h-2 overflow-hidden rounded-full bg-muted/60"
+                >
+                  {winPercent == null ? null : (
+                    <span
+                      className={cn(
+                        "bar-grow block h-full rounded-full",
+                        winRateToneClass(winPercent),
+                      )}
+                      style={{ width: `${Math.min(Math.max(winPercent, 0), 100)}%` }}
+                    />
+                  )}
+                </span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  成交 {row.fills} 笔 · 完整交易 {row.completed} 次 · 手续费{" "}
+                  {formatQuote(row.fee)} USDT
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -639,6 +1079,7 @@ export default function DashboardPage() {
     marketLoading,
     marketData,
   );
+  const strategySwapClass = useStrategySwapClass(strategyId);
 
   const candles: CandlestickData[] =
     market?.candles.map((candle) => ({
@@ -729,16 +1170,6 @@ export default function DashboardPage() {
     : account
       ? account.equity_quote - account.quote_balance
       : 0;
-  const latestRsi =
-    market?.indicators[market.indicators.length - 1]?.rsi ?? null;
-  const rsiDescription =
-    latestRsi === null
-      ? "等待可用行情"
-      : latestRsi <= 30
-        ? "超卖区：低于 30"
-        : latestRsi >= 70
-          ? "超买区：高于 70"
-          : "中性区：30–70";
   const capitalUtilization =
     displayEquity > 0
       ? Math.min(
@@ -751,43 +1182,10 @@ export default function DashboardPage() {
     : capitalUtilization === null
       ? "等待策略账户"
       : "已投入资金 ÷ 当前组合权益";
-  const recentSignals = evaluations
-    .filter((item) => item.action !== "no_op")
-    .slice(0, 5);
-  const latestEvaluation = evaluations[0];
-  const enabledIndicators = [
-    ruleStrategy?.config.moving_average.enabled
-      ? `均线 ${ruleStrategy.config.moving_average.short_window}/${ruleStrategy.config.moving_average.long_window}`
-      : null,
-    ruleStrategy?.config.rsi.enabled
-      ? `RSI ${ruleStrategy.config.rsi.period}`
-      : null,
-    ruleStrategy?.config.bollinger.enabled
-      ? `布林带 ${ruleStrategy.config.bollinger.period}`
-      : null,
-    ruleStrategy?.config.momentum_macd.enabled
-      ? `MACD ${ruleStrategy.config.momentum_macd.macd_fast_window}/${ruleStrategy.config.momentum_macd.macd_slow_window}/${ruleStrategy.config.momentum_macd.macd_signal_window}`
-      : null,
-  ].filter((item): item is string => item !== null);
-  const recentlyScanned = evaluations.slice(0, 8);
-  const requestedCapital = latestEvaluation?.sizing?.requested_quote ?? 0;
-  const latestConfirmation = latestEvaluation?.entry_confirmation;
-  const latestConditionSummary =
-    latestEvaluation?.condition_summary ??
-    (latestConfirmation
-      ? {
-          matched: latestConfirmation.passed,
-          total: latestConfirmation.enabled,
-          required: latestConfirmation.required,
-          available: latestConfirmation.available,
-        }
-      : null);
-  const latestConditions = latestEvaluation?.conditions ?? [];
-  const { steps: funnelSteps, firstBlocker } = buildDashboardFunnel({
-    strategyRunning: ruleStrategy?.status === "running",
-    evaluation: latestEvaluation,
-  });
-
+  const resolveAllocationName = (allocation: StrategyAllocationRow) =>
+    strategiesQuery.data?.find(
+      (item) => item.strategy_id === allocation.strategy_id,
+    )?.name ?? allocation.kind;
 
   if (pageLoading) {
     return (
@@ -984,25 +1382,25 @@ export default function DashboardPage() {
                       {[
                         {
                           label: "钱包总权益 · 权威",
-                          value: formatQuote(sharedAccountSummary.wallet.total_equity_quote),
+                          value: sharedAccountSummary.wallet.total_equity_quote,
                           detail: "OKX 钱包同步值，不代表当前策略余额",
                           tone: "text-sky-600 dark:text-sky-300",
                         },
                         {
                           label: "钱包可用余额 · 权威",
-                          value: formatQuote(sharedAccountSummary.wallet.available_quote),
+                          value: sharedAccountSummary.wallet.available_quote,
                           detail: "可用资金，以钱包为准",
                           tone: "text-sky-600 dark:text-sky-300",
                         },
                         {
                           label: "策略可分配余额 · allocator",
-                          value: formatQuote(sharedAccountSummary.allocator.available_for_strategies_quote),
+                          value: sharedAccountSummary.allocator.available_for_strategies_quote,
                           detail: "扣除当前未结算预留后的可开仓资金",
                           tone: "text-cyan-600 dark:text-cyan-300",
                         },
                         {
                           label: "策略归属 PnL · 归因",
-                          value: formatQuote(sharedAccountSummary.strategy_pnl_total_quote),
+                          value: sharedAccountSummary.strategy_pnl_total_quote,
                           detail: "所有策略归属盈亏合计；不含纸面账本",
                           tone: sharedAccountSummary.strategy_pnl_total_quote == null
                             ? "text-muted-foreground"
@@ -1012,23 +1410,28 @@ export default function DashboardPage() {
                         },
                         {
                           label: "未归因权益 · 钱包",
-                          value: formatQuote(sharedAccountSummary.wallet.unassigned_equity_quote),
+                          value: sharedAccountSummary.wallet.unassigned_equity_quote,
                           detail: "钱包中尚不能归属到策略的部分，不计入策略 PnL",
                           tone: "text-amber-600 dark:text-amber-300",
                         },
                         {
                           label: "钱包 − 策略差额",
-                          value: formatQuote(sharedAccountSummary.wallet_strategy_reconciliation_delta_quote),
+                          value: sharedAccountSummary.wallet_strategy_reconciliation_delta_quote,
                           detail: "用于核对，非当前策略账户权益",
                           tone: "text-amber-600 dark:text-amber-300",
                         },
                       ].map((metric) => (
-                        <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-3" key={metric.label}>
+                        <div className="dashboard-kpi rounded-md border border-border/70 bg-muted/20 px-3 py-3" key={metric.label}>
                           <p className="font-medium text-[10px] text-muted-foreground uppercase tracking-[0.08em]">
                             {metric.label}
                           </p>
                           <p className={cn("mt-2 font-semibold text-lg tabular-nums", metric.tone)}>
-                            {metric.value} <span className="font-normal text-xs">USDT</span>
+                            {metric.value == null || !Number.isFinite(metric.value) ? (
+                              "—"
+                            ) : (
+                              <TerminalValue value={metric.value} />
+                            )}{" "}
+                            <span className="font-normal text-xs">USDT</span>
                           </p>
                           <p className="mt-1 text-[11px] text-muted-foreground">{metric.detail}</p>
                         </div>
@@ -1127,7 +1530,13 @@ export default function DashboardPage() {
                               </TableRow>
                             ) : (
                               sharedAccountSummary.allocator.allocations.map((allocation) => (
-                                <TableRow key={allocation.strategy_id}>
+                                <TableRow
+                                  className="strategy-row"
+                                  data-selected={allocation.strategy_id === strategyId}
+                                  key={allocation.strategy_id}
+                                  onClick={() => setActiveStrategyId(allocation.strategy_id)}
+                                  title="点击该行即可把首页图表、指标与下方明细切换为这条策略"
+                                >
                                 <TableCell>
                                     <div className="flex min-w-40 flex-col gap-1">
                                       <span className="font-medium">{strategiesQuery.data?.find((item) => item.strategy_id === allocation.strategy_id)?.name ?? allocation.kind}</span>
@@ -1148,7 +1557,10 @@ export default function DashboardPage() {
                                       </Link>
                                       <button
                                         className="w-fit text-left text-[10px] text-sky-600 hover:underline dark:text-sky-300"
-                                        onClick={() => focusStrategyCharts(allocation.strategy_id)}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          focusStrategyCharts(allocation.strategy_id);
+                                        }}
                                         type="button"
                                       >
                                         查看该策略行情与指标
@@ -1174,14 +1586,35 @@ export default function DashboardPage() {
                                       {ALLOCATION_STATE_LABELS[allocation.allocation_state] ?? allocation.allocation_state}{allocation.lifecycle_reason ? ` · ${allocation.lifecycle_reason}` : ""}
                                     </Badge>
                                   </TableCell>
-                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.reserved_quote)}</TableCell>
-                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.occupied_quote)}</TableCell>
-                                  <TableCell className="text-right tabular-nums">{(allocation.utilization_ratio * 100).toFixed(1)}%</TableCell>
-                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.released_quote)}</TableCell>
-                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.realized_pnl_quote)}</TableCell>
-                                  <TableCell className="text-right tabular-nums">{formatQuote(allocation.unrealized_pnl_quote)}</TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    <AnimatedQuote value={allocation.reserved_quote} />
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    <AnimatedQuote value={allocation.occupied_quote} />
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    <AllocationUtilizationMeter ratio={allocation.utilization_ratio} />
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    <AnimatedQuote value={allocation.released_quote} />
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    <AnimatedQuote value={allocation.realized_pnl_quote} />
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    <AnimatedQuote value={allocation.unrealized_pnl_quote} />
+                                  </TableCell>
                                   <TableCell className={cn("text-right tabular-nums", allocation.net_pnl_quote == null ? "text-muted-foreground" : allocation.net_pnl_quote >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300")}>
-                                    {(() => { const pnl = allocationPnlPresentation(allocation.net_pnl_quote, allocation.return_rate_pct); return <><div>{pnl.value} USDT</div><div className="text-xs">收益率 {pnl.returnRate}</div></>; })()}
+                                    {allocationPnlPresentation(allocation.net_pnl_quote, allocation.return_rate_pct).value === "—" ? (
+                                      <div>—</div>
+                                    ) : (
+                                      <div>
+                                        <AnimatedQuote value={allocation.net_pnl_quote} /> USDT
+                                      </div>
+                                    )}
+                                    <div className="text-xs">
+                                      收益率 {allocationPnlPresentation(allocation.net_pnl_quote, allocation.return_rate_pct).returnRate}
+                                    </div>
                                   </TableCell>
                                   <TableCell className="min-w-56 text-xs tabular-nums">
                                     <div>成交 {allocation.fill_count} 笔 · 完整交易 {allocation.completed_trade_count} 次</div>
@@ -1202,6 +1635,28 @@ export default function DashboardPage() {
                           </TableBody>
                         </Table>
                       </div>
+                      {sharedAccountSummary.allocator.allocations.length > 0 ? (
+                        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+                          <StrategyCapitalMeterChart
+                            allocations={sharedAccountSummary.allocator.allocations}
+                            resolveName={resolveAllocationName}
+                          />
+                          <StrategyPnlComparisonChart
+                            allocations={sharedAccountSummary.allocator.allocations}
+                            resolveName={resolveAllocationName}
+                          />
+                          <SharedWalletBudgetChart
+                            allocations={sharedAccountSummary.allocator.allocations}
+                            resolveName={resolveAllocationName}
+                            walletAvailableQuote={sharedAccountSummary.wallet.available_quote}
+                            walletEquityQuote={sharedAccountSummary.wallet.total_equity_quote}
+                          />
+                          <StrategyTradeQualityChart
+                            allocations={sharedAccountSummary.allocator.allocations}
+                            resolveName={resolveAllocationName}
+                          />
+                        </div>
+                      ) : null}
                       {sharedAccountSummary.allocator.unallocated_strategies.length > 0 ? (
                         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
                           <p className="font-medium text-xs">未纳入该共享账户资金池的策略（只读）</p>
@@ -1232,9 +1687,18 @@ export default function DashboardPage() {
             </Card>
           </section>
         ) : null}
+        <DashboardStrategyAttribution
+          className={strategySwapClass}
+          capitalUtilization={capitalUtilization}
+          capitalUtilizationDescription={utilizationDescription}
+          evaluations={evaluations}
+          strategyId={strategyId}
+          strategyName={ruleStrategy?.name ?? "当前策略"}
+          strategyRunning={ruleStrategy?.status === "running"}
+        />
         <section
           aria-label="行情走势与技术指标"
-          className="grid gap-4"
+          className={cn("grid gap-4", strategySwapClass)}
           id="market-charts"
         >
           <Card className="dashboard-panel overflow-hidden rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
@@ -1521,7 +1985,7 @@ export default function DashboardPage() {
           </Card>
         </section>
         <section
-          className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]"
+          className={cn("grid gap-4 lg:grid-cols-[1.2fr_0.8fr]", strategySwapClass)}
           aria-label="策略监控与风险"
         >
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">

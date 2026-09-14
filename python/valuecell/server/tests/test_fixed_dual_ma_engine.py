@@ -74,6 +74,20 @@ def test_position_timeout_exits_when_stop_and_signal_are_absent():
     assert timeout.actual == pytest.approx(168)
     assert timeout.threshold == 168
     assert timeout.operator == ">="
+    assert timeout.category == "exit"
+
+
+def test_engine_labels_entry_and_exit_conditions_for_the_shared_read_model():
+    entry = FixedDualMaEngine().evaluate(_input([100] * 18 + [90] * 4))
+    assert {c.code for c in entry.conditions} >= {"trend.sma10_vs_sma20", "entry.price_cross_up"}
+    assert {c.category for c in entry.conditions} == {"indicator"}
+
+    held = FixedDualMaEngine().evaluate(
+        _input([100] * 22, position=_position("long"),
+               observed_at=BASE_TIME + timedelta(hours=1))
+    )
+    exit_codes = {"exit.stop_loss", "exit.timeout", "exit.opposite_cross"}
+    assert [c.category for c in held.conditions if c.code in exit_codes] == ["exit"] * 3
 
 
 def test_opposite_cross_exits_existing_long_position():

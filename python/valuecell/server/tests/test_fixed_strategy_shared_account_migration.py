@@ -169,3 +169,60 @@ def test_fixed_strategy_without_a_shared_account_keeps_its_scope() -> None:
     orphan = session.query(RuleStrategy).filter_by(strategy_id="rule-orphan").one()
     assert orphan.config["execution"]["environment"] == "paper"
     assert orphan.status == "running"
+
+
+def test_paper_mode_flag_is_rederived_from_the_recorded_environment() -> None:
+    """The stale flag the shared-account cutover left behind is repaired once."""
+
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    session.add(Tenant(id="tenant-a", name="Tenant A"))
+    session.add(
+        RuleStrategy(
+            strategy_id="rule-demo-stale",
+            tenant_id="tenant-a",
+            name="Demo strategy with a stale flag",
+            strategy_kind="configurable_rule",
+            status="running",
+            paper_mode=True,
+            config={"execution": {"environment": "okx_demo", "sandbox_connection_id": "credential-a"}},
+        )
+    )
+    session.add(
+        RuleStrategy(
+            strategy_id="rule-paper-consistent",
+            tenant_id="tenant-a",
+            name="Paper strategy",
+            strategy_kind="configurable_rule",
+            status="running",
+            paper_mode=True,
+            config={"execution": {"environment": "paper", "sandbox_connection_id": None}},
+        )
+    )
+    session.add(
+        RuleStrategy(
+            strategy_id="rule-no-environment",
+            tenant_id="tenant-a",
+            name="Strategy without a recorded environment",
+            strategy_kind="configurable_rule",
+            status="running",
+            paper_mode=True,
+            config={"execution": {}},
+        )
+    )
+    session.commit()
+
+    assert migrations.migrate_rule_strategy_paper_mode_flag(session) is True
+    assert migrations.migrate_rule_strategy_paper_mode_flag(session) is False
+
+    def paper_mode(strategy_id: str) -> bool:
+        return bool(
+            session.query(RuleStrategy).filter_by(strategy_id=strategy_id).one().paper_mode
+        )
+
+    # The recorded execution environment is the authority, so a Demo strategy can
+    # never keep reporting itself as paper-only.
+    assert paper_mode("rule-demo-stale") is False
+    assert paper_mode("rule-paper-consistent") is True
+    assert paper_mode("rule-no-environment") is True

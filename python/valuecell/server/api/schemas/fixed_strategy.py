@@ -16,6 +16,7 @@ FixedSignalAction = Literal[
     "blocked",
     "no_signal",
 ]
+FixedConditionCategory = Literal["indicator", "exit", "risk"]
 
 
 class FixedStrategyModel(BaseModel):
@@ -55,6 +56,10 @@ class FixedCondition(FixedStrategyModel):
 
     code: str = Field(min_length=1, max_length=128)
     label: str = Field(min_length=1, max_length=255)
+    # Decision bucket for the shared six-stage read model. Fixed engines own
+    # this classification because only the engine knows whether a fact gates an
+    # entry, a hold, or an exit; readers must never re-derive it from the code.
+    category: FixedConditionCategory = "indicator"
     state: Literal["triggered", "not_triggered", "blocked", "unavailable"]
     actual: float | str | bool | None = None
     threshold: float | str | bool | None = None

@@ -72,6 +72,51 @@ REST_PROVIDER_INTERVALS: dict[str, dict[str, str]] = {
     "okx": {"1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1Dutc"},
 }
 
+
+def _finite_number(value: object) -> float | None:
+    """Return a finite float or None; provider payloads are untrusted."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def _optional_candle(
+    *,
+    ts: int,
+    open_value: object,
+    high: object,
+    low: object,
+    close: object,
+    volume: object,
+    quote_volume: object | None = None,
+) -> CryptoCandleData | None:
+    """Build one candle row, dropping rows the provider did not prove.
+
+    A malformed price or volume must drop the row rather than corrupt the series
+    with a zero, and an unusable quote turnover must stay ``None`` so downstream
+    readers can tell "unavailable" apart from "zero".
+    """
+    open_number = _finite_number(open_value)
+    high_number = _finite_number(high)
+    low_number = _finite_number(low)
+    close_number = _finite_number(close)
+    volume_number = _finite_number(volume)
+    if None in (open_number, high_number, low_number, close_number, volume_number):
+        return None
+    return CryptoCandleData(
+        ts=ts,
+        open=open_number,
+        high=high_number,
+        low=low_number,
+        close=close_number,
+        volume=volume_number,
+        quote_volume=_finite_number(quote_volume),
+    )
+
 MARKET_SNAPSHOT_FILENAME = "market_snapshot.json"
 
 SUPPORTED_CRYPTO_SYMBOLS: tuple[str, ...] = (
@@ -799,24 +844,21 @@ class CryptoMarketService:
             if not isinstance(row, list) or len(row) < 6:
                 continue
             try:
-                if provider == "okx":
-                    candle = CryptoCandleData(
-                        ts=int(row[0]),
-                        open=float(row[1]),
-                        high=float(row[2]),
-                        low=float(row[3]),
-                        close=float(row[4]),
-                        volume=float(row[5]),
-                    )
-                else:
-                    candle = CryptoCandleData(
-                        ts=int(row[0]),
-                        open=float(row[1]),
-                        high=float(row[2]),
-                        low=float(row[3]),
-                        close=float(row[4]),
-                        volume=float(row[5]),
-                    )
+                # Both OKX candles and Binance/MEXC klines carry the candle's
+                # quote-currency turnover at index 7. The fixed leader strategy
+                # reads it as 24h liquidity, so the fact must travel with the
+                # candle instead of being dropped at this boundary.
+                candle = CryptoCandleData(
+                    ts=int(row[0]),
+                    open=float(row[1]),
+                    high=float(row[2]),
+                    low=float(row[3]),
+                    close=float(row[4]),
+                    volume=float(row[5]),
+                    quote_volume=(
+                        _finite_number(row[7]) if len(row) > 7 else None
+                    ),
+                )
             except (TypeError, ValueError):
                 continue
             candles.append(candle)
@@ -891,18 +933,24 @@ class CryptoMarketService:
         )
         with urlopen(request, timeout=FETCH_TIMEOUT_S) as response:
             raw = json.loads(response.read().decode("utf-8"))
-        return [
-            CryptoCandleData(
+        candles: list[CryptoCandleData] = []
+        for row in raw or []:
+            if len(row) < 6:
+                continue
+            # Gate returns the candle's quote turnover first, so index 1 is the
+            # quote-volume fact the fixed leader strategy needs.
+            candle = _optional_candle(
                 ts=int(row[0]) * 1000,
-                volume=float(row[1]),
-                close=float(row[2]),
-                high=float(row[3]),
-                low=float(row[4]),
-                open=float(row[5]),
+                open_value=row[5],
+                high=row[3],
+                low=row[4],
+                close=row[2],
+                volume=row[1],
+                quote_volume=row[1],
             )
-            for row in raw
-            if len(row) >= 6
-        ]
+            if candle is not None:
+                candles.append(candle)
+        return candles
 
     def _compute_indicators(
         self,
@@ -1022,17 +1070,27 @@ class CryptoMarketService:
             else:
                 bucket = (timestamp.year, 1)
             buckets.setdefault(bucket, []).append(candle)
-        return [
-            CryptoCandleData(
-                ts=items[0].ts,
-                open=items[0].open,
-                high=max(item.high for item in items),
-                low=min(item.low for item in items),
-                close=items[-1].close,
-                volume=sum(item.volume for item in items),
+        aggregated: list[CryptoCandleData] = []
+        for items in buckets.values():
+            quote_volumes = [item.quote_volume for item in items]
+            aggregated.append(
+                CryptoCandleData(
+                    ts=items[0].ts,
+                    open=items[0].open,
+                    high=max(item.high for item in items),
+                    low=min(item.low for item in items),
+                    close=items[-1].close,
+                    volume=sum(item.volume for item in items),
+                    # A bucket-level quote total is only proven when every
+                    # source candle proved its own quote turnover.
+                    quote_volume=(
+                        sum(item.quote_volume for item in items)
+                        if all(value is not None for value in quote_volumes)
+                        else None
+                    ),
+                )
             )
-            for items in buckets.values()
-        ]
+        return aggregated
 
     def _normalize_lookback(self, lookback: int) -> int:
         if lookback <= 0:
@@ -1277,13 +1335,7 @@ class CryptoMarketService:
         return symbol.replace("-", "/")
 
     def _finite(self, value: object) -> float | None:
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return None
-        if not np.isfinite(number):
-            return None
-        return number
+        return _finite_number(value)
 
 
 _crypto_market_service: CryptoMarketService | None = None

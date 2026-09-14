@@ -1,7 +1,21 @@
 import type { StrategyKind } from "./multi-strategy";
 
 export type RuleStrategyStatus = "running" | "stopped" | "archived";
-export type RuleStrategyAction = "entry" | "add" | "reduce" | "close" | "buy" | "sell" | "no_op";
+export type RuleStrategyAction =
+  | "entry"
+  | "add"
+  | "reduce"
+  | "close"
+  | "buy"
+  | "sell"
+  | "no_op"
+  // Code-owned fixed engines persist their own decision verbs.
+  | "long_entry"
+  | "short_entry"
+  | "exit"
+  | "hold"
+  | "blocked"
+  | "no_signal";
 export type RuleConditionState =
   | "triggered"
   | "not_triggered"
@@ -290,12 +304,22 @@ export interface RuleStrategyExecutionBatchPage {
   total_pages: number;
 }
 
+export type RuleStrategyConditionCategory = "indicator" | "exit" | "risk";
+
 export interface RuleStrategyCondition {
   code: string;
   label?: string | null;
-  category: "indicator" | "exit" | "risk";
+  category?: RuleStrategyConditionCategory | null;
   state: RuleConditionState;
   detail: string;
+  /**
+   * Fixed engines persist the comparison as top-level actual/threshold/operator;
+   * the read model also mirrors it into `values` as left/right/comparator so
+   * both shapes stay readable without the reader guessing.
+   */
+  actual?: number | string | boolean | null;
+  threshold?: number | string | boolean | null;
+  operator?: string | null;
   values: Record<string, number | string | boolean | null>;
 }
 
