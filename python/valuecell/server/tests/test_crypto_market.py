@@ -143,6 +143,31 @@ def test_public_candle_requests_send_stable_json_headers(monkeypatch):
     assert len(candles) == 1
 
 
+def test_gate_candles_keep_base_and_quote_volume_in_correct_fields(monkeypatch):
+    service = CryptoMarketService()
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'[[1700000000,"1250.5","101","102","100","12.5"]]'
+
+    monkeypatch.setattr(
+        crypto_market_module,
+        "urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+    candles = service._fetch_gate_candle_page("BTC-USDT", "4h", 1, None, None)
+
+    assert len(candles) == 1
+    assert candles[0].volume == pytest.approx(12.5)
+    assert candles[0].quote_volume == pytest.approx(1250.5)
+
+
 def test_monitor_metadata_uses_completed_raw_quote_volume(monkeypatch):
     service = CryptoMarketService()
     observed_at = datetime(2026, 8, 6, 12, tzinfo=timezone.utc)

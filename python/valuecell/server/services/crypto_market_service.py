@@ -945,7 +945,7 @@ class CryptoMarketService:
                 high=row[3],
                 low=row[4],
                 close=row[2],
-                volume=row[1],
+                volume=row[5],
                 quote_volume=row[1],
             )
             if candle is not None:

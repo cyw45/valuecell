@@ -892,7 +892,24 @@ class StrategyScheduler:
             return
         fixed_candles = _fixed_candles_from_market(market_data.symbols)
         if not fixed_candles:
+            _safe_warning("FIXED_STRATEGY_NO_MARKET_DATA", count=len(symbols))
+            self._record_diagnostics(
+                strategy_id,
+                tenant_id,
+                symbols,
+                stage="market_data",
+                reason_code="missing_candles",
+                reason="固定策略没有可用的最新 4h K 线，未生成 Paper 信号。",
+                retry_after_s=_INTERVAL_SECONDS["4h"],
+            )
             return
+        logger.info(
+            "FixedStrategy tick started strategy_id={} kind={} symbols={} candles={}",
+            strategy_id,
+            strategy_kind,
+            len(symbols),
+            len(fixed_candles),
+        )
         observed_at = datetime.fromtimestamp(
             max(candle.timestamp_ms for candle in fixed_candles) / 1000,
             tz=timezone.utc,
@@ -976,8 +993,26 @@ class StrategyScheduler:
                 )
 
         if strategy_kind == "pair_rotation":
-            await evaluate_and_dispatch(
-                FixedEngineInput(candles=fixed_candles, observed_at=observed_at)
+            try:
+                await evaluate_and_dispatch(
+                    FixedEngineInput(candles=fixed_candles, observed_at=observed_at)
+                )
+            except Exception as exc:  # noqa: BLE001
+                _safe_warning("FIXED_STRATEGY_EVALUATION_FAILED", count=len(symbols), exc=exc)
+                self._record_diagnostics(
+                    strategy_id,
+                    tenant_id,
+                    symbols,
+                    stage="evaluation",
+                    reason_code="evaluation_failed",
+                    reason="固定策略评估失败，已隔离本轮错误并等待下次 4h 评估。",
+                    retry_after_s=_INTERVAL_SECONDS["4h"],
+                )
+            logger.info(
+                "FixedStrategy tick completed strategy_id={} kind={} symbols={}",
+                strategy_id,
+                strategy_kind,
+                len(symbols),
             )
             return
         by_symbol: dict[str, list[FixedCandle]] = {}
@@ -987,10 +1022,28 @@ class StrategyScheduler:
         for symbol in symbols:
             candles = by_symbol.get(symbol)
             if candles:
-                await evaluate_and_dispatch(
-                    FixedEngineInput(candles=candles, observed_at=observed_at),
-                    btc_candles,
-                )
+                try:
+                    await evaluate_and_dispatch(
+                        FixedEngineInput(candles=candles, observed_at=observed_at),
+                        btc_candles,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    _safe_warning("FIXED_STRATEGY_EVALUATION_FAILED", count=1, exc=exc)
+                    self._record_diagnostics(
+                        strategy_id,
+                        tenant_id,
+                        [symbol],
+                        stage="evaluation",
+                        reason_code="evaluation_failed",
+                        reason="固定策略评估失败，已隔离该交易对并等待下次 4h 评估。",
+                        retry_after_s=_INTERVAL_SECONDS["4h"],
+                    )
+        logger.info(
+            "FixedStrategy tick completed strategy_id={} kind={} symbols={}",
+            strategy_id,
+            strategy_kind,
+            len(symbols),
+        )
 
     @staticmethod
     def _record_market_data_diagnostics(
