@@ -348,8 +348,12 @@ const COMPARISON_VALUE_KEYS = new Set([
 
 function fallbackConditionDetail(condition: RuleStrategyCondition) {
   if (condition.state === "unavailable") {
-    const required = condition.values.required_candles;
-    const supplied = condition.values.supplied_candles;
+    // Availability facts (for example the leader engine's quote-volume
+    // window) persist no value map, so the candle counters are read
+    // defensively instead of assuming the key exists.
+    const values = condition.values ?? {};
+    const required = values.required_candles;
+    const supplied = values.supplied_candles;
     if (typeof required === "number" && typeof supplied === "number") {
       return `K 线历史不足：需要 ${required} 根，已提供 ${supplied} 根。`;
     }
@@ -626,7 +630,7 @@ export function RuleStrategyEvaluationPath({
                   ? `实际值 ${comparison.actual} ${comparison.symbol} 阈值 ${comparison.threshold}`
                   : null;
                 const localizedDetail = conditionDetailIsLocalized(condition);
-                const values = Object.entries(condition.values).filter(
+                const values = Object.entries(condition.values ?? {}).filter(
                   (
                     entry,
                   ): entry is [string, string | number | boolean] =>

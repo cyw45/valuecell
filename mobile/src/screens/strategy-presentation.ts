@@ -106,7 +106,9 @@ function formatConditionValue(key: string, value: string | number | boolean | nu
 }
 
 function fallbackConditionDetail(condition: RuleStrategyCondition): string {
-  const values = condition.values;
+  // Availability conditions persist no value map, so read it defensively
+  // instead of assuming the key exists.
+  const values = condition.values ?? {};
   if (condition.state === "unavailable") {
     const required = values.required_candles;
     const supplied = values.supplied_candles;
@@ -221,7 +223,7 @@ export function conditionDetail(condition: RuleStrategyCondition): string {
 }
 
 export function conditionFacts(condition: RuleStrategyCondition): Array<{ label: string; value: string }> {
-  return Object.entries(condition.values).map(([key, value]) => ({
+  return Object.entries(condition.values ?? {}).map(([key, value]) => ({
     label: CONDITION_VALUE_LABELS[key] ?? `参数 ${key}`,
     value: formatConditionValue(key, value),
   }));

@@ -427,7 +427,13 @@ export interface RuleStrategyCondition {
   category: "indicator" | "exit" | "risk";
   state: RuleStrategyConditionState;
   detail: string;
-  values: Record<string, number | string | boolean | null>;
+  /**
+   * Engines that persist only a comparison - or an availability fact with no
+   * numbers at all, such as the leader engine's quote-volume window - omit this
+   * map entirely, so readers must tolerate its absence instead of assuming an
+   * object.
+   */
+  values?: Record<string, number | string | boolean | null> | null;
 }
 
 export interface RuleStrategyIndicators {

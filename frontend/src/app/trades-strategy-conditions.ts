@@ -34,7 +34,9 @@ function summaryConditions(order: SandboxOrder): DecisionCondition[] {
   return preferred.length > 0 ? preferred : conditions;
 }
 
-export function formatConditionValues(values?: Record<string, unknown>): string {
+export function formatConditionValues(
+  values?: Record<string, unknown> | null,
+): string {
   if (!values || Object.keys(values).length === 0) return "";
   const comparator = values.comparator;
   if (
