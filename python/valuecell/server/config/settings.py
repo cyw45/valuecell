@@ -297,6 +297,51 @@ class Settings:
         self.MARKET_DATA_REQUEST_TIMEOUT_S = _positive_float_env(
             "VALUECELL_MARKET_DATA_REQUEST_TIMEOUT_S", 20.0
         )
+        # Crypto symbol universe: the tradeable catalogue every strategy
+        # observes. It is re-derived from the exchange on a schedule so a
+        # delisted instrument can never be bought and a newly liquid one
+        # becomes electable without a code change.
+        self.CRYPTO_UNIVERSE_SYNC_ENABLED = (
+            os.getenv("VALUECELL_CRYPTO_UNIVERSE_SYNC_ENABLED", "true")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        )
+        self.CRYPTO_UNIVERSE_SYNC_INTERVAL_DAYS = _positive_int_env(
+            "VALUECELL_CRYPTO_UNIVERSE_SYNC_INTERVAL_DAYS", 90
+        )
+        self.CRYPTO_UNIVERSE_QUOTE_ASSET = (
+            os.getenv("VALUECELL_CRYPTO_UNIVERSE_QUOTE_ASSET", "USDT").strip().upper()
+        )
+        self.CRYPTO_UNIVERSE_MIN_LISTING_AGE_DAYS = _positive_int_env(
+            "VALUECELL_CRYPTO_UNIVERSE_MIN_LISTING_AGE_DAYS", 90
+        )
+        self.CRYPTO_UNIVERSE_MIN_AVERAGE_QUOTE_VOLUME_30D = _positive_float_env(
+            "VALUECELL_CRYPTO_UNIVERSE_MIN_AVERAGE_QUOTE_VOLUME_30D", 5_000_000.0
+        )
+        self.CRYPTO_UNIVERSE_MAX_SYMBOLS = _positive_int_env(
+            "VALUECELL_CRYPTO_UNIVERSE_MAX_SYMBOLS", 120
+        )
+        self.CRYPTO_UNIVERSE_FETCH_CONCURRENCY = _positive_int_env(
+            "VALUECELL_CRYPTO_UNIVERSE_FETCH_CONCURRENCY", 6
+        )
+        self.CRYPTO_UNIVERSE_REQUEST_TIMEOUT_S = _positive_float_env(
+            "VALUECELL_CRYPTO_UNIVERSE_REQUEST_TIMEOUT_S", 15.0
+        )
+        self.CRYPTO_UNIVERSE_VOLUME_WINDOW_DAYS = _positive_int_env(
+            "VALUECELL_CRYPTO_UNIVERSE_VOLUME_WINDOW_DAYS", 30
+        )
+        self.CRYPTO_UNIVERSE_STRATEGY_MAX_SYMBOLS = _positive_int_env(
+            "VALUECELL_CRYPTO_UNIVERSE_STRATEGY_MAX_SYMBOLS", 100
+        )
+        if (
+            self.CRYPTO_UNIVERSE_STRATEGY_MAX_SYMBOLS
+            > self.CRYPTO_UNIVERSE_MAX_SYMBOLS
+        ):
+            raise ValueError(
+                "VALUECELL_CRYPTO_UNIVERSE_STRATEGY_MAX_SYMBOLS must not exceed "
+                "VALUECELL_CRYPTO_UNIVERSE_MAX_SYMBOLS"
+            )
         self.DEMO_ACCOUNT_READ_TIMEOUT_S = _positive_float_env(
             "VALUECELL_DEMO_ACCOUNT_READ_TIMEOUT_S", 12.0
         )

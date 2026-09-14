@@ -361,8 +361,33 @@ class CryptoMarketService:
             "max_concurrent_fetches": get_settings().MARKET_DATA_MAX_CONCURRENT_FETCHES,
         }
 
+    @classmethod
+    def _is_catalogue_symbol(cls, symbol: str) -> bool:
+        """A symbol is tradable when the published catalogue admits it.
+
+        The code-owned tuple stays as the fallback for a fresh database that has
+        not been seeded yet, so behaviour cannot depend on sync timing.
+        """
+
+        if symbol in cls._symbol_set:
+            return True
+        from valuecell.server.db.repositories.crypto_universe_repository import (
+            cached_active_symbols,
+        )
+
+        return symbol in cached_active_symbols()
+
     def get_supported_symbols(self) -> CryptoSymbolCatalogData:
-        return CryptoSymbolCatalogData(symbols=list(SUPPORTED_CRYPTO_SYMBOLS))
+        """Return the currently published catalogue, falling back to the seed."""
+
+        from valuecell.server.db.repositories.crypto_universe_repository import (
+            cached_active_symbols,
+        )
+
+        catalogue = cached_active_symbols()
+        return CryptoSymbolCatalogData(
+            symbols=sorted(catalogue) if catalogue else list(SUPPORTED_CRYPTO_SYMBOLS)
+        )
 
     async def get_indicators(
         self,
@@ -1013,7 +1038,7 @@ class CryptoMarketService:
             symbol = raw_symbol.strip().upper().replace("/", "-")
             if not symbol.endswith("-USDT"):
                 raise ValueError(f"Only USDT crypto symbols are supported: {raw_symbol}")
-            if not allow_dynamic_symbols and symbol not in self._symbol_set:
+            if not allow_dynamic_symbols and not self._is_catalogue_symbol(symbol):
                 raise ValueError(f"Unsupported crypto symbol: {symbol}")
             if symbol not in normalized:
                 normalized.append(symbol)

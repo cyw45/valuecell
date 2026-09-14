@@ -193,6 +193,7 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_strategy_demo_account_snapshots,
         migrate_strategy_official_test_baselines,
         migrate_strategy_monitor_metadata,
+        migrate_crypto_symbol_universe,
         migrate_strategy_product_state,
         migrate_multi_strategy_account,
         migrate_fixed_strategy_paper_ledger,
@@ -220,6 +221,15 @@ def _run_required_execution_attribution_migration() -> None:
         migrate_leader_spot_v19_storage(session)
         migrate_leader_spot_v19_quality(session)
         migrate_leader_spot_v19_market_state(session)
+        migrate_crypto_symbol_universe(session)
+        # Seed the catalogue synchronously so a fresh install has a tradable
+        # symbol list before the first background sync reaches OKX.
+        try:
+            from ..services.crypto_universe_service import CryptoSymbolUniverseService
+
+            CryptoSymbolUniverseService(db_session=session).seed_from_code_defaults()
+        except Exception as exc:
+            logger.warning("Crypto symbol universe seeding deferred: {}", exc)
     finally:
         session.close()
 
@@ -376,6 +386,41 @@ def create_app() -> FastAPI:
                 id="_scheduler_sync_running",
                 replace_existing=True,
                 coalesce=True,
+            )
+            def _sync_crypto_symbol_universe() -> None:
+                """Rebuild the exchange-derived symbol catalogue when due.
+
+                Runs hourly and lets the service decide whether a cycle elapsed,
+                so a deploy year-round keeps the catalogue fresh without any
+                manual step. An OKX outage leaves the published version active.
+                """
+
+                from ..services.crypto_universe_service import (
+                    CryptoSymbolUniverseService,
+                )
+
+                try:
+                    service = CryptoSymbolUniverseService()
+                    service.seed_from_code_defaults()
+                    if not service.is_due():
+                        return
+                    result = service.sync()
+                    logger.info(
+                        "Crypto symbol universe sync status={} version={} admitted={}",
+                        result.status,
+                        result.version,
+                        result.admitted,
+                    )
+                except Exception as exc:
+                    logger.warning("Crypto symbol universe sync deferred: {}", exc)
+
+            _scheduler._scheduler.add_job(
+                _sync_crypto_symbol_universe,
+                trigger=IntervalTrigger(seconds=3600),
+                id="_scheduler_sync_crypto_symbol_universe",
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
             )
             _scheduler._scheduler.add_job(
                 _review_running_monitors,

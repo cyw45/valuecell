@@ -28,7 +28,10 @@ import {
   useState,
 } from "react";
 import { Link, useSearchParams } from "react-router";
-import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
+import {
+  useGetCryptoMarketIndicators,
+  useGetCryptoSymbolUniverse,
+} from "@/api/crypto-market";
 import {
   useRuleStrategy,
   useRuleStrategyDemoExecution,
@@ -53,6 +56,11 @@ import {
   formatOptionalPercent,
 } from "@/app/dashboard-demo-execution";
 import { dashboardRefreshTargets } from "@/app/dashboard-refresh";
+import {
+  buildWatchedBySymbol,
+  mergeChartSymbols,
+  universeAdmittedSymbols,
+} from "@/app/symbol-universe";
 import { DashboardStrategyManagement } from "@/app/dashboard-strategy-management";
 import {
   shouldShowCandlestickLoading,
@@ -103,6 +111,7 @@ import {
   type RsiBollingerMode,
 } from "@/components/valuecell/charts/market-indicator-panel";
 import { PnlLineChart } from "@/components/valuecell/charts/pnl-line-chart";
+import SymbolUniverseBoard from "@/components/valuecell/charts/symbol-universe-board";
 import { DashboardStrategyAttribution } from "@/components/valuecell/dashboard-strategy-attribution";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 import { cn } from "@/lib/utils";
@@ -960,6 +969,21 @@ export default function DashboardPage() {
     () => Array.from(new Set([...trackedSymbols, ...activeSymbols])),
     [activeSymbols, trackedSymbols],
   );
+  const universeQuery = useGetCryptoSymbolUniverse();
+  const universeSymbols = useMemo(
+    () => universeAdmittedSymbols(universeQuery.data),
+    [universeQuery.data],
+  );
+  const watchedBySymbol = useMemo(
+    () => buildWatchedBySymbol(strategiesQuery.data),
+    [strategiesQuery.data],
+  );
+  // The chart selector spans the active strategy's symbols plus the whole venue
+  // catalogue, so the 币种清单 board can drive the chart without a re-scope.
+  const chartSymbols = useMemo(
+    () => mergeChartSymbols(["BTC-USDT", ...marketSymbols], universeSymbols),
+    [marketSymbols, universeSymbols],
+  );
   const [selectedSymbol, setSelectedSymbol] = useState("BTC-USDT");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedEvaluationId, setSelectedEvaluationId] = useState<string | null>(null);
@@ -1016,11 +1040,11 @@ export default function DashboardPage() {
     strategyQuery,
     tradesQuery,
   ]);
-  const selectedIsAvailable = marketSymbols.includes(selectedSymbol);
+  const selectedIsAvailable = chartSymbols.includes(selectedSymbol);
   const effectiveSymbol =
-    selectedIsAvailable || marketSymbols.length === 0
+    selectedIsAvailable || chartSymbols.length === 0
       ? selectedSymbol
-      : marketSymbols[0];
+      : chartSymbols[0];
   const fromTsMs = useMemo(() => {
     if (fromDate) return new Date(`${fromDate}T00:00:00Z`).getTime();
     const days =
@@ -1769,13 +1793,11 @@ export default function DashboardPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Array.from(new Set(["BTC-USDT", ...marketSymbols])).map(
-                        (symbol) => (
-                          <SelectItem key={symbol} value={symbol}>
-                            {toDashboardSymbol(symbol)}
-                          </SelectItem>
-                        ),
-                      )}
+                      {chartSymbols.map((symbol) => (
+                        <SelectItem key={symbol} value={symbol}>
+                          {toDashboardSymbol(symbol)}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                   <Select
@@ -1855,25 +1877,23 @@ export default function DashboardPage() {
                 className="flex flex-wrap items-center gap-1 border-border/60 border-t pt-3"
               >
                 <span className="mr-1 text-muted-foreground text-xs">
-                  点击策略币种动态切换走势与指标
+                  点击下方清单或币种动态切换走势与指标
                 </span>
-                {Array.from(new Set(["BTC-USDT", ...marketSymbols]))
-                  .slice(0, 14)
-                  .map((symbol) => (
-                    <button
-                      className={cn(
-                        "shrink-0 rounded-md border px-2.5 py-1 font-medium text-xs transition-colors",
-                        effectiveSymbol === symbol
-                          ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300"
-                          : "border-border text-muted-foreground hover:bg-muted",
-                      )}
-                      key={symbol}
-                      onClick={() => setSelectedSymbol(symbol)}
-                      type="button"
-                    >
-                      {toDashboardSymbol(symbol)}
-                    </button>
-                  ))}
+                {chartSymbols.slice(0, 14).map((symbol) => (
+                  <button
+                    className={cn(
+                      "shrink-0 rounded-md border px-2.5 py-1 font-medium text-xs transition-colors",
+                      effectiveSymbol === symbol
+                        ? "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-300"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                    )}
+                    key={symbol}
+                    onClick={() => setSelectedSymbol(symbol)}
+                    type="button"
+                  >
+                    {toDashboardSymbol(symbol)}
+                  </button>
+                ))}
               </fieldset>
             </div>
             <CardContent className="p-0">
@@ -1898,6 +1918,13 @@ export default function DashboardPage() {
               )}
             </CardContent>
           </Card>
+
+          <SymbolUniverseBoard
+            className="dashboard-panel rounded-lg border-white/10 bg-card/90 shadow-none"
+            onSelectSymbol={setSelectedSymbol}
+            selectedSymbol={effectiveSymbol}
+            watchedBySymbol={watchedBySymbol}
+          />
 
           <Card className="dashboard-panel rounded-lg border-white/10 bg-card/90 py-0 shadow-none">
             <div className="flex flex-col gap-3 border-border/70 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">

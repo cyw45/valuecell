@@ -27,6 +27,16 @@ import IndicatorChart, { type IndicatorPanel } from "../components/IndicatorChar
 import { useSession } from "../session";
 import { marketDataRefreshInterval, usePreferences } from "../preferences";
 import { palette, radius, spacing } from "../theme";
+import {
+  universeAdmittedSymbols,
+  universeEntryForSymbol,
+  universeEntrySummary,
+  universeReasonLabel,
+  universeRemovedEntries,
+  universeSyncSummary,
+  universeThresholdSummary,
+  universeVersionSummary,
+} from "../universe";
 import type { CryptoCandle, Strategy } from "../types";
 
 type MarketScreenProps = {
@@ -189,9 +199,9 @@ export default function MarketScreen({ route }: MarketScreenProps) {
     queryFn: () => api.strategies(false),
     enabled: Boolean(session?.tenantId),
   });
-  const catalog = useQuery({
-    queryKey: ["mobile", "crypto-market", "symbols"],
-    queryFn: () => api.cryptoSymbols(),
+  const universe = useQuery({
+    queryKey: ["mobile", "crypto-market", "universe"],
+    queryFn: () => api.cryptoSymbolUniverse(),
   });
   const activeStrategy = useMemo(
     () => selectedStrategy(strategies.data, requestedStrategyId),
@@ -201,7 +211,16 @@ export default function MarketScreen({ route }: MarketScreenProps) {
     () => activeStrategy?.config.symbols.filter(Boolean) ?? [],
     [activeStrategy?.config.symbols],
   );
-  const catalogSymbols = catalog.data?.symbols ?? [];
+  const universeData = universe.data;
+  const catalogSymbols = useMemo(
+    () => universeAdmittedSymbols(universeData),
+    [universeData],
+  );
+  const removedEntries = useMemo(
+    () => universeRemovedEntries(universeData),
+    [universeData],
+  );
+  const selectedEntry = universeEntryForSymbol(universeData, symbol);
   const allSymbols = useMemo(() => {
     const strategySymbolSet = new Set(strategySymbols);
     return [...strategySymbols, ...catalogSymbols.filter((item) => !strategySymbolSet.has(item))];
@@ -312,7 +331,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
 
   const refresh = () => {
     if (range !== "custom") setRangeAnchor(Date.now());
-    void Promise.all([strategies.refetch(), catalog.refetch(), market.refetch()]);
+    void Promise.all([strategies.refetch(), universe.refetch(), market.refetch()]);
   };
 
   const openCustomRange = () => {
@@ -346,7 +365,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
       refreshControl={
         <RefreshControl
           onRefresh={refresh}
-          refreshing={strategies.isRefetching || catalog.isRefetching || market.isRefetching}
+          refreshing={strategies.isRefetching || universe.isRefetching || market.isRefetching}
           tintColor={palette.primary}
         />
       }
@@ -389,7 +408,7 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             <Text style={styles.cardTitle}>选择观察标的</Text>
           </View>
           <Text style={styles.cardMeta}>
-            {scope === "strategy" ? "策略币种优先" : "服务端目录研究"}
+            {scope === "strategy" ? "策略币种优先" : "交易所目录（每季度自动同步）"}
           </Text>
         </View>
         <View style={styles.scopeRow}>
@@ -415,10 +434,43 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             style={[styles.scopeButton, scope === "catalog" && styles.scopeButtonActive]}
           >
             <Text style={[styles.scopeButtonText, scope === "catalog" && styles.scopeButtonTextActive]}>
-              全部目录 {catalogSymbols.length ? `(${catalogSymbols.length})` : ""}
+              币种清单 {catalogSymbols.length ? `(${catalogSymbols.length})` : ""}
             </Text>
           </Pressable>
         </View>
+        {scope === "catalog" && universeData ? (
+          <View style={styles.universePanel}>
+            <Text style={styles.universeTitle}>
+              {universeVersionSummary(universeData)}
+            </Text>
+            <Text style={styles.universeMeta}>
+              {universeThresholdSummary(universeData)}
+            </Text>
+            <Text style={styles.universeMeta}>
+              {universeSyncSummary(universeData)}
+            </Text>
+            {removedEntries.length ? (
+              <View style={styles.universeRemoved}>
+                <Text style={styles.universeMeta}>
+                  本轮剔除 {removedEntries.length} 个（策略不再买入）：
+                </Text>
+                <ScrollView
+                  contentContainerStyle={styles.universeRemovedRow}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                >
+                  {removedEntries.map((entry) => (
+                    <View key={entry.symbol} style={styles.universeRemovedChip}>
+                      <Text style={styles.universeRemovedChipText}>
+                        {entry.symbol.replace("-", "/")} · {universeReasonLabel(entry.reason_code)}
+                      </Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         <View style={styles.searchBox}>
           <Search color={palette.textMuted} size={18} />
           <TextInput
@@ -431,19 +483,19 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             value={symbolFilter}
           />
         </View>
-        {catalog.isError ? (
+        {universe.isError ? (
           <View style={styles.inlineError}>
-            <Text style={styles.inlineErrorText}>{catalog.error instanceof Error ? catalog.error.message : "符号目录加载失败。"}</Text>
-            <Pressable accessibilityRole="button" onPress={() => void catalog.refetch()} style={styles.smallAction}>
+            <Text style={styles.inlineErrorText}>{universe.error instanceof Error ? universe.error.message : "币种目录加载失败。"}</Text>
+            <Pressable accessibilityRole="button" onPress={() => void universe.refetch()} style={styles.smallAction}>
               <RefreshCw color={palette.primary} size={16} />
               <Text style={styles.smallActionText}>重试目录</Text>
             </Pressable>
           </View>
         ) : null}
-        {catalog.isLoading && !catalog.data ? (
+        {universe.isLoading && !universeData ? (
           <View style={styles.catalogLoading}>
             <ActivityIndicator color={palette.primary} />
-            <Text style={styles.mutedText}>正在读取可用符号目录…</Text>
+            <Text style={styles.mutedText}>正在读取服务端币种目录…</Text>
           </View>
         ) : null}
         <ScrollView contentContainerStyle={styles.symbolRow} horizontal showsHorizontalScrollIndicator={false}>
@@ -461,11 +513,16 @@ export default function MarketScreen({ route }: MarketScreenProps) {
             </Pressable>
           ))}
         </ScrollView>
-        {!catalog.isLoading && filteredSymbols.length === 0 ? (
+        {scope === "catalog" && selectedEntry ? (
+          <Text style={styles.universeSelection}>
+            {selectedEntry.symbol.replace("-", "/")} · {universeEntrySummary(selectedEntry)}
+          </Text>
+        ) : null}
+        {!universe.isLoading && filteredSymbols.length === 0 ? (
           <Text style={styles.emptyText}>
             {scope === "strategy"
-              ? "当前策略没有可用观察币种。切换到全部目录可以继续研究。"
-              : "没有匹配的服务端目录符号。"}
+              ? "当前策略没有可用观察币种。切换到币种清单可以继续研究。"
+              : "没有匹配的目录币种。"}
           </Text>
         ) : null}
       </View>
@@ -756,6 +813,28 @@ const styles = StyleSheet.create({
   scopeButtonActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
   scopeButtonText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
   scopeButtonTextActive: { color: palette.primary },
+  universePanel: {
+    backgroundColor: palette.surfaceMuted,
+    borderColor: palette.border,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    gap: 4,
+    padding: spacing.sm,
+  },
+  universeTitle: { color: palette.text, fontSize: 12, fontWeight: "800" },
+  universeMeta: { color: palette.textMuted, fontSize: 11, lineHeight: 16 },
+  universeRemoved: { gap: 4 },
+  universeRemovedRow: { gap: spacing.xs, paddingVertical: 2 },
+  universeRemovedChip: {
+    backgroundColor: palette.negativeSoft,
+    borderColor: palette.border,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 3,
+  },
+  universeRemovedChipText: { color: palette.text, fontSize: 11, fontWeight: "700" },
+  universeSelection: { color: palette.text, fontSize: 12, lineHeight: 18 },
   controlDisabled: { opacity: 0.45 },
   searchBox: {
     alignItems: "center",

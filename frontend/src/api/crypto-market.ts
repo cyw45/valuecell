@@ -8,6 +8,7 @@ import {
 import type {
   CryptoMarketIndicators,
   CryptoSymbolCatalog,
+  CryptoSymbolUniverse,
 } from "@/types/crypto-market";
 
 const DEFAULT_SNAPSHOT_SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
@@ -29,6 +30,17 @@ export const useGetCryptoSymbols = () =>
     queryFn: () =>
       apiClient.get<ApiResponse<CryptoSymbolCatalog>>("crypto-market/symbols"),
     select: (data) => data.data,
+    staleTime: 10 * 60 * 1000,
+  });
+
+export const useGetCryptoSymbolUniverse = () =>
+  useQuery({
+    queryKey: API_QUERY_KEYS.CRYPTO_MARKET.universe,
+    queryFn: () =>
+      apiClient.get<ApiResponse<CryptoSymbolUniverse>>("crypto-market/universe"),
+    select: (data) => data.data,
+    // The catalogue only changes on a scheduled sync, so a long stale window is
+    // safe and keeps the board from polling.
     staleTime: 10 * 60 * 1000,
   });
 

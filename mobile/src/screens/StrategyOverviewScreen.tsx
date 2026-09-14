@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   ActivityIndicator,
@@ -9,38 +9,52 @@ import {
   Text,
   View,
 } from "react-native";
-import { Boxes, ChevronRight, LineChart, ListFilter, ReceiptText, RefreshCw, ShieldAlert, Wallet } from "lucide-react-native";
+import {
+  AlertTriangle,
+  CandlestickChart as CandlestickIcon,
+  ChevronRight,
+  LineChart,
+  ReceiptText,
+  RefreshCw,
+  ShieldAlert,
+} from "lucide-react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { api } from "../api";
 import {
+  AllocationCapSheet,
   BottomSheetSelector,
+  ConcurrencyMatrix,
   EquityCurveChart,
-  ListRow,
+  MarketIndicatorPanel,
   MetricCard,
   PrimaryButton,
   SectionCard,
+  SharedWalletBudgetChart,
   StatePanel,
+  StrategyCapitalMeterChart,
   StrategyEvaluationPanel,
+  StrategyPnlComparisonChart,
+  StrategyTradeQualityChart,
 } from "../components";
+import {
+  accountUtilizationDescription,
+  attributionStatusLabel,
+  concurrencyMatrixRows,
+  executionGateLabel,
+  executionGateTone,
+  formatRatioPercent,
+  formatUsdt,
+  resolveAllocationName,
+  syncStatusLabel,
+  walletEquityCurvePoints,
+  type ConcurrencyMatrixRow,
+  type ConcurrencyTone,
+} from "../concurrency";
 import type { WorkbenchStackParamList } from "../navigation/types";
-import type { RuleStrategyDemoExecution, RuleStrategyPnlPoint } from "../types";
 import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
 import {
-  conditionStateLabel,
-  conditionStateSummary,
-  conditionStateTone,
-  demoSourceLabel,
-  demoPnlReason,
-  evaluationReason,
   executionEnvironmentLabel,
-  fundingDirectionLabel,
-  orderSideLabel,
-  orderStatusLabel,
-  orderTypeLabel,
-  paperPositionValue,
-  primaryConditionState,
-  strategyActionLabel,
   strategyStatusLabel,
 } from "./strategy-presentation";
 import {
@@ -64,87 +78,49 @@ const RISK_LABELS: Record<string, string> = {
   blocked: "已阻断",
   halted: "已暂停",
 };
-const ALLOCATION_LABELS: Record<string, string> = {
-  available: "可分配",
-  reserved: "已预留",
-  occupied: "已占用",
-  partially_released: "部分释放",
-  released: "已释放",
-  submission_unknown: "提交结果待对账",
-  recovery_required: "等待对账恢复",
-  blocked: "已阻断",
-};
-const SYNC_STATUS_LABELS: Record<string, string> = {
-  healthy: "钱包同步正常",
-  stale: "钱包数据已过期",
-  unavailable: "钱包数据不可用",
-};
-const ATTRIBUTION_STATUS_LABELS: Record<string, string> = {
-  complete: "策略归因完整",
-  partial: "策略归因部分完整",
-  unavailable: "策略归因不可用",
-};
-const allocationStateLabel = (state: string) => ALLOCATION_LABELS[state] ?? "状态未知";
-const ratioLabel = (value: number | string | null | undefined): string => {
-  const number = numberValue(value);
-  return typeof number === "number" ? `${(number * 100).toFixed(1)}%` : "—";
-};
 const displayMonitorState = (state: string) => MONITOR_LABELS[state] ?? "未知状态";
 const displayRiskState = (state?: string | null) => (state ? RISK_LABELS[state] ?? "未知状态" : "同步中");
 
 type StrategyOverviewRoute = RouteProp<WorkbenchStackParamList, "StrategyOverview">;
 
-
-function demoPositionValue(
-  positions: Array<{ notional_usdt: number | null }>,
-): number | undefined {
-  if (positions.length === 0) return 0;
-  const valuedPositions = positions.filter(
-    (position): position is { notional_usdt: number } =>
-      typeof position.notional_usdt === "number" && Number.isFinite(position.notional_usdt),
-  );
-  if (valuedPositions.length === 0) return undefined;
-  return valuedPositions.reduce((total, position) => total + position.notional_usdt, 0);
+function toneTextStyle(tone: ConcurrencyTone): { color: string } {
+  if (tone === "positive") return { color: palette.positive };
+  if (tone === "negative") return { color: palette.negative };
+  if (tone === "warning") return { color: palette.warning };
+  return { color: palette.textMuted };
 }
 
 function formatNumericQuote(value: number | string | null | undefined): string {
   const number = typeof value === "string" ? Number(value) : value;
-  return typeof number === "number" ? formatQuote(number) : "—";
+  return typeof number === "number" && Number.isFinite(number) ? formatQuote(number) : "—";
 }
 
-function numberValue(value: number | string | null | undefined): number | undefined {
-  const number = typeof value === "string" ? Number(value) : value;
-  return typeof number === "number" && Number.isFinite(number) ? number : undefined;
-}
-
-function demoWalletPoints(
-  snapshot: RuleStrategyDemoExecution | undefined,
-): RuleStrategyPnlPoint[] {
-  return (snapshot?.wallet_equity_curve?.points ?? []).flatMap((point) => {
-    const toNumber = (value: number | string | null | undefined) =>
-      typeof value === "string" ? Number(value) : value;
-    const equity = toNumber(point.equity_quote ?? point.equity);
-    const pnl = toNumber(point.cumulative_pnl ?? point.total_pnl ?? point.pnl);
-    const dailyPnl = toNumber(point.daily_pnl_quote);
-    const timestamp = point.ts ?? point.timestamp;
-    return timestamp && typeof equity === "number" && Number.isFinite(equity) && typeof pnl === "number" && Number.isFinite(pnl)
-      ? [{
-          ts: timestamp,
-          equity_quote: equity,
-          cumulative_pnl: pnl,
-          daily_pnl_quote: typeof dailyPnl === "number" && Number.isFinite(dailyPnl) ? dailyPnl : undefined,
-          action: point.action ?? "wallet_snapshot",
-        }]
-      : [];
-  });
-}
-
+/**
+ * 并发策略控制台. The same persisted allocator facts the Web dashboard renders
+ * drive this screen; selecting a strategy card swaps the attribution and market
+ * context in place, so nothing reloads and no number is re-derived on the client.
+ */
 export default function StrategyOverviewScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<StrategyOverviewRoute>();
   const { session } = useSession();
   const [selectedId, setSelectedId] = useState("");
   const [selectorVisible, setSelectorVisible] = useState(false);
+  const [capRow, setCapRow] = useState<ConcurrencyMatrixRow | null>(null);
+  const [marketFocusSymbol, setMarketFocusSymbol] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const marketBlockY = useRef<number | null>(null);
+
+  // The concurrency console switches context in place: selecting a card or a
+  // matrix row re-points the attribution and the market block instead of
+  // navigating away and remounting the page.
+  const scrollToMarket = (symbol?: string) => {
+    if (symbol) setMarketFocusSymbol(symbol);
+    const blockY = marketBlockY.current;
+    if (blockY == null) return;
+    scrollRef.current?.scrollTo({ animated: true, y: Math.max(0, blockY - spacing.md) });
+  };
+
   const strategies = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategies"],
     queryFn: () => api.strategies(false),
@@ -183,6 +159,7 @@ export default function StrategyOverviewScreen() {
       (item) => item.config.execution.environment === "okx_demo" && item.config.execution.sandbox_connection_id,
     )?.config.execution.sandbox_connection_id
     ?? null;
+
   const sharedAccount = useQuery({
     queryKey: ["mobile", session?.tenantId, "shared-account-summary", credentialId ?? ""],
     queryFn: () => api.sharedAccountSummary(credentialId as string),
@@ -203,8 +180,8 @@ export default function StrategyOverviewScreen() {
     refetchInterval: 15_000,
   });
   const trades = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "trades", 100],
-    queryFn: () => api.strategyLog(activeId, "trades", 100),
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "trades", 20],
+    queryFn: () => api.strategyLog(activeId, "trades", 20),
     enabled: Boolean(activeId && !isDemo),
     refetchInterval: 15_000,
   });
@@ -229,21 +206,20 @@ export default function StrategyOverviewScreen() {
   });
   const riskState = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", activeId, "risk-state"],
-    refetchInterval: 15_000,
     queryFn: () => api.strategyRiskState(activeId),
     enabled: Boolean(activeId),
+    refetchInterval: 15_000,
   });
+
   const refresh = () => {
-    if (isDemo) {
-      void Promise.all([strategies.refetch(), sharedAccount.refetch(), evaluations.refetch(), demo.refetch(), monitorState.refetch(), riskState.refetch()]);
-      return;
-    }
     void Promise.all([
       strategies.refetch(),
       sharedAccount.refetch(),
       account.refetch(),
       pnl.refetch(),
+      trades.refetch(),
       evaluations.refetch(),
+      demo.refetch(),
       monitorState.refetch(),
       riskState.refetch(),
     ]);
@@ -263,52 +239,48 @@ export default function StrategyOverviewScreen() {
   if (!strategy) {
     return <StatePanel actionLabel="创建策略" description="创建第一条策略后，服务端账户、仓位、评估条件与执行记录会在这里汇总。" onAction={() => navigation.navigate("策略", { screen: "StrategyEditor" })} title="尚未创建策略" />;
   }
-
-  const paperAccount = account.data;
-  const demoData = demo.data;
-  const demoCurvePoints = demoWalletPoints(demoData);
-  const paperPositions = Object.entries(paperAccount?.positions ?? {});
-  const demoPositions = demoData?.positions.data.positions ?? [];
-  const demoBalances = demoData?.account.data.balances ?? [];
-  const demoOrders = demoData?.orders ?? [];
-  const positionValue = isDemo
-    ? demoData
-      ? demoPositionValue(demoPositions)
-      : undefined
-    : paperAccount
-      ? paperPositionValue(paperAccount.positions)
-      : undefined;
   const sharedData = sharedAccount.data;
-  const sharedAllocations = sharedData?.allocator.allocations ?? [];
-  const selectedAllocation = sharedAllocations.find((item) => item.strategy_id === activeId);
+  const allocations = sharedData?.allocator.allocations ?? [];
+  const matrixRows = concurrencyMatrixRows(allocations, strategies.data);
+  const resolveName = (allocation: Parameters<typeof resolveAllocationName>[0]) =>
+    resolveAllocationName(allocation, strategies.data);
+  const selectedAllocation = allocations.find((item) => item.strategy_id === activeId) ?? null;
+  const walletCurve = walletEquityCurvePoints(sharedData);
   const latestEvaluation = evaluations.data?.[0];
-  const activeConditionState = latestEvaluation
-    ? primaryConditionState(latestEvaluation.conditions)
-    : null;
   const runningCount = (strategies.data ?? []).filter(
     (item) => item.status === "running" && !item.archived_at,
   ).length;
-  const previewSymbols = strategy.config.symbols.slice(0, 3);
-  const remainingSymbolCount = Math.max(0, strategy.config.symbols.length - previewSymbols.length);
-  const totalPnl = isDemo
-    ? demoData?.pnl.total_pnl ?? demoData?.pnl.total ?? demoData?.pnl.value
-    : paperAccount
-      ? paperAccount.realized_pnl_quote + paperAccount.unrealized_pnl_quote
-      : undefined;
+  const totalCount = (strategies.data ?? []).length;
+  const paperAccount = account.data;
+  const paperPositions = Object.entries(paperAccount?.positions ?? {});
+  const paperPnl = paperAccount
+    ? paperAccount.realized_pnl_quote + paperAccount.unrealized_pnl_quote
+    : undefined;
+  const demoData = demo.data;
+  const demoValuedPositions = (demoData?.positions.data.positions ?? []).filter(
+    (position): position is typeof position & { notional_usdt: number } =>
+      typeof position.notional_usdt === "number" && Number.isFinite(position.notional_usdt),
+  );
+  const demoPositionNotional = demoValuedPositions.reduce(
+    (total, position) => total + position.notional_usdt,
+    0,
+  );
+  const monitoredSymbols = strategy.config.symbols.length;
+  const gateTone = sharedData ? executionGateTone(sharedData.execution_gate.status) : "default";
+  const incomplete =
+    sharedData != null &&
+    (!sharedData.data_complete ||
+      sharedData.wallet.sync_status !== "healthy" ||
+      sharedData.wallet.attribution_status !== "complete");
 
   return (
     <ScrollView
       contentContainerStyle={styles.content}
+      ref={scrollRef}
       refreshControl={
         <RefreshControl
           onRefresh={refresh}
-          refreshing={
-            strategies.isRefetching ||
-            sharedAccount.isRefetching ||
-            account.isRefetching ||
-            evaluations.isRefetching ||
-            demo.isRefetching
-          }
+          refreshing={strategies.isRefetching || sharedAccount.isRefetching || evaluations.isRefetching}
           tintColor={palette.primary}
         />
       }
@@ -316,12 +288,14 @@ export default function StrategyOverviewScreen() {
     >
       <View style={styles.heading}>
         <View style={styles.headingCopy}>
-          <Text style={styles.eyebrow}>移动策略经纪工作台</Text>
-          <Text style={styles.title}>策略工作台</Text>
-          <Text style={styles.subtitle}>账户、条件与执行事实均以服务端数据为准</Text>
+          <Text style={styles.eyebrow}>{isDemo ? "OKX DEMO 共享账户并发终端" : "纸面交易终端"}</Text>
+          <Text style={styles.title}>并发策略控制台</Text>
+          <Text style={styles.subtitle}>
+            四策略共用同一 OKX 钱包，各自独立批次与成交归属；点击下方任一策略卡片即可切换图表与归因，无需整页刷新
+          </Text>
         </View>
         <Pressable
-          accessibilityLabel="切换活跃策略"
+          accessibilityLabel="切换归因策略"
           accessibilityRole="button"
           onPress={() => setSelectorVisible(true)}
           style={({ pressed }) => [styles.selector, pressed && styles.pressed]}
@@ -337,110 +311,389 @@ export default function StrategyOverviewScreen() {
       </View>
 
       <View style={styles.metricGrid}>
-        <MetricCard caption={isDemo ? "OKX Demo 钱包总估值" : `可用资金 ${formatQuote(paperAccount?.quote_balance)}`} label="资金总览" style={styles.metric} tone="default" value={formatQuote(isDemo ? numberValue(demoData?.account.data.total_usdt_value) : paperAccount?.equity_quote)} />
-        <MetricCard caption="当前工作区未归档的运行策略" label="运行策略" style={styles.metric} tone={runningCount > 0 ? "positive" : "default"} value={`${runningCount} 个`} />
-        <MetricCard caption={strategy.config.symbols.join(" · ") || "未配置观察标的"} label="币种观察" style={styles.metric} tone="warning" value={`${strategy.config.symbols.length} 个`} />
-        <MetricCard caption="服务端账户快照累计" label="收益 / 亏损" style={styles.metric} tone={typeof totalPnl === "number" && totalPnl >= 0 ? "positive" : "warning"} value={formatNumericQuote(totalPnl)} />
+        <MetricCard
+          caption={`当前工作区共 ${totalCount} 条策略，未归档且运行中的计入`}
+          label="运行策略"
+          style={styles.metric}
+          tone={runningCount > 0 ? "positive" : "default"}
+          value={`${runningCount} / ${totalCount}`}
+        />
+        <MetricCard
+          caption={accountUtilizationDescription(sharedData)}
+          label="账户利用率"
+          style={styles.metric}
+          tone="warning"
+          value={sharedData ? formatRatioPercent(sharedData.allocator.account_utilization_ratio) : "—"}
+        />
+        <MetricCard
+          caption="OKX 钱包权威同步值，不归任何单一策略"
+          label="钱包总权益"
+          style={styles.metric}
+          value={formatUsdt(sharedData?.wallet.total_equity_quote)}
+        />
+        <MetricCard
+          caption={`当前策略正在监测 ${monitoredSymbols} 个市场`}
+          label="策略归属 PnL"
+          style={styles.metric}
+          tone={
+            sharedData?.strategy_pnl_total_quote == null
+              ? "default"
+              : sharedData.strategy_pnl_total_quote >= 0
+                ? "positive"
+                : "negative"
+          }
+          value={formatUsdt(sharedData?.strategy_pnl_total_quote)}
+        />
       </View>
+      <SectionCard
+        description="钱包权威总额与策略归属分配分开呈现，不将当前策略视为整个账户"
+        title="共享账户并发控制台"
+      >
+        {!credentialId ? (
+          <StatePanel
+            description="配置 OKX Sandbox 连接后，这里会显示钱包权益、四策略资金分配、并发矩阵与共享钱包曲线。"
+            title="缺少 Sandbox 连接"
+          />
+        ) : null}
+        {credentialId && sharedAccount.isLoading && !sharedData ? (
+          <StatePanel description="正在读取 OKX 钱包与共享 allocator 快照。" state="loading" title="正在同步共享账户" />
+        ) : null}
+        {credentialId && sharedAccount.isError ? (
+          <StatePanel
+            actionLabel="重试"
+            description={`${(sharedAccount.error as Error).message}；在数据恢复前不会用策略账户数值替代钱包权威总额。`}
+            onAction={() => void sharedAccount.refetch()}
+            title="共享账户暂不可用"
+            tone="error"
+          />
+        ) : null}
+        {credentialId && sharedData ? (
+          <>
+            <View style={styles.badgeRow}>
+              <View style={[styles.badge, { borderColor: palette.primary }]}>
+                <Text style={[styles.badgeText, { color: palette.primary }]}>
+                  {syncStatusLabel(sharedData.wallet.sync_status)}
+                </Text>
+              </View>
+              <View style={[styles.badge, { borderColor: palette.border }]}>
+                <Text style={styles.badgeText}>{attributionStatusLabel(sharedData.wallet.attribution_status)}</Text>
+              </View>
+              <View style={[styles.badge, { borderColor: palette.border }]}>
+                <Text style={styles.badgeText}>观测 {formatTimestamp(sharedData.wallet.observed_at)}</Text>
+              </View>
+              <View style={[styles.badge, { borderColor: palette.primary }]}>
+                <Text style={[styles.badgeText, toneTextStyle(gateTone)]}>
+                  {executionGateLabel(sharedData.execution_gate.status)}
+                </Text>
+              </View>
+            </View>
 
+            {incomplete ? (
+              <View style={styles.warningBox}>
+                <AlertTriangle color={palette.warning} size={15} />
+                <Text style={styles.warningText}>
+                  {sharedData.incomplete_reason ??
+                    (sharedData.wallet.sync_status !== "healthy"
+                      ? "钱包同步状态异常，权威余额可能暂时不可用。"
+                      : "部分策略归因尚未完成，归属 PnL 仅供参考。")}
+                </Text>
+              </View>
+            ) : null}
 
-      <SectionCard description={credentialId ? `连接 ${credentialId.slice(0, 8)}… · 钱包与策略归因分开统计` : "当前策略未配置 OKX Sandbox 连接。"} title="共享账户总览">
-        {!credentialId ? <StatePanel description="配置 OKX Sandbox 连接后，这里会显示钱包权益、allocator 占用与策略归因。" title="缺少 Sandbox 连接" /> : null}
-        {credentialId && sharedAccount.isLoading ? <StatePanel description="正在读取 OKX 钱包与共享 allocator 快照。" state="loading" title="正在同步共享账户" /> : null}
-        {credentialId && sharedAccount.isError ? <StatePanel actionLabel="重试" description={(sharedAccount.error as Error).message} onAction={() => void sharedAccount.refetch()} title="共享账户暂不可用" tone="error" /> : null}
-        {credentialId && sharedData ? <>
-          <View style={styles.stateRows}>
-            <Text style={styles.stateText}>{SYNC_STATUS_LABELS[sharedData.wallet.sync_status] ?? "钱包状态未知"} · {ATTRIBUTION_STATUS_LABELS[sharedData.wallet.attribution_status] ?? "归因状态未知"}</Text>
-            <Text style={styles.muted}>钱包观测 {formatTimestamp(sharedData.wallet.observed_at)} · allocator 观测 {formatTimestamp(sharedData.allocator.observed_at)} · 未归因权益不计入策略 PnL</Text>
-            {!sharedData.data_complete ? <Text style={styles.incompleteText}>数据不完整：{sharedData.incomplete_reason ?? "部分共享账户事实尚未就绪"}</Text> : null}
-          </View>
-          <View style={styles.metricGrid}>
-            <MetricCard caption="OKX Sandbox 钱包事实" label="钱包权益" style={styles.metric} value={formatNumericQuote(sharedData.wallet.total_equity_quote)} />
-            <MetricCard caption="钱包当前可用余额" label="可用资金" style={styles.metric} value={formatNumericQuote(sharedData.wallet.available_quote)} />
-            <MetricCard caption="所有策略归因的累计结果，不含纸面账本" label="策略归因 PnL" style={styles.metric} tone={typeof sharedData.strategy_pnl_total_quote === "number" && sharedData.strategy_pnl_total_quote >= 0 ? "positive" : "warning"} value={formatNumericQuote(sharedData.strategy_pnl_total_quote)} />
-            <MetricCard caption="钱包中暂不能归属到策略的部分，不计入策略 PnL" label="未归因权益" style={styles.metric} tone="warning" value={formatNumericQuote(sharedData.wallet.unassigned_equity_quote)} />
-            <MetricCard caption="allocator 已分配待使用" label="已预留" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reserved_quote)} />
-            <MetricCard caption="allocator 当前名义占用" label="已占用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.occupied_notional_quote)} />
-            <MetricCard caption="已完成释放、可重新分配的 allocator 余额" label="已释放 / 可复用" style={styles.metric} value={formatNumericQuote(sharedData.allocator.reusable_quote)} />
-          </View>
-          <View style={styles.allocationRows}>
-            <Text style={styles.allocationHeading}>策略分配矩阵</Text>
-            {sharedAllocations.length > 0 ? sharedAllocations.map((allocation) => <ListRow key={allocation.strategy_id} subtitle={`${allocationStateLabel(allocation.allocation_state)} · 预留 ${formatNumericQuote(allocation.reserved_quote)} · 占用 ${formatNumericQuote(allocation.occupied_quote)} · 已释放 ${formatNumericQuote(allocation.released_quote)}${allocation.lifecycle_reason ? ` · ${allocation.lifecycle_reason}` : ""}`} title={allocation.strategy_id === activeId ? `${strategy.name} · 当前选择` : allocation.strategy_id} trailing={<View style={styles.allocationTrailing}><Text style={[styles.linkValue, allocation.net_pnl_quote != null && allocation.net_pnl_quote >= 0 ? styles.positiveText : styles.negativeText]}>{formatNumericQuote(allocation.net_pnl_quote)}</Text><Text style={styles.allocationPnlLabel}>净 PnL</Text></View>} />) : <Text style={styles.muted}>服务端尚未返回策略分配事实。</Text>}
-          </View>
-          {!selectedAllocation ? <Text style={styles.incompleteText}>当前策略暂无共享分配记录；上方钱包事实不代表当前策略资金。</Text> : null}
-        </> : null}
-        {credentialId && !sharedAccount.isLoading && !sharedAccount.isError && !sharedData ? <StatePanel description="服务端未返回共享账户快照。" title="共享账户数据不可用" /> : null}
+            {sharedData.execution_gate.reasons.length > 0 ? (
+              <View style={styles.dangerBox}>
+                <Text style={styles.dangerText}>
+                  新开仓门禁：{sharedData.execution_gate.reasons.join("；")}
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={styles.accountGrid}>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>钱包总权益 · 权威</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.wallet.total_equity_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>钱包可用余额 · 权威</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.wallet.available_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>策略可分配余额 · allocator</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.allocator.available_for_strategies_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>已预留 · allocator</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.allocator.reserved_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>已占用名义</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.allocator.occupied_notional_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>待结算</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.allocator.pending_settlement_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>可再投资余额</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.allocator.reusable_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>未归因权益 · 钱包</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.wallet.unassigned_equity_quote)}</Text>
+              </View>
+              <View style={styles.accountMetric}>
+                <Text style={styles.accountLabel}>钱包 − 策略差额</Text>
+                <Text style={styles.accountValue}>{formatUsdt(sharedData.wallet_strategy_reconciliation_delta_quote)}</Text>
+              </View>
+            </View>
+            <View style={styles.block}>
+              <View style={styles.blockHeader}>
+                <Text style={styles.blockTitle}>OKX 共享钱包权益曲线</Text>
+                <Text style={styles.blockMeta}>{walletCurve.length} 个快照</Text>
+              </View>
+              <Text style={styles.muted}>
+                仅来自后台持久化的钱包快照，用于核对四策略共同作用后的账户总金额变化
+              </Text>
+              {sharedData.wallet_equity_curve.status === "available" && walletCurve.length > 0 ? (
+                <EquityCurveChart
+                  formatQuote={formatQuote}
+                  formatTimestamp={formatTimestamp}
+                  height={200}
+                  points={walletCurve}
+                />
+              ) : (
+                <Text style={styles.muted}>尚无可用的钱包权益快照，后台同步成功后自动显示。</Text>
+              )}
+              {walletCurve.length === 1 ? (
+                <Text style={styles.muted}>当前只有一个账户快照，下一次同步后将形成变化曲线。</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.block}>
+              <Text style={styles.blockTitle}>四策略并发运行矩阵</Text>
+              <Text style={styles.muted}>
+                每一行是一套独立策略；规则、批次和成交归属隔离，资金通过共享账户 allocator 竞争与释放
+              </Text>
+              <ConcurrencyMatrix
+                accountUtilizationRatio={sharedData.allocator.account_utilization_ratio}
+                onEditCap={(row) => setCapRow(row)}
+                onOpenCharts={(strategyId) => {
+                  selectStrategy(strategyId);
+                  setMarketFocusSymbol(null);
+                  scrollToMarket();
+                }}
+                onOpenTrades={(strategyId) => {
+                  selectStrategy(strategyId);
+                  navigation.navigate("TradeLedger", { strategyId });
+                }}
+                onSelect={selectStrategy}
+                rows={matrixRows}
+                runningCount={runningCount}
+                selectedStrategyId={activeId}
+                totalCount={totalCount}
+              />
+            </View>
+
+            {allocations.length > 0 ? (
+              <View style={styles.chartGrid}>
+                <StrategyCapitalMeterChart allocations={allocations} resolveName={resolveName} />
+                <StrategyPnlComparisonChart allocations={allocations} resolveName={resolveName} />
+                <SharedWalletBudgetChart
+                  allocations={allocations}
+                  resolveName={resolveName}
+                  walletAvailableQuote={sharedData.wallet.available_quote}
+                  walletEquityQuote={sharedData.wallet.total_equity_quote}
+                />
+                <StrategyTradeQualityChart allocations={allocations} resolveName={resolveName} />
+              </View>
+            ) : null}
+
+            {sharedData.allocator.unallocated_strategies.length > 0 ? (
+              <View style={styles.warningBox}>
+                <View style={styles.unallocatedCopy}>
+                  <Text style={styles.warningTitle}>未纳入该共享账户资金池的策略（只读）</Text>
+                  <Text style={styles.muted}>
+                    这些策略存在，但不是该钱包的资金分配对象，因此不计入上方的预留、占用与利用率。这不代表策略未在运行。
+                  </Text>
+                  {sharedData.allocator.unallocated_strategies.map((item) => (
+                    <Text key={item.strategy_id} style={styles.unallocatedRow}>
+                      {item.name} · {item.kind} ·{" "}
+                      {item.status === "running" ? "运行中" : item.status === "paused" ? "已暂停" : "已停止"} ·{" "}
+                      {item.environment === "paper" ? "Paper 独立账本" : item.environment === "okx_demo" ? "OKX Demo" : "未绑定环境"} ·{" "}
+                      {item.reason}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+          </>
+        ) : null}
       </SectionCard>
-
-      <SectionCard actionLabel={remainingSymbolCount > 0 ? `全部 ${strategy.config.symbols.length} 个` : undefined} description="默认只显示前三个；完整观察池在独立页面中检索和查看。" onAction={remainingSymbolCount > 0 ? () => navigation.navigate("StrategySymbols", { strategyId: activeId }) : undefined} title="观察标的">
-        <View style={styles.symbols}>
-          {previewSymbols.map((symbol) => (
-            <Pressable accessibilityLabel={`查看 ${symbol} 行情`} accessibilityRole="button" key={symbol} onPress={() => navigation.navigate("行情", { screen: "Market", params: { strategyId: activeId, symbol } })} style={({ pressed }) => [styles.symbol, pressed && styles.pressed]}>
-              <Text style={styles.symbolText}>{symbol}</Text>
-              <ChevronRight color={palette.primary} size={16} />
-            </Pressable>
-          ))}
+      <View
+        onLayout={(event) => {
+          marketBlockY.current = event.nativeEvent.layout.y;
+        }}
+      >
+        <SectionCard
+          description="K 线、成交量与技术指标跟随当前选中策略的币种集合；点击币种即可就地切换走势，不重新加载页面"
+          title={`行情走势与技术指标 · ${strategy.name}`}
+        >
+          <MarketIndicatorPanel
+            focusSymbol={marketFocusSymbol}
+            onOpenFull={() => navigation.navigate("行情", { screen: "Market", params: { strategyId: activeId } })}
+            strategyName={strategy.name}
+            symbols={strategy.config.symbols}
+          />
+        </SectionCard>
+      </View>
+      <SectionCard
+        description="只读取服务端持久化的评估与成交事实；切换上方矩阵卡片即可切换归因对象"
+        title={`当前策略归因 · ${strategy.name}`}
+      >
+        <View style={styles.stateRows}>
+          <Text style={styles.stateText}>
+            监控池 {displayMonitorState(monitorState.data?.[0]?.state ?? "")} · 风险 {displayRiskState(riskState.data?.state)}
+            {selectedAllocation
+              ? ` · 该策略利用率 ${formatRatioPercent(selectedAllocation.utilization_ratio)}`
+              : " · 该策略未纳入共享资金池"}
+          </Text>
+          <Text style={styles.muted}>
+            最近评估 {latestEvaluation ? formatTimestamp(latestEvaluation.evaluated_at) : "尚无评估记录"} · 预留上限{" "}
+            {selectedAllocation?.max_reserved_quote == null ? "未设置" : formatUsdt(selectedAllocation.max_reserved_quote)}
+          </Text>
         </View>
-        {remainingSymbolCount > 0 ? <Pressable accessibilityLabel="查看全部观察标的" accessibilityRole="button" onPress={() => navigation.navigate("StrategySymbols", { strategyId: activeId })} style={({ pressed }) => [styles.moreSymbols, pressed && styles.pressed]}><ListFilter color={palette.primary} size={17} /><Text style={styles.moreSymbolsText}>还有 {remainingSymbolCount} 个标的，查看全部</Text><ChevronRight color={palette.primary} size={17} /></Pressable> : null}
-      </SectionCard>
 
-      {isDemo ? (
-        <>
-          {demo.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取 OKX Demo 交易所执行数据。</Text></View> : null}
-          {demo.isError ? <StatePanel actionLabel="重试" description={(demo.error as Error).message} onAction={() => void demo.refetch()} title="Demo 执行数据暂不可用" tone="error" /> : null}
-          <SectionCard description={demoData ? `来源：${demoSourceLabel(demoData.source)} · 最近核验 ${formatTimestamp(demoData.checked_at)}` : "仅在独立页面展示交易所返回的明细。"} title="OKX Demo 执行概览">
-            <View style={styles.accountGrid}>
-              <View style={styles.accountMetric}><Text style={styles.accountLabel}>总 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData?.pnl.total_pnl ?? demoData?.pnl.total ?? demoData?.pnl.value)}</Text></View>
-              <View style={styles.accountMetric}><Text style={styles.accountLabel}>已成交订单</Text><Text style={styles.accountValue}>{demoData?.trade_summary?.filled_order_count ?? "—"}</Text></View>
-            </View>
-            <View style={styles.detailLinks}>
-              <ListRow accessibilityLabel="查看交易所持仓" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyPositions", { strategyId: activeId })} subtitle={`${demoPositions.length} 项连接级仓位 · 不代表策略分配`} title="我的持仓" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
-              <ListRow accessibilityLabel="查看策略归属订单" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "orders" })} subtitle={`共 ${demoData?.pagination.total_items ?? 0} 笔 · 已成交 ${demoData?.trade_summary?.filled_order_count ?? 0} 笔 · 部分成交 ${demoData?.trade_summary?.partially_filled_order_count ?? 0} 笔 · 待远端对账 ${demoData?.trade_summary?.submission_unknown_orders ?? demoData?.trade_summary?.unknown_order_count ?? 0} 笔`} title="策略归属订单" />
-              <ListRow accessibilityLabel="查看 Demo 资金费与 PnL" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看交易所 PnL 与权益曲线" title="资金费与 PnL" />
-            </View>
-          </SectionCard>
-          <SectionCard actionLabel="查看详情" description="账户钱包每日快照来自 OKX Demo 真实余额与估值；从本次部署开始累计历史。" onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })} title="OKX Demo 每日收益曲线">
-            {demo.isError ? <Text style={styles.muted}>{(demo.error as Error).message}</Text> : demo.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取交易所钱包日结事实。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} height={176} points={demoCurvePoints} />}
-          </SectionCard>
-        </>
-      ) : (
-        <>
-          {account.isError ? <StatePanel actionLabel="重试" description={(account.error as Error).message} onAction={() => void account.refetch()} title="纸面账户暂不可用" tone="error" /> : null}
-          <SectionCard description="详细仓位、成交和权益曲线均进入独立页面，工作台只保留当前摘要。" title="纸面执行概览">
-            <View style={styles.accountGrid}>
-              <View style={styles.accountMetric}><Text style={styles.accountLabel}>当前权益</Text><Text style={styles.accountValue}>{formatQuote(paperAccount?.equity_quote)}</Text></View>
-              <View style={styles.accountMetric}><Text style={styles.accountLabel}>可用资金</Text><Text style={styles.accountValue}>{formatQuote(paperAccount?.quote_balance)}</Text></View>
-            </View>
-            <View style={styles.detailLinks}>
-              <ListRow accessibilityLabel="查看纸面持仓" leading={<Boxes color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyPositions", { strategyId: activeId })} subtitle={`${paperPositions.length} 项持仓 · 策略上限 ${strategy.config.risk.max_positions}`} title="我的持仓" trailing={<Text style={styles.linkValue}>{formatQuote(positionValue)}</Text>} />
-              <ListRow accessibilityLabel="查看全部纸面成交" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId })} subtitle="查看服务端归因成交记录" title="成交账本" />
-              <ListRow accessibilityLabel="查看资金费与权益曲线" leading={<Wallet color={palette.primary} size={20} />} onPress={() => navigation.navigate("FundingPnl", { strategyId: activeId })} subtitle="查看权益曲线与资金费影响" title="资金费与 PnL" />
-            </View>
-          </SectionCard>
-          <SectionCard actionLabel="查看详情" description="按 UTC 日期展示服务端持久化的日结权益与当日盈亏；无账户快照不会补造曲线点。" onAction={() => navigation.navigate("FundingPnl", { strategyId: activeId })} title="每日收益曲线">
-            {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : pnl.isLoading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.loadingText}>正在读取每日收益事实。</Text></View> : <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} height={176} points={pnl.data ?? []} />}
-          </SectionCard>
-        </>
-      )}
+        {evaluations.isError ? (
+          <StatePanel
+            actionLabel="重试"
+            description={(evaluations.error as Error).message}
+            onAction={() => void evaluations.refetch()}
+            title="最近评估暂不可用"
+            tone="error"
+          />
+        ) : null}
+        {evaluations.isLoading && !latestEvaluation ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color={palette.primary} />
+            <Text style={styles.loadingText}>正在读取服务端评估与条件事实。</Text>
+          </View>
+        ) : null}
+        {latestEvaluation ? <StrategyEvaluationPanel compact evaluation={latestEvaluation} /> : null}
 
-      <SectionCard actionLabel="全部交易" description="最新交易明细按页查看；Demo 展示策略归属交易所订单。" onAction={() => navigation.navigate(isDemo ? "ExecutionFacts" : "TradeLedger", isDemo ? { strategyId: activeId, kind: "orders" } : { strategyId: activeId })} title="交易明细">
-        {isDemo ? demoData?.orders.length ? demoData.orders.slice(0, 3).map((order) => <View key={order.id} style={styles.orderRow}><View style={styles.rowCopy}><Text style={styles.positionSymbol}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · {formatTimestamp(order.updated_at)}</Text></View><Text style={styles.orderStatus}>{orderStatusLabel(order.status)}</Text></View>) : <Text style={styles.muted}>当前没有策略归属订单。</Text> : trades.data?.entries.length ? trades.data.entries.slice(0, 3).map((trade) => <View key={trade.evaluation_id} style={styles.orderRow}><View style={styles.rowCopy}><Text style={styles.positionSymbol}>{strategyActionLabel(trade.action)} · {trade.symbol}</Text><Text style={styles.muted}>{formatTimestamp(trade.evaluated_at)}</Text></View><Text style={styles.positionValue}>{formatQuote(trade.quote_amount)}</Text></View>) : <Text style={styles.muted}>服务端尚无归因成交。</Text>}
-      </SectionCard>
-
-      {evaluations.isError ? <StatePanel actionLabel="重试" description={(evaluations.error as Error).message} onAction={() => void evaluations.refetch()} title="最近评估暂不可用" tone="error" /> : null}
-      <SectionCard description="执行、决策和风控细节进入专用页面，首页只保留入口。" title="策略详情入口">
         <View style={styles.detailLinks}>
-          <ListRow accessibilityLabel="查看执行概览" leading={<LineChart color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "execution" })} subtitle="执行环境、策略代际和服务端执行状态" title="执行概览" />
-          <ListRow accessibilityLabel="查看策略决策" leading={<ReceiptText color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "decision" })} subtitle={latestEvaluation ? `最近评估 ${formatTimestamp(latestEvaluation.evaluated_at)}` : "查看条件、执行漏斗和决策原因"} title="策略决策说明" />
-          <ListRow accessibilityLabel="查看监控池和风险" leading={<ShieldAlert color={palette.primary} size={20} />} onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "risk" })} subtitle="查看监控池状态和账户级风险原因" title="监控池与风险" />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId })}
+            style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+          >
+            <ReceiptText color={palette.primary} size={20} />
+            <View style={styles.rowCopy}>
+              <Text style={styles.linkValue}>交易明细与条件原因</Text>
+              <Text style={styles.muted}>按时间节点查看成交数量、价格与触发条件数值</Text>
+            </View>
+            <ChevronRight color={palette.textMuted} size={18} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => scrollToMarket()}
+            style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+          >
+            <CandlestickIcon color={palette.primary} size={20} />
+            <View style={styles.rowCopy}>
+              <Text style={styles.linkValue}>本页行情走势与技术指标</Text>
+              <Text style={styles.muted}>滚动到上方区块，点击币种即可就地切换 K 线与指标</Text>
+            </View>
+            <ChevronRight color={palette.textMuted} size={18} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigation.navigate("行情", { screen: "Market", params: { strategyId: activeId } })}
+            style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+          >
+            <LineChart color={palette.primary} size={20} />
+            <View style={styles.rowCopy}>
+              <Text style={styles.linkValue}>打开完整行情页</Text>
+              <Text style={styles.muted}>支持更长历史范围、自定义日期与目录标的对比</Text>
+            </View>
+            <ChevronRight color={palette.textMuted} size={18} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigation.navigate("StrategyWorkbenchDetail", { strategyId: activeId, section: "risk" })}
+            style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
+          >
+            <ShieldAlert color={palette.primary} size={20} />
+            <View style={styles.rowCopy}>
+              <Text style={styles.linkValue}>监控池与风险详情</Text>
+              <Text style={styles.muted}>查看监控池状态与账户级风险原因</Text>
+            </View>
+            <ChevronRight color={palette.textMuted} size={18} />
+          </Pressable>
         </View>
       </SectionCard>
 
-      <PrimaryButton label="查看策略详情" leading={<LineChart color={palette.canvas} size={19} />} onPress={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })} />
-      <Pressable accessibilityLabel="刷新策略工作台" accessibilityRole="button" onPress={refresh} style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
+      {!isDemo ? (
+        <SectionCard
+          actionLabel="全部交易"
+          description="该策略为 Paper 独立账本，不参与共享 OKX 钱包分配"
+          onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId })}
+          title="Paper 独立账本"
+        >
+          <View style={styles.metricGrid}>
+            <MetricCard caption={`可用资金 ${formatQuote(paperAccount?.quote_balance)}`} label="账户权益" style={styles.metric} value={formatNumericQuote(paperAccount?.equity_quote)} />
+            <MetricCard caption="服务端账户快照累计" label="收益 / 亏损" style={styles.metric} tone={typeof paperPnl === "number" && paperPnl >= 0 ? "positive" : "warning"} value={formatNumericQuote(paperPnl)} />
+            <MetricCard caption="服务端归因持仓" label="持仓数量" style={styles.metric} value={`${paperPositions.length} 个`} />
+            <MetricCard caption="当前策略观察标的" label="币种观察" style={styles.metric} tone="warning" value={`${monitoredSymbols} 个`} />
+          </View>
+          {pnl.isError ? <Text style={styles.muted}>{(pnl.error as Error).message}</Text> : null}
+          {pnl.isLoading ? (
+            <View style={styles.loading}>
+              <ActivityIndicator color={palette.primary} />
+              <Text style={styles.loadingText}>正在读取每日收益事实。</Text>
+            </View>
+          ) : (
+            <EquityCurveChart formatQuote={formatQuote} formatTimestamp={formatTimestamp} height={176} points={pnl.data ?? []} />
+          )}
+          {trades.data?.entries.length ? (
+            trades.data.entries.slice(0, 3).map((trade) => (
+              <View key={trade.evaluation_id} style={styles.tradeRow}>
+                <View style={styles.rowCopy}>
+                  <Text style={styles.tradeSymbol}>{trade.symbol}</Text>
+                  <Text style={styles.muted}>{formatTimestamp(trade.evaluated_at)}</Text>
+                </View>
+                <Text style={styles.tradeValue}>{formatQuote(trade.quote_amount)}</Text>
+              </View>
+            ))
+          ) : (
+            <Text style={styles.muted}>服务端尚无归因成交。</Text>
+          )}
+        </SectionCard>
+      ) : null}
+
+      {isDemo && demoData ? (
+        <SectionCard
+          actionLabel="执行详情"
+          description="该策略在 OKX Demo 的持仓与订单事实，仅属于本策略，不与其他策略共享"
+          onAction={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "positions" })}
+          title="OKX Demo 执行事实"
+        >
+          <View style={styles.metricGrid}>
+            <MetricCard caption="本策略归属持仓名义" label="持仓名义" style={styles.metric} value={formatNumericQuote(demoValuedPositions.length > 0 ? demoPositionNotional : undefined)} />
+            <MetricCard caption="OKX Demo 账户总估值" label="账户估值" style={styles.metric} value={formatNumericQuote(demoData.account.data.total_usdt_value)} />
+            <MetricCard caption="服务端持久化的本策略归属订单" label="订单数量" style={styles.metric} value={`${demoData.orders.length} 笔`} />
+          </View>
+        </SectionCard>
+      ) : null}
+      <PrimaryButton
+        label="查看策略详情"
+        leading={<LineChart color={palette.canvas} size={19} />}
+        onPress={() => navigation.navigate("策略", { screen: "StrategyDetail", params: { strategyId: activeId } })}
+      />
+      <Pressable accessibilityLabel="刷新并发控制台" accessibilityRole="button" onPress={refresh} style={({ pressed }) => [styles.refreshButton, pressed && styles.pressed]}>
         <RefreshCw color={palette.textMuted} size={18} />
         <Text style={styles.refreshText}>刷新服务端数据</Text>
       </Pressable>
+
       <BottomSheetSelector
         onClose={() => setSelectorVisible(false)}
         onSelect={selectStrategy}
@@ -450,8 +703,15 @@ export default function StrategyOverviewScreen() {
           value: item.strategy_id,
         }))}
         selectedValue={activeId}
-        title="选择工作台策略"
+        title="选择归因策略"
         visible={selectorVisible}
+      />
+      <AllocationCapSheet
+        credentialId={credentialId ?? ""}
+        onClose={() => setCapRow(null)}
+        row={capRow}
+        tenantId={session?.tenantId}
+        visible={capRow != null && Boolean(credentialId)}
       />
     </ScrollView>
   );
@@ -463,7 +723,7 @@ const styles = StyleSheet.create({
   heading: { gap: spacing.sm },
   headingCopy: { gap: spacing.xxs },
   eyebrow: { color: palette.primary, fontSize: 11, fontWeight: "900", letterSpacing: 1 },
-  title: { color: palette.text, fontSize: 29, fontWeight: "900", letterSpacing: -0.7 },
+  title: { color: palette.text, fontSize: 27, fontWeight: "900", letterSpacing: -0.6 },
   subtitle: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },
   selector: { alignItems: "center", backgroundColor: palette.surface, borderColor: palette.primary, borderRadius: radius.md, borderWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 56, paddingHorizontal: spacing.md },
   selectorCopy: { flex: 1, gap: spacing.xxs },
@@ -471,47 +731,37 @@ const styles = StyleSheet.create({
   selectorMeta: { color: palette.textMuted, fontSize: 12, fontWeight: "700" },
   metricGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   metric: { flexBasis: "47%", minWidth: 148 },
-  symbols: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
-  symbol: { alignItems: "center", backgroundColor: palette.primarySoft, borderColor: palette.primary, borderRadius: radius.pill, borderWidth: 1, flexDirection: "row", gap: spacing.xxs, minHeight: 44, paddingHorizontal: spacing.sm },
-  symbolText: { color: palette.primary, fontSize: 13, fontWeight: "900" },
-  moreSymbols: { alignItems: "center", backgroundColor: palette.surfaceMuted, borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, minHeight: 44, paddingHorizontal: spacing.sm },
-  moreSymbolsText: { color: palette.primary, flex: 1, fontSize: 12, fontWeight: "800" },
-  detailLinks: { gap: spacing.xs },
-  linkValue: { color: palette.text, fontSize: 12, fontWeight: "900" },
-  decisionSummary: { color: palette.text, fontSize: 13, lineHeight: 20 },
-  loading: { alignItems: "center", flexDirection: "row", gap: spacing.sm, minHeight: 48 },
-  loadingText: { color: palette.textMuted, flex: 1, fontSize: 14, lineHeight: 20 },
-  dataRows: { gap: spacing.xs },
-  stateRows: { gap: spacing.xs },
-  incompleteText: { color: palette.warning, fontSize: 12, fontWeight: "800", lineHeight: 18 },
-  allocationRows: { gap: spacing.xs },
-  allocationHeading: { color: palette.text, fontSize: 14, fontWeight: "900", paddingTop: spacing.xs },
-  allocationTrailing: { alignItems: "flex-end", gap: spacing.xxs },
-  allocationPnlLabel: { color: palette.textMuted, fontSize: 10, fontWeight: "700" },
-  positiveText: { color: palette.positive },
-  negativeText: { color: palette.negative },
-  stateText: { color: palette.text, fontSize: 13, fontWeight: "800", lineHeight: 20 },
-  row: { color: palette.text, fontSize: 14, lineHeight: 22 },
-  rowCopy: { flex: 1, gap: 2 },
-  muted: { color: palette.textMuted, fontSize: 13, lineHeight: 19 },
-  positionRow: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 52, paddingVertical: spacing.xs },
-  rangeTabs: { gap: spacing.xs, paddingBottom: spacing.xs },
-  rangeTab: { borderColor: palette.border, borderRadius: radius.pill, borderWidth: 1, minHeight: 34, paddingHorizontal: spacing.sm, justifyContent: "center" },
-  rangeTabActive: { backgroundColor: palette.primarySoft, borderColor: palette.primary },
-  rangeTabText: { color: palette.textMuted, fontSize: 12, fontWeight: "800" },
-  rangeTabTextActive: { color: palette.primary },
-  positionSymbol: { color: palette.text, fontSize: 14, fontWeight: "800" },
-  positionValue: { color: palette.text, fontSize: 13, fontWeight: "900" },
-  orderRow: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 54, paddingVertical: spacing.xs },
-  orderStatus: { color: palette.warning, fontSize: 12, fontWeight: "900", textAlign: "right" },
-  pagination: { flexDirection: "row", gap: spacing.sm, justifyContent: "flex-end", paddingTop: spacing.sm },
-  pageButton: { borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, minHeight: 36, paddingHorizontal: spacing.sm, justifyContent: "center" },
-  pageButtonText: { color: palette.primary, fontSize: 12, fontWeight: "800" },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xxs },
+  badge: { borderRadius: radius.sm, borderWidth: 1, paddingHorizontal: spacing.xs, paddingVertical: 4 },
+  badgeText: { color: palette.textMuted, fontSize: 10, fontWeight: "800" },
+  warningBox: { backgroundColor: palette.warningSoft, borderColor: palette.warning, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, padding: spacing.sm },
+  warningTitle: { color: palette.warning, fontSize: 12, fontWeight: "900" },
+  warningText: { color: palette.warning, flex: 1, fontSize: 12, lineHeight: 18 },
+  unallocatedCopy: { flex: 1, gap: spacing.xxs },
+  unallocatedRow: { color: palette.text, fontSize: 12, lineHeight: 18 },
+  dangerBox: { backgroundColor: palette.negativeSoft, borderColor: palette.negative, borderRadius: radius.sm, borderWidth: 1, padding: spacing.sm },
+  dangerText: { color: palette.negative, fontSize: 12, fontWeight: "800", lineHeight: 18 },
   accountGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   accountMetric: { backgroundColor: palette.surfaceRaised, borderRadius: radius.sm, flexBasis: "47%", flexGrow: 1, gap: spacing.xxs, minWidth: 136, padding: spacing.sm },
   accountLabel: { color: palette.textMuted, fontSize: 11, fontWeight: "800" },
   accountValue: { color: palette.text, fontSize: 15, fontWeight: "900" },
-  rule: { backgroundColor: palette.border, height: 1 },
+  block: { borderTopColor: palette.border, borderTopWidth: 1, gap: spacing.xs, paddingTop: spacing.sm },
+  blockHeader: { alignItems: "baseline", flexDirection: "row", gap: spacing.xs, justifyContent: "space-between" },
+  blockTitle: { color: palette.text, fontSize: 15, fontWeight: "900" },
+  blockMeta: { color: palette.textMuted, fontSize: 11, fontWeight: "700" },
+  chartGrid: { gap: spacing.sm },
+  stateRows: { gap: spacing.xxs },
+  stateText: { color: palette.text, fontSize: 13, fontWeight: "800", lineHeight: 20 },
+  muted: { color: palette.textMuted, fontSize: 12, lineHeight: 18 },
+  detailLinks: { gap: spacing.xs },
+  linkRow: { alignItems: "center", borderColor: palette.border, borderRadius: radius.md, borderWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 60, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  linkValue: { color: palette.text, fontSize: 14, fontWeight: "900" },
+  rowCopy: { flex: 1, gap: 2 },
+  tradeRow: { alignItems: "center", borderTopColor: palette.border, borderTopWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 52, paddingVertical: spacing.xs },
+  tradeSymbol: { color: palette.text, fontSize: 14, fontWeight: "800" },
+  tradeValue: { color: palette.text, fontSize: 13, fontWeight: "900" },
+  loading: { alignItems: "center", flexDirection: "row", gap: spacing.sm, minHeight: 48 },
+  loadingText: { color: palette.textMuted, flex: 1, fontSize: 13, lineHeight: 19 },
   refreshButton: { alignItems: "center", borderColor: palette.border, borderRadius: radius.sm, borderWidth: 1, flexDirection: "row", gap: spacing.xs, justifyContent: "center", minHeight: 48, paddingHorizontal: spacing.md },
   refreshText: { color: palette.textMuted, fontSize: 14, fontWeight: "800" },
   pressed: { opacity: 0.76 },

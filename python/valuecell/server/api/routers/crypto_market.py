@@ -11,8 +11,10 @@ from valuecell.server.api.schemas import SuccessResponse
 from valuecell.server.api.schemas.crypto_market import (
     CryptoMarketIndicatorsData,
     CryptoSymbolCatalogData,
+    CryptoSymbolUniverseData,
 )
 from valuecell.server.services.crypto_market_service import get_crypto_market_service
+from valuecell.server.services.crypto_universe_service import CryptoSymbolUniverseService
 
 
 def create_crypto_market_router() -> APIRouter:
@@ -29,6 +31,29 @@ def create_crypto_market_router() -> APIRouter:
         return SuccessResponse.create(
             data=service.get_supported_symbols(),
             msg="Crypto symbols retrieved successfully",
+        )
+
+    @router.get(
+        "/universe",
+        response_model=SuccessResponse[CryptoSymbolUniverseData],
+        summary="Get the published crypto symbol universe and its evidence",
+    )
+    async def get_crypto_symbol_universe():
+        """Read the exchange-derived catalogue both clients display.
+
+        The catalogue is built by a background sync; this route never calls the
+        exchange, so a client can poll it without adding venue load.
+        """
+
+        data = CryptoSymbolUniverseService().catalog()
+        if data is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Crypto symbol universe is warming; retry shortly",
+            )
+        return SuccessResponse.create(
+            data=CryptoSymbolUniverseData.model_validate(data),
+            msg="Crypto symbol universe retrieved successfully",
         )
 
     @router.get(

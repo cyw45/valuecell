@@ -1721,3 +1721,92 @@ def migrate_rule_strategy_paper_mode_flag(session: Session) -> bool:
         count=corrected,
     )
     return True
+
+CRYPTO_SYMBOL_UNIVERSE_MIGRATION_VERSION = "20260914_crypto_symbol_universe_v1"
+CRYPTO_SYMBOL_UNIVERSE_MIGRATION_LOCK_KEY = 7720250740
+
+
+def migrate_crypto_symbol_universe(session: Session) -> bool:
+    """Install the exchange-derived crypto symbol catalogue storage.
+
+    The catalogue is independent of any tenant: it describes what the venue
+    lists, while each strategy keeps its own observed subset. Versions are
+    immutable and only one row is ever ``active``.
+    """
+
+    dialect = session.bind.dialect.name
+    if dialect not in {"postgresql", "sqlite"}:
+        raise RuntimeError(f"crypto symbol universe migration does not support {dialect!r}")
+    if dialect == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": CRYPTO_SYMBOL_UNIVERSE_MIGRATION_LOCK_KEY},
+        )
+    session.execute(
+        text(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            "version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP WITH TIME ZONE "
+            "NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+    )
+    if session.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version=:version"),
+        {"version": CRYPTO_SYMBOL_UNIVERSE_MIGRATION_VERSION},
+    ).first():
+        return False
+
+    ts = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "DATETIME"
+    primary_id = (
+        "BIGSERIAL PRIMARY KEY" if dialect == "postgresql" else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    )
+    foreign_id = "BIGINT" if dialect == "postgresql" else "INTEGER"
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS crypto_symbol_universes (
+        id {primary_id},
+        version INTEGER NOT NULL UNIQUE, status VARCHAR(16) NOT NULL DEFAULT 'superseded',
+        source VARCHAR(32) NOT NULL DEFAULT 'okx', quote_asset VARCHAR(16) NOT NULL DEFAULT 'USDT',
+        observed_at {ts} NOT NULL, evaluated_count INTEGER NOT NULL DEFAULT 0,
+        admitted_count INTEGER NOT NULL DEFAULT 0, added_count INTEGER NOT NULL DEFAULT 0,
+        removed_count INTEGER NOT NULL DEFAULT 0, retained_count INTEGER NOT NULL DEFAULT 0,
+        min_listing_age_days INTEGER NOT NULL DEFAULT 90,
+        min_average_quote_volume_30d FLOAT NOT NULL DEFAULT 5000000,
+        reason_detail VARCHAR(1000), created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"""))
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS crypto_symbol_universe_entries (
+        id {primary_id},
+        universe_id {foreign_id} NOT NULL REFERENCES crypto_symbol_universes(id) ON DELETE CASCADE,
+        symbol VARCHAR(32) NOT NULL, state VARCHAR(16) NOT NULL, decision VARCHAR(16) NOT NULL,
+        reason_code VARCHAR(96) NOT NULL, reason_detail VARCHAR(1000),
+        permanent_exclusion BOOLEAN NOT NULL DEFAULT FALSE,
+        listed_at {ts}, listing_age_days INTEGER, average_quote_volume_30d FLOAT,
+        quote_volume_24h FLOAT, price_quote FLOAT, observed_at {ts} NOT NULL,
+        created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT uq_crypto_symbol_universe_entry UNIQUE (universe_id, symbol)
+    )"""))
+    session.execute(text(f"""CREATE TABLE IF NOT EXISTS crypto_symbol_exclusions (
+        id {primary_id},
+        symbol VARCHAR(32) NOT NULL UNIQUE, reason_code VARCHAR(96) NOT NULL,
+        reason_detail VARCHAR(1000), observed_at {ts} NOT NULL,
+        created_at {ts} NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )"""))
+    session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_crypto_symbol_universe_status "
+            "ON crypto_symbol_universes (status, version)"
+        )
+    )
+    session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_crypto_symbol_universe_entry_symbol "
+            "ON crypto_symbol_universe_entries (symbol, universe_id)"
+        )
+    )
+    session.execute(
+        text("INSERT INTO schema_migrations (version) VALUES (:version)"),
+        {"version": CRYPTO_SYMBOL_UNIVERSE_MIGRATION_VERSION},
+    )
+    session.commit()
+    logger.info(
+        "Applied schema migration {version}",
+        version=CRYPTO_SYMBOL_UNIVERSE_MIGRATION_VERSION,
+    )
+    return True

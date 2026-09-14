@@ -17,6 +17,7 @@ const STOCK_QUERY_KEYS = {
 
 const CRYPTO_MARKET_QUERY_KEYS = {
   symbols: ["crypto-market", "symbols"],
+  universe: ["crypto-market", "universe"],
   indicators: queryKeyFn(["crypto-market", "indicators"]),
 } as const;
 

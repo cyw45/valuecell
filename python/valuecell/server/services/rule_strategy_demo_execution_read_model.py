@@ -247,6 +247,51 @@ def strategy_inventory_by_symbol(
     return inventory
 
 
+def strategy_attributed_orders(
+    orders: list[dict[str, Any]],
+    *,
+    strategy_id: str,
+    started_at: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Orders that belong to this strategy and may be replayed for attribution."""
+    return [
+        item
+        for item in orders
+        if item.get("strategy_id") == strategy_id
+        and item.get("execution_source") in {"rule_strategy", "shared_demo"}
+        and (
+            started_at is None
+            or _timestamp_sort_key(item.get("filled_at") or item.get("created_at"))
+            >= _timestamp_sort_key(started_at)
+        )
+    ]
+
+
+def strategy_held_symbols(
+    *,
+    strategy_id: str,
+    fills: list[Any] | None = None,
+    venue_orders: list[Any] | None = None,
+    order_projections: list[Any] | None = None,
+) -> set[str]:
+    """Symbols whose strategy-attributed quantity is still open.
+
+    The catalogue adaptation uses this so a position stays evaluable after its
+    instrument leaves the tradable catalogue; shared wallet quantities are never
+    attributed here.
+    """
+    normalized = _shared_evidence_orders(
+        [],
+        fills=fills,
+        venue_orders=venue_orders,
+        projections=order_projections,
+    )
+    inventory = strategy_inventory_by_symbol(
+        strategy_attributed_orders(normalized, strategy_id=strategy_id)
+    )
+    return {symbol for symbol, (quantity, _cost) in inventory.items() if quantity > 0}
+
+
 def _pnl_and_curve(orders: list[dict[str, Any]], positions: dict[str, Any], checked_at: str) -> tuple[dict[str, Any], dict[str, Any]]:
     legacy_filled_orders = [item for item in orders if item.get("status") == "filled" and (_decimal(item.get("filled_quantity")) or 0) <= 0]
     fills = [item for item in orders if (_decimal(item.get("filled_quantity")) or 0) > 0]
@@ -403,17 +448,9 @@ def build_demo_execution_read_model(
         venue_orders=shared_venue_orders,
         projections=shared_order_projections,
     )
-    strategy_orders = [
-        item
-        for item in orders
-        if item.get("strategy_id") == strategy_id
-        and item.get("execution_source") in {"rule_strategy", "shared_demo"}
-        and (
-            started_at is None
-            or _timestamp_sort_key(item.get("filled_at") or item.get("created_at"))
-            >= _timestamp_sort_key(started_at)
-        )
-    ]
+    strategy_orders = strategy_attributed_orders(
+        orders, strategy_id=strategy_id, started_at=started_at
+    )
     checked_at = positions.get("checked_at") or account.get("checked_at") or datetime.now(timezone.utc).isoformat()
     pnl, equity_curve = _pnl_and_curve(strategy_orders, positions, checked_at)
     inventory = strategy_inventory_by_symbol(strategy_orders, started_at=started_at)

@@ -71,5 +71,43 @@ class CryptoSymbolCatalogData(BaseModel):
     symbols: List[str]
 
 
+class CryptoSymbolUniverseEntryData(BaseModel):
+    """One symbol in the published catalogue with its exchange evidence."""
+
+    symbol: str
+    state: str
+    decision: str
+    reason_code: str
+    reason_detail: Optional[str] = None
+    permanent_exclusion: bool = False
+    listed_at: Optional[str] = None
+    listing_age_days: Optional[int] = None
+    average_quote_volume_30d: Optional[float] = None
+    quote_volume_24h: Optional[float] = None
+    price_quote: Optional[float] = None
+    observed_at: Optional[str] = None
+
+
+class CryptoSymbolUniverseData(BaseModel):
+    """The published catalogue plus the thresholds and counts behind it."""
+
+    version: int
+    status: str
+    source: str
+    quote_asset: str
+    observed_at: str
+    next_sync_due_at: Optional[str] = None
+    sync_interval_days: int
+    min_listing_age_days: int
+    min_average_quote_volume_30d: float
+    evaluated_count: int
+    admitted_count: int
+    added_count: int
+    removed_count: int
+    retained_count: int
+    reason_detail: Optional[str] = None
+    entries: List[CryptoSymbolUniverseEntryData] = Field(default_factory=list)
+
+
 CryptoMarketIndicatorsResponse = SuccessResponse[CryptoMarketIndicatorsData]
 CryptoSymbolCatalogResponse = SuccessResponse[CryptoSymbolCatalogData]

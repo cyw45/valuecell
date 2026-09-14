@@ -36,6 +36,11 @@ export type StrategyIdentity = {
   code_fingerprint: string;
 };
 
+/**
+ * One row of the four-strategy concurrency matrix. The money fields are the
+ * allocator's own facts for this strategy, never a share of the shared wallet;
+ * the trading statistics are replayed only from this strategy's own fills.
+ */
 export type StrategyAllocation = {
   strategy_id: string;
   kind: StrategyKind;
@@ -45,9 +50,35 @@ export type StrategyAllocation = {
   realized_pnl_quote: number | null;
   unrealized_pnl_quote: number | null;
   net_pnl_quote: number | null;
+  return_rate_pct: number | null;
+  fill_count: number;
+  completed_trade_count: number;
+  winning_trade_count: number;
+  win_rate: number | null;
+  turnover_quote: number;
+  fee_quote: number;
+  turnover_ratio: number | null;
   allocation_state: AllocationState;
   lifecycle_reason?: string | null;
   utilization_denominator_quote: number;
+  max_reserved_quote: number | null;
+  max_occupied_quote: number | null;
+  status: StrategyStatus;
+  current_batch_id: string | null;
+  utilization_ratio: number;
+};
+
+/**
+ * A strategy that exists but is not funded by this shared wallet, so it must
+ * stay out of the reserve/occupancy totals instead of silently reading as zero.
+ */
+export type UnallocatedStrategy = {
+  strategy_id: string;
+  name: string;
+  kind: StrategyKind;
+  status: StrategyStatus;
+  environment: StrategyExecutionEnvironment | null;
+  reason: string;
 };
 
 export type SharedWalletSummary = {
@@ -73,7 +104,35 @@ export type CapitalAllocatorSummary = {
   utilization_denominator_quote: number;
   account_utilization_ratio: number;
   allocations: StrategyAllocation[];
+  unallocated_strategies: UnallocatedStrategy[];
   observed_at: string;
+};
+
+/**
+ * Persisted wallet snapshots only. The curve is the OKX account fact used to
+ * check what the four strategies did together, so it is never rebuilt from
+ * strategy-attributed PnL.
+ */
+export type WalletEquityCurvePoint = {
+  ts: string;
+  equity_quote: number;
+  cumulative_pnl: number;
+  daily_pnl_quote: number;
+  action: "wallet_snapshot";
+};
+
+export type WalletEquityCurve = {
+  status: "available" | "unavailable";
+  reason_code: string | null;
+  points: WalletEquityCurvePoint[];
+};
+
+/** Account-level gate that decides whether any strategy may open new positions. */
+export type ExecutionGate = {
+  status: "ready" | "protected" | "blocked";
+  can_open_positions: boolean;
+  reasons: string[];
+  unresolved_submission_count: number;
 };
 
 export type AccountStrategyOverview = {
@@ -83,6 +142,8 @@ export type AccountStrategyOverview = {
   wallet_strategy_reconciliation_delta_quote: number | null;
   data_complete: boolean;
   incomplete_reason: string | null;
+  execution_gate: ExecutionGate;
+  wallet_equity_curve: WalletEquityCurve;
 };
 
 export type ExplanationCondition = {
@@ -111,6 +172,7 @@ export type UnifiedTradeFact = {
   batch_id: string | null;
   evaluation_id: string | null;
   intent_id: string | null;
+  reservation_id: string | null;
   order_id: string | null;
   fill_id: string | null;
   symbol: string;
@@ -122,6 +184,7 @@ export type UnifiedTradeFact = {
     | "pending"
     | "submitted"
     | "submission_unknown"
+    | "recovery_required"
     | "partially_filled"
     | "filled"
     | "cancelled"

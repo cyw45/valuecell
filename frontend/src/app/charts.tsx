@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BarChart3, ExternalLink, RadioTower } from "lucide-react";
-import { useGetCryptoMarketIndicators } from "@/api/crypto-market";
+import {
+  useGetCryptoMarketIndicators,
+  useGetCryptoSymbolUniverse,
+} from "@/api/crypto-market";
 import { useRuleStrategy } from "@/api/rule-strategy";
+import {
+  buildWatchedBySymbol,
+  mergeChartSymbols,
+  universeAdmittedSymbols,
+} from "@/app/symbol-universe";
 import {
   MarketIndicatorPanelChart,
   type MarketIndicatorPanel,
@@ -30,6 +38,7 @@ import CandlestickChart, {
   type CandlestickData,
   type CandlestickMovingAverage,
 } from "@/components/valuecell/charts/candlestick-chart";
+import SymbolUniverseBoard from "@/components/valuecell/charts/symbol-universe-board";
 import { useActiveRuleStrategyId } from "@/hooks/use-active-rule-strategy";
 
 const DEFAULT_SYMBOLS = ["BTC-USDT", "ETH-USDT", "SOL-USDT"];
@@ -64,15 +73,25 @@ type HistoryRange = (typeof HISTORY_RANGES)[number]["value"];
 
 export default function ChartsPage() {
   const { t } = useTranslation();
-  const [strategyId] = useActiveRuleStrategyId();
+  const [strategyId, , strategiesQuery] = useActiveRuleStrategyId();
   const { data: ruleStrategy } = useRuleStrategy(strategyId);
-  const chartSymbols = useMemo(
-    () =>
-      ruleStrategy?.config.symbols.length
-        ? ruleStrategy.config.symbols
-        : DEFAULT_SYMBOLS,
-    [ruleStrategy?.config.symbols],
+  const universeQuery = useGetCryptoSymbolUniverse();
+  const universeSymbols = useMemo(
+    () => universeAdmittedSymbols(universeQuery.data),
+    [universeQuery.data],
   );
+  const watchedBySymbol = useMemo(
+    () => buildWatchedBySymbol(strategiesQuery.data),
+    [strategiesQuery.data],
+  );
+  // Strategy symbols stay first so existing habits keep working, and the venue
+  // catalogue adds every other tradable instrument for research.
+  const chartSymbols = useMemo(() => {
+    const primary = ruleStrategy?.config.symbols.length
+      ? ruleStrategy.config.symbols
+      : DEFAULT_SYMBOLS;
+    return mergeChartSymbols(primary, universeSymbols);
+  }, [ruleStrategy?.config.symbols, universeSymbols]);
   const [symbol, setSymbol] = useState(DEFAULT_SYMBOLS[0]);
   const [interval, setInterval] = useState("1h");
 
@@ -176,7 +195,7 @@ export default function ChartsPage() {
                     })
                   : t("saas.charts.marketSource")}
                 {strategyId
-                  ? ` · 策略观察 ${chartSymbols.length} 个币种，可在此切换`
+                  ? ` · 策略观察 ${ruleStrategy?.config.symbols.length ?? 0} 个币种，目录可选 ${chartSymbols.length} 个`
                   : ""}
               </CardDescription>
             </div>
@@ -359,6 +378,12 @@ export default function ChartsPage() {
             ) : null}
           </CardContent>
         </Card>
+
+        <SymbolUniverseBoard
+          onSelectSymbol={setSymbol}
+          selectedSymbol={symbol}
+          watchedBySymbol={watchedBySymbol}
+        />
 
         <Card className="gap-3 py-5">
           <CardHeader className="px-5">

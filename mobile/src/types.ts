@@ -938,6 +938,42 @@ export interface CryptoSymbolCatalog {
   symbols: string[];
 }
 
+export type CryptoSymbolUniverseState = "admitted" | "rejected" | string;
+
+export interface CryptoSymbolUniverseEntry {
+  symbol: string;
+  state: CryptoSymbolUniverseState;
+  decision: "added" | "retained" | "removed" | "rejected" | string;
+  reason_code: string;
+  reason_detail?: string | null;
+  permanent_exclusion: boolean;
+  listed_at?: string | null;
+  listing_age_days?: number | null;
+  average_quote_volume_30d?: number | null;
+  quote_volume_24h?: number | null;
+  price_quote?: number | null;
+  observed_at?: string | null;
+}
+
+export interface CryptoSymbolUniverse {
+  version: number;
+  status: string;
+  source: string;
+  quote_asset: string;
+  observed_at: string;
+  next_sync_due_at?: string | null;
+  sync_interval_days: number;
+  min_listing_age_days: number;
+  min_average_quote_volume_30d: number;
+  evaluated_count: number;
+  admitted_count: number;
+  added_count: number;
+  removed_count: number;
+  retained_count: number;
+  reason_detail?: string | null;
+  entries: CryptoSymbolUniverseEntry[];
+}
+
 export interface CryptoMarketQueryOptions {
   providers?: string[];
   from_ts_ms?: number;

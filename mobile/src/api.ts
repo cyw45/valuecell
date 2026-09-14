@@ -345,6 +345,25 @@ class MobileApiClient {
         new URLSearchParams({ credential_id: credentialId }),
       ),
     );
+  updateStrategyAllocationCap = (
+    strategyId: string,
+    credentialId: string,
+    maxReservedQuote: number,
+    maxOccupiedQuote: number,
+  ): Promise<Record<string, unknown>> =>
+    this.authenticatedRequest<Record<string, unknown>>(
+      withQuery(
+        `/rule-strategies/shared-account-summary/${pathSegment(strategyId)}/allocation-cap`,
+        new URLSearchParams({ credential_id: credentialId }),
+      ),
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          max_reserved_quote: maxReservedQuote,
+          max_occupied_quote: maxOccupiedQuote,
+        }),
+      },
+    );
   strategyAccount = (
     strategyId: string,
     batchId?: string | null,
@@ -558,6 +577,9 @@ class MobileApiClient {
 
   cryptoSymbols = (): Promise<Types.CryptoSymbolCatalog> =>
     this.publicRequest<Types.CryptoSymbolCatalog>("/crypto-market/symbols");
+
+  cryptoSymbolUniverse = (): Promise<Types.CryptoSymbolUniverse> =>
+    this.publicRequest<Types.CryptoSymbolUniverse>("/crypto-market/universe");
 
   market = (
     symbol: string,
