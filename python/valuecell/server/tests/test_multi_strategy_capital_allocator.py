@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import Integer, create_engine
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import sessionmaker
 
 from valuecell.server.db.models.base import Base
@@ -79,6 +80,44 @@ def test_reservation_prevents_two_strategies_using_the_same_quote() -> None:
             idempotency_key="reserve-b",
             requested_quote="400",
         )
+
+
+def test_strategy_cap_lookup_compares_integer_active_flag(monkeypatch) -> None:
+    from sqlalchemy.orm import Query
+
+    engine = create_engine("postgresql://")
+    session = sessionmaker(bind=engine)()
+    account = StrategySharedAccount(id="account-a", credential_id="credential-a")
+    captured = {}
+    original_filter_by = Query.filter_by
+
+    def capture_filter_by(self, **filters):
+        captured.update(filters)
+        return self
+
+    monkeypatch.setattr(Query, "filter_by", capture_filter_by)
+    allocator = SharedCapitalAllocator(session)
+    try:
+        allocator._strategy_cap(
+            account,
+            tenant_id="tenant-a",
+            strategy_id="strategy-a",
+            strategy_cap_quote=None,
+        )
+    except CapitalAllocationError:
+        pass
+    finally:
+        monkeypatch.setattr(Query, "filter_by", original_filter_by)
+
+    assert type(captured["active"]) is int
+    assert captured["active"] == 1
+    statement = str(
+        session.query(SharedDemoStrategyAllocationCap)
+        .filter_by(**captured)
+        .statement.compile(dialect=postgresql.dialect())
+    )
+    assert "shared_demo_strategy_allocation_caps.active = %(active_1)s" in statement
+    assert isinstance(SharedDemoStrategyAllocationCap.active.type, Integer)
 
 
 def test_reservation_uses_persisted_strategy_cap_without_callsite_override() -> None:

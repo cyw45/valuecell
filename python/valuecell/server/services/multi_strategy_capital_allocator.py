@@ -180,7 +180,7 @@ class SharedCapitalAllocator:
                     credential_id=account.credential_id,
                     environment="okx_demo",
                     strategy_id=strategy_id,
-                    active=True,
+                    active=1,
                 )
                 .order_by(model.version.desc())
                 .all()
