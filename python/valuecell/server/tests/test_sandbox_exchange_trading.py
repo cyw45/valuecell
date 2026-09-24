@@ -864,6 +864,58 @@ def test_sell_fill_releases_matching_strategy_occupied_capital(monkeypatch):
     }]
 
 
+def test_sell_fill_releases_several_same_symbol_reservations_oldest_first(monkeypatch):
+    calls = []
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def with_for_update(self):
+            return self
+
+        def all(self):
+            return [
+                SimpleNamespace(
+                    reservation_id="newer", created_at=datetime(2026, 8, 2, tzinfo=timezone.utc),
+                    consumed_quote=Decimal("100"),
+                ),
+                SimpleNamespace(
+                    reservation_id="older", created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+                    consumed_quote=Decimal("80"),
+                ),
+            ]
+
+    class Session:
+        def query(self, model):
+            assert model is StrategyCapitalReservation
+            return Query()
+
+    class Allocator:
+        def __init__(self, _session):
+            pass
+
+        def release_occupied(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(trading_module, "SharedCapitalAllocator", Allocator)
+    service = object.__new__(trading_module.SandboxExchangeTradingService)
+    service.db = Session()
+
+    service._release_shared_demo_exit_occupied(
+        account_id="account-exit",
+        tenant_id="tenant-a",
+        strategy_id="strategy-exit",
+        batch_id="batch-exit",
+        symbol="BTC/USDT",
+        released_quote=Decimal("120"),
+    )
+
+    assert [call["reservation_id"] for call in calls] == ["older", "newer"]
+    assert [call["released_quote"] for call in calls] == [Decimal("80"), Decimal("40")]
+    assert all(call["reason"] == "venue_exit_fill" for call in calls)
+
+
 def test_sell_intent_without_quote_reservation_records_fact_and_releases_only_owner():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)

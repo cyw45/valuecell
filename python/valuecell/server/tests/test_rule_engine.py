@@ -289,6 +289,20 @@ def test_risk_exits_sell_open_positions_before_indicator_confirmation(
     assert _condition(result, other_exit).state == "not_triggered"
 
 
+def test_sell_quote_is_capped_by_the_open_position_not_the_entry_size():
+    result = _evaluate(
+        [100.0, 90.0],
+        config={"risk": {"order_quote_amount": 300.0, "stop_loss_pct": 0.05}},
+        market={
+            "price": 90.0,
+            "position": {"quantity": 0.01, "entry_price": 100.0},
+        },
+    )
+
+    assert result.action == "sell"
+    assert result.sizing.requested_quote == pytest.approx(0.9)
+
+
 @pytest.mark.parametrize(
     ("market", "risk", "expected_block"),
     [

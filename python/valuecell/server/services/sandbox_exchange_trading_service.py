@@ -1166,7 +1166,7 @@ class SandboxExchangeTradingService:
         symbol: str,
         released_quote: Decimal,
     ) -> None:
-        """Return confirmed sell proceeds only to one matching strategy reservation."""
+        """Return confirmed sell proceeds to this strategy's same-symbol buy reservations."""
         candidates = (
             self.db.query(StrategyCapitalReservation)
             .filter(
@@ -1181,18 +1181,50 @@ class SandboxExchangeTradingService:
             .with_for_update()
             .all()
         )
-        if len(candidates) != 1:
+        if not candidates:
             return
         try:
-            SharedCapitalAllocator(self.db).release_occupied(
+            self._release_occupied_proportionally(
+                candidates,
                 account_id=account_id,
                 tenant_id=tenant_id,
                 released_quote=released_quote,
-                reason="venue_exit_fill",
-                reservation_id=candidates[0].reservation_id,
             )
         except CapitalAllocationError:
             return
+
+    def _release_occupied_proportionally(
+        self,
+        rows: list[Any],
+        *,
+        account_id: str,
+        tenant_id: str,
+        released_quote: Decimal,
+    ) -> None:
+        """Return exit proceeds oldest-first, never past what those buys still consume."""
+        remaining = released_quote
+        allocator = SharedCapitalAllocator(self.db)
+        for row in sorted(
+            rows,
+            key=lambda item: (
+                getattr(item, "created_at", None) or datetime.min,
+                item.reservation_id,
+            ),
+        ):
+            if remaining <= 0:
+                return
+            consumed = self._decimal_or_zero(row.consumed_quote)
+            if consumed <= 0:
+                continue
+            share = min(consumed, remaining)
+            allocator.release_occupied(
+                account_id=account_id,
+                tenant_id=tenant_id,
+                released_quote=share,
+                reason="venue_exit_fill",
+                reservation_id=row.reservation_id,
+            )
+            remaining -= share
 
     def _settle_shared_demo_reservation(
         self, intent: RuleStrategyExecutionIntent, binding: SharedDemoExecutionIntent,

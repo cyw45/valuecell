@@ -1341,13 +1341,18 @@ class StrategyScheduler:
                     mark_price=price if price > 0 else None,
                 )
                 if price <= 0 or held_quantity <= 0:
+                    # Terminal for this candle. Returning a retryable block here
+                    # recreates the same sell intent on every tick and hammers
+                    # the venue with a notional the wallet cannot fill.
                     return {
-                        "execution": "blocked",
+                        "execution": "ignored_dust",
                         "sandbox": True,
-                        "reason": "strategy has no confirmed inventory to sell",
+                        "status": "ignored_dust",
+                        "reason": "strategy confirmed inventory is below the exchange minimum",
                     }
-                if close_all_attributed:
-                    requested_quote = held_quantity * price
+                position_quote = held_quantity * price
+                if close_all_attributed or requested_quote > position_quote:
+                    requested_quote = position_quote
                 if requested_quote / price > held_quantity:
                     return {
                         "execution": "blocked",

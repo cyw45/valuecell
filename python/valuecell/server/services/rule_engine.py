@@ -1230,6 +1230,13 @@ class RuleEngine:
         remaining_total = max(0.0, total_limit - market.total_position_quote)
         remaining_symbol = max(0.0, symbol_limit - current_symbol_quote)
         requested = min(risk.order_quote_amount, remaining_total, remaining_symbol)
+        # A sell closes the open position. The entry size is only a ceiling for
+        # buys; using it as the sell amount keeps retrying a notional the wallet
+        # no longer holds (for example a 300 USDT request against dust).
+        if market.position.quantity > 0 and market.price > 0:
+            position_quote = market.position.quantity * market.price
+            if requested > position_quote:
+                requested = position_quote
         return RuleStrategySizing(
             mode="fixed_quote",
             requested_quote=requested,
