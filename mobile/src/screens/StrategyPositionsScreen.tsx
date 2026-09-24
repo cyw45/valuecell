@@ -12,6 +12,7 @@ import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
 import type { RuleStrategyPaperPosition, RuleStrategyTradeLogEntry, SandboxOrder } from "../types";
 import { formatQuote, formatTimestamp } from "./workbench";
+import { attributedDecisionReason, executionQueryScope } from "../execution-scope";
 
 type Route = RouteProp<WorkbenchStackParamList, "StrategyPositions">;
 type Range = "1d" | "5d" | "1w" | "1m";
@@ -111,13 +112,26 @@ export default function StrategyPositionsScreen() {
   const [confirmation, setConfirmation] = useState("");
   const strategy = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId], queryFn: () => api.strategy(strategyId), enabled: Boolean(session && strategyId) });
   const isDemo = strategy.data?.config.execution.environment === "okx_demo";
+  const batches = useQuery({
+    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "batches"],
+    queryFn: () => api.strategyBatches(strategyId),
+    enabled: Boolean(strategyId && isDemo && batchId == null),
+  });
+  const scope = executionQueryScope({
+    environment: strategy.data?.config.execution.environment,
+    status: strategy.data?.status,
+    currentBatchId: batchId != null ? batchId : batches.isSuccess ? (batches.data.current_batch_id ?? null) : undefined,
+    selectedBatchId: batchId,
+  });
+  const demoReady = Boolean(strategyId && isDemo && scope.ready && scope.unavailableReason !== "no_current_batch");
   const access = useQuery({ queryKey: ["mobile", session?.tenantId, "access"], queryFn: api.access, enabled: Boolean(session) });
   const account = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account", batchId ?? "current"], queryFn: () => api.strategyAccount(strategyId, batchId), enabled: Boolean(strategyId && strategy.data && !isDemo) });
   const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 500, batchId ?? "current"], queryFn: () => api.strategyLog(strategyId, "trades", 500, batchId), enabled: Boolean(strategyId && !isDemo) });
-  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", "all", batchId ?? "current"], queryFn: () => api.strategyDemoExecutionAll(strategyId, 100, batchId), enabled: Boolean(strategyId && isDemo), retry: 1, retryDelay: 1000 });
-  const evaluations = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "evaluations", 100, batchId ?? "current"], queryFn: () => api.strategyEvaluations(strategyId, 100, batchId), enabled: Boolean(strategyId && (route.params.evaluationId || route.params.orderId)) });
+  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", "all", scope.batchId ?? "current"], queryFn: () => api.strategyDemoExecutionAll(strategyId, 100, scope.batchId), enabled: demoReady, retry: 1, retryDelay: 1000 });
+  const tradeFacts = useQuery({ queryKey: ["mobile", session?.tenantId, "all-trade-facts", strategyId, scope.batchId ?? "current"], queryFn: () => api.allTradeFacts(strategyId, 100, scope.batchId), enabled: Boolean(demoReady && route.params.orderId) });
+  const evaluations = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "evaluations", 100, batchId ?? "current"], queryFn: () => api.strategyEvaluations(strategyId, 100, batchId ?? scope.batchId), enabled: Boolean(strategyId && (route.params.evaluationId || route.params.orderId)) });
   const holdingsError = isDemo ? demo.error : account.error;
-  const holdingsLoading = isDemo ? demo.isLoading : account.isLoading;
+  const holdingsLoading = isDemo ? batches.isLoading || scope.unavailableReason === "batch_pending" || demo.isLoading : account.isLoading;
   const positions = useMemo(() => isDemo ? demoPositions(demo.data?.strategy_positions ?? []) : paperPositions(account.data), [account.data, demo.data, isDemo]);
   useEffect(() => { if (!selectedSymbol && positions[0]?.symbol) setSelectedSymbol(positions[0].symbol); }, [positions, selectedSymbol]);
   const selectedOrder = demo.data?.orders.find((order) => order.id === route.params.orderId);
@@ -147,7 +161,7 @@ export default function StrategyPositionsScreen() {
   return <ScrollView contentContainerStyle={styles.content} refreshControl={undefined} style={styles.page}>
     <SectionCard description={`${isDemo ? "OKX Demo 后台快照" : "纸面账户"} · ${positions.length} 个持仓${isDemo && demo.data?.sync ? ` · ${demo.data.sync.status === "stale" ? "数据较旧" : "已同步"} · ${demo.data.sync.freshness_age_s}s 前` : ""}`} title="持仓总览">
       {(selectedOrder || selectedEvaluation) ? <SectionCard description="把策略决策、交易所订单和最终执行结果放在同一处核对。" title="这笔交易详情">
-        {selectedOrder ? <View style={styles.detailFacts}><Text style={styles.detailTitle}>{selectedOrder.symbol} · {selectedOrder.side === "buy" ? "买入" : "卖出"}</Text><Text style={styles.muted}>订单状态：{selectedOrder.status} · 类型：{selectedOrder.type}</Text><Text style={styles.muted}>请求金额：{formatQuote(numberValue(selectedOrder.requested_quote))} · 成交数量：{selectedOrder.filled_quantity ?? "—"}</Text><Text style={styles.muted}>成交均价：{formatQuote(numberValue(selectedOrder.average_fill_price))} · 成交时间：{formatTimestamp(selectedOrder.filled_at ?? selectedOrder.updated_at)}</Text>{selectedOrder.error_message || selectedOrder.error_code ? <Text style={styles.error}>失败原因：{selectedOrder.error_message ?? selectedOrder.error_code}</Text> : null}</View> : null}
+        {selectedOrder ? <View style={styles.detailFacts}><Text style={styles.detailTitle}>{selectedOrder.symbol} · {selectedOrder.side === "buy" ? "买入" : "卖出"}</Text><Text style={styles.muted}>订单状态：{selectedOrder.status} · 类型：{selectedOrder.type}</Text><Text style={styles.muted}>请求金额：{formatQuote(numberValue(selectedOrder.requested_quote))} · 成交数量：{selectedOrder.filled_quantity ?? "—"}</Text><Text style={styles.muted}>成交均价：{formatQuote(numberValue(selectedOrder.average_fill_price))} · 成交时间：{formatTimestamp(selectedOrder.filled_at ?? selectedOrder.updated_at)}</Text>{selectedOrder.error_message || selectedOrder.error_code ? <Text style={styles.error}>失败原因：{selectedOrder.error_message ?? selectedOrder.error_code}</Text> : null}<Text style={styles.muted}>成交原因：{attributedDecisionReason(selectedOrder, tradeFacts.data ?? [])}</Text></View> : null}
         {selectedEvaluation ? <StrategyEvaluationPanel evaluation={selectedEvaluation} /> : <Text style={styles.muted}>服务端尚未返回这笔订单对应的策略条件记录。</Text>}
       </SectionCard> : null}
       <View style={styles.summaryGrid}><View style={styles.summaryMetric}><Text style={styles.label}>总收益</Text><Text style={[styles.summaryValue, { color: (totalPnl ?? 0) >= 0 ? palette.positive : palette.negative }]}>{formatQuote(totalPnl)}</Text></View><View style={styles.summaryMetric}><Text style={styles.label}>持仓数量</Text><Text style={styles.summaryValue}>{positions.length}</Text></View></View>

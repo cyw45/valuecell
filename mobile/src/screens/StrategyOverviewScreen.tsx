@@ -64,6 +64,7 @@ import {
   saveActiveStrategyId,
   selectActiveStrategyId,
 } from "./workbench";
+import { attributedDecisionReason, executionQueryScope } from "../execution-scope";
 
 const MONITOR_LABELS: Record<string, string> = {
   candidate: "待准入",
@@ -191,10 +192,27 @@ export default function StrategyOverviewScreen() {
     enabled: Boolean(activeId),
     refetchInterval: 15_000,
   });
+  const batches = useQuery({
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "batches"],
+    queryFn: () => api.strategyBatches(activeId),
+    enabled: Boolean(activeId),
+  });
+  const scope = executionQueryScope({
+    environment: strategy?.config.execution.environment,
+    status: strategy?.status,
+    currentBatchId: batches.isSuccess ? (batches.data.current_batch_id ?? null) : undefined,
+  });
+  const recordsReady = Boolean(activeId && scope.ready && scope.unavailableReason !== "no_current_batch");
+  const tradeFacts = useQuery({
+    queryKey: ["mobile", session?.tenantId, "all-trade-facts", activeId, scope.batchId ?? "current"],
+    queryFn: () => api.allTradeFacts(activeId, 20, scope.batchId),
+    enabled: Boolean(recordsReady && isDemo),
+    refetchInterval: 15_000,
+  });
   const demo = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "demo-execution", "summary"],
-    queryFn: () => api.strategyDemoExecution(activeId, 1, 10),
-    enabled: Boolean(activeId && isDemo),
+    queryKey: ["mobile", session?.tenantId, "strategy", activeId, "demo-execution", scope.batchId ?? "current"],
+    queryFn: () => api.strategyDemoExecution(activeId, 1, 10, scope.batchId),
+    enabled: Boolean(recordsReady && isDemo),
     retry: false,
     refetchInterval: 15_000,
   });
@@ -218,6 +236,8 @@ export default function StrategyOverviewScreen() {
       account.refetch(),
       pnl.refetch(),
       trades.refetch(),
+      batches.refetch(),
+      tradeFacts.refetch(),
       evaluations.refetch(),
       demo.refetch(),
       monitorState.refetch(),
@@ -583,7 +603,7 @@ export default function StrategyOverviewScreen() {
         <View style={styles.detailLinks}>
           <Pressable
             accessibilityRole="button"
-            onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId })}
+            onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId, batchId: scope.batchId })}
             style={({ pressed }) => [styles.linkRow, pressed && styles.pressed]}
           >
             <ReceiptText color={palette.primary} size={20} />
@@ -636,7 +656,7 @@ export default function StrategyOverviewScreen() {
         <SectionCard
           actionLabel="全部交易"
           description="该策略为 Paper 独立账本，不参与共享 OKX 钱包分配"
-          onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId })}
+          onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId, batchId: scope.batchId })}
           title="Paper 独立账本"
         >
           <View style={styles.metricGrid}>
@@ -670,18 +690,43 @@ export default function StrategyOverviewScreen() {
         </SectionCard>
       ) : null}
 
-      {isDemo && demoData ? (
+      {isDemo ? (
         <SectionCard
-          actionLabel="执行详情"
-          description="该策略在 OKX Demo 的持仓与订单事实，仅属于本策略，不与其他策略共享"
-          onAction={() => navigation.navigate("ExecutionFacts", { strategyId: activeId, kind: "positions" })}
-          title="OKX Demo 执行事实"
+          actionLabel="交易明细"
+          description="订单和成交原因都按当前执行批次读取，不把共享钱包或纸面账本混进来"
+          onAction={() => navigation.navigate("TradeLedger", { strategyId: activeId, batchId: scope.batchId })}
+          title="OKX Demo 订单与成交原因"
         >
-          <View style={styles.metricGrid}>
-            <MetricCard caption="本策略归属持仓名义" label="持仓名义" style={styles.metric} value={formatNumericQuote(demoValuedPositions.length > 0 ? demoPositionNotional : undefined)} />
-            <MetricCard caption="OKX Demo 账户总估值" label="账户估值" style={styles.metric} value={formatNumericQuote(demoData.account.data.total_usdt_value)} />
-            <MetricCard caption="服务端持久化的本策略归属订单" label="订单数量" style={styles.metric} value={`${demoData.orders.length} 笔`} />
-          </View>
+          {scope.unavailableReason === "batch_pending" || (recordsReady && demo.isLoading && !demoData) ? <Text style={styles.muted}>正在按当前执行批次读取订单和成交原因。</Text> : null}
+          {scope.unavailableReason === "no_current_batch" ? <Text style={styles.muted}>当前没有执行批次。历史订单请打开交易明细后切换到全部历史。</Text> : null}
+          {demo.isError ? <Text style={styles.muted}>{(demo.error as Error).message}</Text> : null}
+          {demoData ? (
+            <>
+              <View style={styles.metricGrid}>
+                <MetricCard caption="本策略归属持仓名义" label="持仓名义" style={styles.metric} value={formatNumericQuote(demoValuedPositions.length > 0 ? demoPositionNotional : undefined)} />
+                <MetricCard caption="OKX Demo 账户总估值" label="账户估值" style={styles.metric} value={formatNumericQuote(demoData.account.data.total_usdt_value)} />
+                <MetricCard caption="当前批次归属订单，不含粉尘空操作" label="订单数量" style={styles.metric} value={`${demoData.pagination.total_items} 笔`} />
+              </View>
+              {demoData.orders.length ? demoData.orders.slice(0, 4).map((order) => (
+                <Pressable accessibilityRole="button" key={order.id} onPress={() => navigation.navigate("TradeLedger", { strategyId: activeId, batchId: scope.batchId })} style={styles.tradeRow}>
+                  <View style={styles.rowCopy}>
+                    <Text style={styles.tradeSymbol}>{order.side === "buy" ? "买入" : "卖出"} · {order.symbol}</Text>
+                    <Text style={styles.muted}>{attributedDecisionReason(order, tradeFacts.data ?? [])}</Text>
+                  </View>
+                  <Text style={styles.tradeValue}>{order.status}</Text>
+                </Pressable>
+              )) : <Text style={styles.muted}>当前批次没有归因订单。</Text>}
+              {(tradeFacts.data ?? []).slice(0, 4).map((fact) => (
+                <View key={`${fact.order_id ?? fact.evaluation_id ?? fact.created_at}-${fact.symbol}`} style={styles.tradeRow}>
+                  <View style={styles.rowCopy}>
+                    <Text style={styles.tradeSymbol}>{fact.symbol} · {fact.side === "buy" ? "买入" : fact.side === "sell" ? "卖出" : fact.side}</Text>
+                    <Text style={styles.muted}>{fact.explanation.decision_reason || "服务端未提供成交原因。"}</Text>
+                  </View>
+                  <Text style={styles.tradeValue}>{formatTimestamp(fact.created_at)}</Text>
+                </View>
+              ))}
+            </>
+          ) : null}
         </SectionCard>
       ) : null}
       <PrimaryButton

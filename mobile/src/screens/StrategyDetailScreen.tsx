@@ -37,6 +37,7 @@ import {
   strategyStatusLabel,
 } from "./strategy-presentation";
 import { formatQuote, formatTimestamp, readActiveStrategyId, saveActiveStrategyId } from "./workbench";
+import { attributedDecisionReason, executionQueryScope } from "../execution-scope";
 
 type RouteParams = { params: { strategyId: string } };
 type LifecycleAction = "start" | "stop" | "archive";
@@ -85,15 +86,24 @@ export default function StrategyDetailScreen() {
   const access = useQuery({ queryKey: ["mobile", session?.tenantId, "access"], queryFn: api.access, enabled: Boolean(session) });
   const strategy = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId], queryFn: () => api.strategy(strategyId), enabled: Boolean(strategyId) });
   const account = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account"], queryFn: () => api.strategyAccount(strategyId), enabled: Boolean(strategyId && strategy.data?.config.execution.environment !== "okx_demo") });
-  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", demoOrdersPage], queryFn: () => api.strategyDemoExecution(strategyId, demoOrdersPage, 10), enabled: Boolean(strategyId && strategy.data?.config.execution.environment === "okx_demo"), retry: false });
+  const isDemoQuery = strategy.data?.config.execution.environment === "okx_demo";
+  const batches = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "batches"], queryFn: () => api.strategyBatches(strategyId), enabled: Boolean(strategyId) });
+  const scope = executionQueryScope({
+    environment: strategy.data?.config.execution.environment,
+    status: strategy.data?.status,
+    currentBatchId: batches.isSuccess ? (batches.data.current_batch_id ?? null) : undefined,
+  });
+  const recordsReady = Boolean(strategyId && scope.ready && scope.unavailableReason !== "no_current_batch");
+  const demo = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", demoOrdersPage, scope.batchId ?? "current"], queryFn: () => api.strategyDemoExecution(strategyId, demoOrdersPage, 10, scope.batchId), enabled: Boolean(recordsReady && isDemoQuery), retry: false });
+  const tradeFacts = useQuery({ queryKey: ["mobile", session?.tenantId, "all-trade-facts", strategyId, scope.batchId ?? "current"], queryFn: () => api.allTradeFacts(strategyId, 20, scope.batchId), enabled: Boolean(recordsReady && isDemoQuery) });
   const evaluations = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "evaluations", 20], queryFn: () => api.strategyEvaluations(strategyId, 20), enabled: Boolean(strategyId) });
   const signals = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "signals", 20], queryFn: () => api.strategyLog(strategyId, "signals", 20), enabled: Boolean(strategyId) });
-  const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 20], queryFn: () => api.strategyLog(strategyId, "trades", 20), enabled: Boolean(strategyId) });
+  const trades = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "trades", 20], queryFn: () => api.strategyLog(strategyId, "trades", 20), enabled: Boolean(strategyId && strategy.data && !isDemoQuery) });
   const funding = useQuery({ queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "funding", 20], queryFn: () => api.strategyLog(strategyId, "funding", 20), enabled: Boolean(strategyId) });
   const start = useMutation({ mutationFn: api.startStrategy });
   const stop = useMutation({ mutationFn: api.stopStrategy });
   const archive = useMutation({ mutationFn: api.archiveStrategy });
-  const refresh = () => void Promise.all([strategy.refetch(), account.refetch(), demo.refetch(), evaluations.refetch(), signals.refetch(), trades.refetch(), funding.refetch(), access.refetch()]);
+  const refresh = () => void Promise.all([strategy.refetch(), account.refetch(), batches.refetch(), demo.refetch(), tradeFacts.refetch(), evaluations.refetch(), signals.refetch(), trades.refetch(), funding.refetch(), access.refetch()]);
 
   if (strategy.isLoading) return <StatePanel description="正在读取策略配置、账户和运行诊断。" title="正在打开策略详情" />;
   if (strategy.isError || !strategy.data) return <StatePanel error={(strategy.error as Error)?.message ?? "找不到策略。"} onRetry={refresh} state="error" title="策略详情不可用" />;
@@ -188,7 +198,7 @@ export default function StrategyDetailScreen() {
               <Text style={styles.row}>持仓：{demoPositions.length} 项 · 策略归属订单：{demoData.pagination.total_items} 笔 · 已成交 {demoData.trade_summary?.filled_order_count ?? 0} 笔</Text>
               {demoData.pnl.status === "unavailable" ? <Text style={styles.muted}>{demoPnlReason(demoData.pnl.reason)}</Text> : <View style={styles.accountGrid}><View style={styles.accountMetric}><Text style={styles.accountLabel}>总 PnL</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.total_pnl ?? demoData.pnl.total ?? demoData.pnl.value)}</Text></View><View style={styles.accountMetric}><Text style={styles.accountLabel}>已实现</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.realized_pnl ?? demoData.pnl.realized)}</Text></View><View style={styles.accountMetric}><Text style={styles.accountLabel}>未实现</Text><Text style={styles.accountValue}>{formatNumericQuote(demoData.pnl.unrealized_pnl ?? demoData.pnl.unrealized)}</Text></View><View style={styles.accountMetric}><Text style={styles.accountLabel}>收益率</Text><Text style={styles.accountValue}>{demoData.pnl.return_pct == null ? "—" : `${demoData.pnl.return_pct.toFixed(2)}%`}</Text></View></View>}
               {demoPositions.length ? demoPositions.map((position) => <View key={position.symbol} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{position.symbol}</Text><Text style={styles.muted}>数量 {position.quantity} · 可用 {position.available_quantity}</Text></View><Text style={styles.executionValue}>{formatQuote(position.notional_usdt)}</Text></View>) : <Text style={styles.muted}>交易所当前没有返回持仓。</Text>}
-              {demoOrders.length ? <View style={styles.orderList}>{demoOrders.map((order) => <View key={order.id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · 请求 {formatNumericQuote(order.requested_quote)} · {formatTimestamp(order.updated_at)}</Text>{order.error_code ? <Text style={styles.warning}>{order.error_code}</Text> : null}</View><Text style={styles.executionValue}>{orderStatusLabel(order.status)}</Text></View>)}</View> : <Text style={styles.muted}>当前没有归因到该策略的交易所订单。</Text>}
+              {demoOrders.length ? <View style={styles.orderList}>{demoOrders.map((order) => <View key={order.id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{orderSideLabel(order.side)} · {order.symbol}</Text><Text style={styles.muted}>{orderTypeLabel(order.type)} · 请求 {formatNumericQuote(order.requested_quote)} · {formatTimestamp(order.updated_at)}</Text>{order.error_code ? <Text style={styles.warning}>{order.error_code}</Text> : null}<Text style={styles.muted}>{attributedDecisionReason(order, tradeFacts.data ?? [])}</Text></View><Text style={styles.executionValue}>{orderStatusLabel(order.status)}</Text></View>)}</View> : <Text style={styles.muted}>{scope.unavailableReason === "batch_pending" ? "正在确认当前执行批次。" : scope.unavailableReason === "no_current_batch" ? "当前没有执行批次，历史订单请到交易明细切换全部历史。" : "当前批次没有归因到该策略的交易所订单。"}</Text>}
               {demoData.pagination.total_pages > 1 ? <View style={styles.pagination}><Pressable accessibilityRole="button" disabled={demoOrdersPage <= 1} onPress={() => setDemoOrdersPage((page) => Math.max(1, page - 1))} style={[styles.pageButton, demoOrdersPage <= 1 && styles.disabled]}><Text style={styles.pageButtonText}>上一页</Text></Pressable><Pressable accessibilityRole="button" disabled={demoOrdersPage >= demoData.pagination.total_pages} onPress={() => setDemoOrdersPage((page) => Math.min(demoData.pagination.total_pages, page + 1))} style={[styles.pageButton, demoOrdersPage >= demoData.pagination.total_pages && styles.disabled]}><Text style={styles.pageButtonText}>下一页</Text></Pressable></View> : null}
             </> : <Text style={styles.muted}>正在等待交易所执行数据。</Text>}
           </SectionCard>
@@ -217,7 +227,13 @@ export default function StrategyDetailScreen() {
       <SectionCard description="仅展示服务端归因的近期记录。" title="近期执行记录">
         {trades.isError || funding.isError ? <Text style={styles.muted}>{((trades.error ?? funding.error) as Error).message}</Text> : <>
           <Text style={styles.executionSectionTitle}>成交</Text>
-          {trades.data?.entries.length ? trades.data.entries.slice(0, 5).map((trade) => <View key={trade.evaluation_id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{strategyActionLabel(trade.action)} · {trade.symbol}</Text><Text style={styles.muted}>{evaluationReason(trade.reason_code, trade.reason)}</Text></View><Text style={styles.executionValue}>{formatQuote(trade.quote_amount)}</Text></View>) : <Text style={styles.muted}>尚无归因成交。</Text>}
+          {isDemo ? (
+            tradeFacts.isLoading && !tradeFacts.data ? <Text style={styles.muted}>正在读取当前批次的成交明细与原因。</Text>
+            : (tradeFacts.data ?? []).length ? (tradeFacts.data ?? []).map((fact) => <View key={`${fact.order_id ?? fact.evaluation_id ?? fact.created_at}-${fact.symbol}`} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{fact.side === "buy" ? "买入" : fact.side === "sell" ? "卖出" : fact.side} · {fact.symbol}</Text><Text style={styles.muted}>{fact.explanation.decision_reason || "服务端未提供成交原因。"}</Text></View><Text style={styles.executionValue}>{formatTimestamp(fact.created_at)}</Text></View>)
+            : <Text style={styles.muted}>{scope.unavailableReason === "no_current_batch" ? "当前没有执行批次。" : "当前批次没有成交明细。"}</Text>
+          ) : (
+            trades.data?.entries.length ? trades.data.entries.slice(0, 5).map((trade) => <View key={trade.evaluation_id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{strategyActionLabel(trade.action)} · {trade.symbol}</Text><Text style={styles.muted}>{evaluationReason(trade.reason_code, trade.reason)}</Text></View><Text style={styles.executionValue}>{formatQuote(trade.quote_amount)}</Text></View>) : <Text style={styles.muted}>尚无归因成交。</Text>
+          )}
           <Text style={styles.executionSectionTitle}>资金费</Text>
           {funding.data?.entries.length ? funding.data.entries.slice(0, 5).map((entry) => <View key={entry.evaluation_id} style={styles.executionRow}><View style={styles.executionCopy}><Text style={styles.executionTitle}>{fundingDirectionLabel(entry.direction)}</Text><Text style={styles.muted}>当前名义金额 {formatQuote(entry.current_notional_quote)}</Text></View><Text style={styles.executionValue}>{formatQuote(entry.estimated_payment_quote)}</Text></View>) : <Text style={styles.muted}>尚无资金费影响。</Text>}
         </>}

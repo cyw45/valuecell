@@ -9,6 +9,8 @@ import { useSession } from "../session";
 import { palette, radius, spacing } from "../theme";
 import type { RuleStrategyDemoExecution } from "../types";
 import { orderSideLabel, orderStatusLabel, orderTypeLabel } from "./strategy-presentation";
+import { attributedDecisionReason, executionQueryScope } from "../execution-scope";
+import type { UnifiedTradeFact } from "../multi-strategy";
 import { formatQuote, formatTimestamp } from "./workbench";
 type Route = RouteProp<WorkbenchStackParamList, "ExecutionFacts">;
 type FactKind = "positions" | "balances" | "orders";
@@ -36,18 +38,35 @@ export default function ExecutionFactsScreen() {
     enabled: Boolean(session && strategyId),
   });
   const isDemo = strategy.data?.config.execution.environment === "okx_demo";
+  const batches = useQuery({
+    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "batches"],
+    queryFn: () => api.strategyBatches(strategyId),
+    enabled: Boolean(strategyId && isDemo && batchId == null),
+  });
+  const scope = executionQueryScope({
+    environment: strategy.data?.config.execution.environment,
+    status: strategy.data?.status,
+    currentBatchId: batchId != null ? batchId : batches.isSuccess ? (batches.data.current_batch_id ?? null) : undefined,
+    selectedBatchId: batchId,
+  });
+  const recordsReady = Boolean(strategyId && isDemo && scope.ready && scope.unavailableReason !== "no_current_batch");
   const execution = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", batchId ?? "current", page],
-    queryFn: () => api.strategyDemoExecution(strategyId, page, 20, batchId),
-    enabled: Boolean(strategyId && isDemo),
+    queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "demo-execution", scope.batchId ?? "current", scope.allHistory, page],
+    queryFn: () => api.strategyDemoExecution(strategyId, page, 20, scope.batchId, scope.allHistory),
+    enabled: recordsReady,
     retry: false,
+  });
+  const tradeFacts = useQuery({
+    queryKey: ["mobile", session?.tenantId, "all-trade-facts", strategyId, scope.batchId ?? "current"],
+    queryFn: () => api.allTradeFacts(strategyId, 100, scope.batchId),
+    enabled: recordsReady && kind === "orders",
   });
   const paperAccount = useQuery({
     queryKey: ["mobile", session?.tenantId, "strategy", strategyId, "account", batchId ?? "current"],
     queryFn: () => api.strategyAccount(strategyId, batchId),
     enabled: Boolean(strategyId && strategy.data && !isDemo && kind === "positions"),
   });
-  const loading = strategy.isLoading || execution.isLoading || paperAccount.isLoading;
+  const loading = strategy.isLoading || batches.isLoading || execution.isLoading || paperAccount.isLoading || tradeFacts.isLoading;
   const error = strategy.error ?? execution.error ?? paperAccount.error;
   const detail = pageCopy[kind];
   useEffect(() => {
@@ -60,11 +79,12 @@ export default function ExecutionFactsScreen() {
   if (error || !strategy.data) return <StatePanel actionLabel="重试" description={(error as Error)?.message ?? "无法读取执行事实。"} onAction={() => { void strategy.refetch(); void execution.refetch(); void paperAccount.refetch(); }} title={`${detail.title}暂不可用`} tone="error" />;
   if (!isDemo && kind !== "positions") return <StatePanel description="纸面策略不使用交易所共享账户；此信息仅对 OKX Demo 策略提供。" title={detail.title} />;
   if (!isDemo && kind === "positions") return <PaperPositions positions={paperPositions} />;
-  if (!demo) return <StatePanel description="交易所执行数据尚未返回。" title={detail.title} />;
+  if (isDemo && scope.unavailableReason === "no_current_batch") return <StatePanel description="当前没有执行批次。历史订单请从交易明细切换到全部历史，不会自动混入上一批。" title={detail.title} />;
+  if (!demo) return <StatePanel description={scope.unavailableReason === "batch_pending" ? "正在确认当前执行批次。" : "交易所执行数据尚未返回。"} title={detail.title} />;
 
   if (kind === "positions") return <DemoPositions positions={demo.positions.data.positions} />;
   if (kind === "balances") return <DemoBalances balances={demo.account.data.balances} />;
-  return <DemoOrders batchId={batchId} page={page} setPage={setPage} execution={demo} navigation={navigation} strategyId={strategyId} />;
+  return <DemoOrders batchId={scope.batchId ?? batchId} facts={tradeFacts.data ?? []} page={page} setPage={setPage} execution={demo} navigation={navigation} strategyId={strategyId} />;
 }
 
 function PaperPositions({ positions }: { positions: Array<[string, { quantity: number; mark_price: number }]> }) {
@@ -79,11 +99,11 @@ function DemoBalances({ balances }: { balances: Array<{ currency: string; free: 
   return <FactsList empty={pageCopy.balances.empty} title={pageCopy.balances.title}><Text style={styles.detail}>仅展示 OKX Demo 共享钱包事实；不可用估值不会以 0 替代。</Text>{balances.map((balance) => <FactRow detail={`可用 ${balance.free} · 总计 ${balance.total}`} key={balance.currency} title={balance.currency} value={formatQuote(balance.usdt_value)} />)}</FactsList>;
 }
 
-function DemoOrders({ batchId, execution, page, setPage, navigation, strategyId }: { batchId?: string | null; execution: RuleStrategyDemoExecution; page: number; setPage: (page: number) => void; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string }) {
+function DemoOrders({ batchId, execution, facts, page, setPage, navigation, strategyId }: { batchId?: string | null; execution: RuleStrategyDemoExecution; facts: readonly UnifiedTradeFact[]; page: number; setPage: (page: number) => void; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string }) {
   return <FactsList empty={pageCopy.orders.empty} title={`策略归属订单 · 第 ${execution.pagination.page}/${execution.pagination.total_pages || 1} 页`}>
     {execution.orders.map((order) => <Pressable accessibilityRole="button" key={order.id} onPress={() => navigation.navigate("StrategyPositions", { strategyId, symbol: order.symbol, orderId: order.id, evaluationId: order.evaluation_id ?? undefined, batchId })} style={styles.orderRow}>
       <FactRow detail={`${orderTypeLabel(order.type)} · 请求 ${formatNumericQuote(order.requested_quote)} · ${formatTimestamp(order.updated_at)}${order.error_code ? ` · ${order.error_code}` : ""}`} title={`${orderSideLabel(order.side)} · ${order.symbol}`} value={orderStatusLabel(order.status)} />
-      <Text style={styles.reason}>{order.decision_reason ?? order.decision_reason_code ?? "服务端未提供成交原因。"}</Text>
+      <Text style={styles.reason}>{attributedDecisionReason(order, facts)}</Text>
       <TradeDecisionConditions conditions={order.decision_conditions} side={order.side} />
       <Text style={styles.openHint}>查看买入点、K 线、条件与执行结果</Text>
     </Pressable>)}

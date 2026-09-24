@@ -10,8 +10,9 @@ import type { WorkbenchStackParamList } from "../navigation/types";
 import type { SandboxOrder } from "../types";
 import type { ExplanationCondition, UnifiedTradeFact } from "../multi-strategy";
 import { formatQuote, formatTimestamp, selectActiveStrategyId } from "./workbench";
+import { ALL_EXECUTION_BATCHES, attributedDecisionReason, executionQueryScope } from "../execution-scope";
 
-const ALL_BATCHES = "__all__";
+const ALL_BATCHES = ALL_EXECUTION_BATCHES;
 
 type RouteParams = { params?: { strategyId?: string; batchId?: string | null } };
 
@@ -57,17 +58,24 @@ export default function TradeLedgerScreen() {
   }, [batchId, batches.data?.current_batch_id, route.params?.batchId]);
   useEffect(() => setPage(1), [batchId, selectedId]);
 
-  const allHistory = isDemo && batchId === ALL_BATCHES;
-  const scopedBatchId = batchId === ALL_BATCHES ? null : batchId;
+  const scope = executionQueryScope({
+    environment: selectedStrategy?.config.execution.environment,
+    status: selectedStrategy?.status,
+    currentBatchId: batches.isSuccess ? (batches.data.current_batch_id ?? null) : undefined,
+    selectedBatchId: batchId,
+  });
+  const allHistory = scope.allHistory;
+  const scopedBatchId = allHistory ? null : scope.batchId;
+  const recordsReady = Boolean(selectedId && scope.ready && scope.unavailableReason !== "no_current_batch");
   const facts = useQuery({
-    queryKey: ["mobile", session?.tenantId, "all-trade-facts", selectedId, scopedBatchId ?? "current"],
+    queryKey: ["mobile", session?.tenantId, "all-trade-facts", selectedId, scopedBatchId ?? (allHistory ? "all" : "current")],
     queryFn: () => api.allTradeFacts(selectedId, 100, scopedBatchId),
-    enabled: Boolean(selectedId && !isDemo),
+    enabled: recordsReady,
   });
   const demo = useQuery({
-    queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "demo-execution", scopedBatchId ?? "current", allHistory, page],
+    queryKey: ["mobile", session?.tenantId, "strategy", selectedId, "demo-execution", scopedBatchId ?? (allHistory ? "all" : "current"), allHistory, page],
     queryFn: () => api.strategyDemoExecution(selectedId, page, 20, scopedBatchId, allHistory),
-    enabled: Boolean(selectedId && isDemo), retry: false,
+    enabled: Boolean(recordsReady && isDemo), retry: false,
   });
   const pageSize = 20;
   const paperTotalPages = Math.max(1, Math.ceil((facts.data?.length ?? 0) / pageSize));
@@ -87,17 +95,26 @@ export default function TradeLedgerScreen() {
   const factsError = facts.isError || demo.isError;
   return (
     <ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl onRefresh={refresh} refreshing={strategies.isRefetching || batches.isRefetching || facts.isRefetching || demo.isRefetching} tintColor={palette.primary} />} style={styles.page}>
-      <ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle={`${isDemo ? "OKX Demo 策略归属订单" : "统一策略归因事实"} · ${allHistory ? "全部历史" : batchId ? "当前批次" : "等待当前批次"}`} title="交易明细" />
+      <ScreenHeader actionLabel="切换策略" onAction={() => setPickerVisible(true)} subtitle={`${isDemo ? "OKX Demo 订单与成交原因" : "统一策略归因事实"} · ${scope.unavailableReason === "batch_pending" ? "正在确认当前批次" : scope.unavailableReason === "no_current_batch" ? "当前批次尚未启动" : allHistory ? "全部历史" : "当前批次"}`} title="交易明细" />
       <Pressable accessibilityRole="button" onPress={() => setBatchPickerVisible(true)} style={styles.batchSelector}>
-        <View style={styles.batchCopy}><Text style={styles.batchLabel}>执行范围</Text><Text style={styles.batchValue}>{allHistory ? "全部历史订单" : currentBatch ? batchTitle(currentBatch) : batchId ? "当前执行批次" : "当前批次尚未启动"}</Text></View><Text style={styles.batchAction}>切换</Text>
+        <View style={styles.batchCopy}><Text style={styles.batchLabel}>执行范围</Text><Text style={styles.batchValue}>{allHistory ? "全部历史订单" : currentBatch ? batchTitle(currentBatch) : scope.batchId ? "当前执行批次" : "当前批次尚未启动"}</Text></View><Text style={styles.batchAction}>切换</Text>
       </Pressable>
       {factsError ? <StatePanel actionLabel="重试" description={((facts.error ?? demo.error) as Error).message} onAction={refresh} title="交易记录暂不可用" tone="error" /> : null}
-      {!factsError && (isDemo ? demo.isLoading : facts.isLoading) ? <StatePanel description="正在读取服务端交易与策略依据。" title="正在同步" /> : null}
-      {isDemo ? (
-        demo.data?.orders.length ? demo.data.orders.map((order) => <DemoOrderCard key={order.id} order={order} batchId={scopedBatchId} navigation={navigation} strategyId={selectedId} strategyKind={selectedStrategy?.strategy_kind} />) : !demo.isLoading && !demo.isError ? <StatePanel description="该策略尚无 OKX Demo 归属订单；不会回退展示纸面成交。" title="暂无 Demo 订单" /> : null
-      ) : (
+      {!factsError && scope.unavailableReason === "batch_pending" ? <StatePanel description="正在确认当前执行批次。未确认前不会把已有订单显示成空列表。" title="正在同步" /> : null}
+      {!factsError && scope.unavailableReason === "no_current_batch" ? <StatePanel description="该策略当前没有执行批次。需要看历史订单时，请切换到全部历史，不会自动混入上一批。" title="当前批次尚未启动" /> : null}
+      {!factsError && recordsReady && (isDemo ? demo.isLoading : facts.isLoading) ? <StatePanel description="正在读取服务端订单、交易明细与成交原因。" title="正在同步" /> : null}
+      {isDemo && recordsReady && !demo.isLoading && !demo.isError ? (
+        demo.data?.orders.length ? demo.data.orders.map((order) => <DemoOrderCard key={order.id} facts={facts.data ?? []} order={order} batchId={scopedBatchId} navigation={navigation} strategyId={selectedId} strategyKind={selectedStrategy?.strategy_kind} />) : <StatePanel description="该执行批次没有归因到此策略的交易所订单，不会回退展示纸面成交。" title="暂无 Demo 订单" />
+      ) : null}
+      {recordsReady && !isDemo ? (
         pageFacts.length ? pageFacts.map((fact) => <UnifiedFactCard key={`${fact.order_id ?? fact.evaluation_id ?? fact.created_at}-${fact.symbol}`} fact={fact} navigation={navigation} />) : !facts.isLoading && !facts.isError ? <StatePanel description="没有已记录的统一策略交易事实。等待下一次服务端策略评估。" title="尚无成交" /> : null
-      )}
+      ) : null}
+      {isDemo && recordsReady && !facts.isLoading && !facts.isError ? (
+        <>
+          <Text style={styles.sectionLabel}>{allHistory ? "当前批次的交易明细与成交原因" : "交易明细与成交原因"}</Text>
+          {(facts.data ?? []).length ? (facts.data ?? []).map((fact) => <UnifiedFactCard key={`${fact.order_id ?? fact.evaluation_id ?? fact.created_at}-${fact.symbol}`} fact={fact} navigation={navigation} />) : <StatePanel description="这个批次没有服务端归因的成交解释。缺失原因不会用当前策略反推。" title="暂无成交明细" />}
+        </>
+      ) : null}
       {totalPages > 1 ? <View style={styles.pagination}><Pressable accessibilityRole="button" disabled={page <= 1} onPress={() => setPage((current) => Math.max(1, current - 1))} style={[styles.pageButton, page <= 1 && styles.disabled]}><Text style={styles.pageButtonText}>上一页</Text></Pressable><Text style={styles.pageLabel}>{page} / {totalPages}</Text><Pressable accessibilityRole="button" disabled={page >= totalPages} onPress={() => setPage((current) => Math.min(totalPages, current + 1))} style={[styles.pageButton, page >= totalPages && styles.disabled]}><Text style={styles.pageButtonText}>下一页</Text></Pressable></View> : null}
       <BottomSheetSelector onClose={() => setPickerVisible(false)} onSelect={(id) => { setStrategyId(id); setPickerVisible(false); }} options={(strategies.data ?? []).map((item) => ({ label: item.name, value: item.strategy_id }))} selectedValue={selectedId} title="选择策略" visible={pickerVisible} />
       <BottomSheetSelector onClose={() => setBatchPickerVisible(false)} onSelect={selectBatch} options={batchOptions} selectedValue={allHistory ? ALL_BATCHES : batchId ? batchId : "__current__"} title="选择执行范围" visible={batchPickerVisible} />
@@ -153,20 +170,31 @@ function directionLabel(side: UnifiedTradeFact["side"]): string {
   return side === "buy" ? "买入" : side === "sell" ? "卖出" : side === "short" ? "做空" : "回补";
 }
 
-function DemoOrderCard({ order, batchId, navigation, strategyId, strategyKind }: { order: SandboxOrder; batchId: string | null | undefined; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string; strategyKind?: UnifiedTradeFact["identity"]["kind"] }) {
+function DemoOrderCard({ facts, order, batchId, navigation, strategyId, strategyKind }: { facts: readonly UnifiedTradeFact[]; order: SandboxOrder; batchId: string | null | undefined; navigation: NavigationProp<WorkbenchStackParamList>; strategyId: string; strategyKind?: UnifiedTradeFact["identity"]["kind"] }) {
+  const matched = facts.find((fact) => fact.order_id != null && fact.order_id === order.id);
+  const conditions = order.decision_conditions?.length
+    ? order.decision_conditions
+    : matched?.explanation.conditions.map((condition) => ({
+      code: condition.code,
+      label: condition.label,
+      state: condition.state,
+      detail: condition.detail,
+      values: { actual: condition.actual, threshold: condition.threshold, comparator: condition.operator },
+    }));
   return <Pressable accessibilityRole="button" onPress={() => navigation.navigate("StrategyPositions", { strategyId, symbol: order.symbol, orderId: order.id, evaluationId: order.evaluation_id ?? undefined, batchId })} style={styles.card}>
     <View style={styles.row}><Text style={[styles.action, order.side === "buy" ? styles.buy : styles.sell]}>{order.side === "buy" ? "买入" : "卖出"}</Text><Text style={styles.symbol}>{order.symbol}</Text><Text style={styles.time}>{formatTimestamp(order.created_at)}</Text></View>
     <View style={styles.identityRow}><Text style={styles.strategyType}>{strategyKind ? strategyKindLabel(strategyKind) : "策略类型未知"}</Text><Text style={styles.statusNeutral}>{order.status === "submission_unknown" ? "待远端对账（不可重提）" : order.status === "partially_filled" || order.status === "partial" ? "部分成交" : order.status}</Text></View>
     <View style={styles.metrics}><Text style={styles.metric}>状态 {order.status === "submission_unknown" ? "待远端对账" : order.status}</Text><Text style={styles.metric}>委托 {displayQuote(order.requested_quote)}</Text><Text style={styles.metric}>成交量 {displayNumber(order.filled_quantity)}</Text><Text style={styles.metric}>均价 {displayQuote(order.average_fill_price)}</Text><Text style={styles.metric}>手续费 —</Text></View>
     {order.error_message || order.error_code || order.status === "submission_unknown" ? <Text style={styles.error}>{order.error_message ?? order.error_code ?? "提交结果未确认：正在向原交易所对账，系统不会重新提交订单。"}</Text> : null}
-    <Text style={styles.reason}>{order.decision_reason ?? order.decision_reason_code ?? "服务端未提供成交原因。"}</Text>
-    <TradeDecisionConditions conditions={order.decision_conditions} side={order.side} />
+    <Text style={styles.reason}>{attributedDecisionReason(order, facts)}</Text>
+    <TradeDecisionConditions conditions={conditions} side={order.side} />
     <Text style={styles.openHint}>点击查看持仓、盈亏、K 线与完整执行漏斗</Text>
   </Pressable>;
 }
 
 const styles = StyleSheet.create({
   page: { backgroundColor: palette.canvas, flex: 1 },
+  sectionLabel: { color: palette.text, fontSize: 15, fontWeight: "900", marginTop: spacing.xs },
   content: { gap: spacing.sm, padding: spacing.md, paddingBottom: spacing.xl },
   batchSelector: { alignItems: "center", backgroundColor: palette.surface, borderColor: palette.primary, borderRadius: radius.md, borderWidth: 1, flexDirection: "row", gap: spacing.sm, minHeight: 58, paddingHorizontal: spacing.md },
   batchCopy: { flex: 1, gap: 3 },
